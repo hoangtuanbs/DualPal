@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Entry } from "./api";
   import { glyph, thumbnailUrl } from "./fileTypes";
-  import { formatBytes, formatDate } from "./format";
+  import { formatBytes, formatDate, formatShortDate } from "./format";
   import type { PaneGroup, SortKey } from "./pane-state.svelte";
 
   let { group, active, onfocus }: { group: PaneGroup; active: boolean; onfocus: () => void } = $props();
@@ -153,7 +153,7 @@
             {#if entry.symlink}<span class="badge" title="Symbolic link">↪</span>{/if}
           </span>
           <span class="size">{entry.kind === "dir" ? "—" : formatBytes(entry.size)}</span>
-          <span class="date">{formatDate(entry.modifiedMs)}</span>
+          <span class="date" title={formatDate(entry.modifiedMs)}>{formatShortDate(entry.modifiedMs)}</span>
         </div>
       {:else}
         {@const thumb = thumbnailUrl(pane.location, entry)}
@@ -188,6 +188,7 @@
 
 <style>
   .pane {
+    container-type: inline-size;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -257,6 +258,23 @@
   .columns .size,
   .row .size {
     text-align: right;
+  }
+  /* Narrow panes (e.g. with the Info panel open): give the space to names. */
+  @container (max-width: 560px) {
+    .columns,
+    .row {
+      grid-template-columns: minmax(0, 1fr) 72px 120px;
+    }
+  }
+  @container (max-width: 430px) {
+    .columns,
+    .row {
+      grid-template-columns: minmax(0, 1fr) 72px;
+    }
+    .columns .date,
+    .row .date {
+      display: none;
+    }
   }
   .list {
     position: relative;
