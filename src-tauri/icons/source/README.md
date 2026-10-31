@@ -1,6 +1,6 @@
 # App icon sources
 
-`app-icon.svg` is the current icon (twin panes with a transfer badge). The
+`app-icon.svg` is the current icon (split tile in orange tones with swap arrows). The
 other SVGs are alternative designs.
 
 To regenerate every platform icon after editing the SVG, render it to a

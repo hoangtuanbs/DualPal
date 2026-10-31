@@ -1,55 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5B6CFF"/><stop offset="0.55" stop-color="#3A3FD9"/><stop offset="1" stop-color="#22208F"/>
+    <linearGradient id="l" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFC94D"/><stop offset="1" stop-color="#FF9A1F"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.3" cy="0.15" r="0.8">
-      <stop offset="0" stop-color="#fff" stop-opacity="0.35"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E7EBFF"/>
+    <linearGradient id="r" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF7A3D"/><stop offset="1" stop-color="#E8471C"/>
     </linearGradient>
-    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFB547"/><stop offset="1" stop-color="#FF7A1A"/>
-    </linearGradient>
-    <filter id="sh" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0B0A4A" flood-opacity="0.45"/>
-    </filter>
-    <filter id="sh2" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#7A2E00" flood-opacity="0.45"/>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.3"/>
     </filter>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glow)"/>
-  <g filter="url(#sh)">
-    <rect x="205" y="250" width="290" height="520" rx="46" fill="url(#card)"/>
-    <rect x="529" y="250" width="290" height="520" rx="46" fill="url(#card)"/>
+  <g clip-path="url(#sq)">
+    <rect x="100" y="100" width="412" height="824" fill="url(#l)"/>
+    <rect x="512" y="100" width="412" height="824" fill="url(#r)"/>
+    <rect x="100" y="100" width="824" height="412" fill="#fff" fill-opacity="0.08"/>
+    <rect x="504" y="100" width="16" height="824" fill="#fff" fill-opacity="0.9"/>
   </g>
-  <!-- title bars -->
-  <rect x="205" y="250" width="290" height="70" rx="46" fill="#C9D0FF"/><rect x="205" y="290" width="290" height="30" fill="#C9D0FF"/>
-  <rect x="529" y="250" width="290" height="70" rx="46" fill="#C9D0FF"/><rect x="529" y="290" width="290" height="30" fill="#C9D0FF"/>
-  <!-- rows -->
-  <g fill="#D4D9F7">
-    <rect x="240" y="360" width="220" height="30" rx="15"/>
-    <rect x="240" y="470" width="190" height="30" rx="15"/>
-    <rect x="240" y="525" width="210" height="30" rx="15"/>
-    <rect x="240" y="580" width="160" height="30" rx="15"/>
-    <rect x="240" y="635" width="200" height="30" rx="15"/>
-    <rect x="564" y="360" width="200" height="30" rx="15"/>
-    <rect x="564" y="415" width="220" height="30" rx="15"/>
-    <rect x="564" y="470" width="170" height="30" rx="15"/>
-    <rect x="564" y="580" width="210" height="30" rx="15"/>
-    <rect x="564" y="635" width="150" height="30" rx="15"/>
-  </g>
-  <rect x="226" y="405" width="248" height="40" rx="20" fill="#4B55F0"/>
-  <rect x="550" y="515" width="248" height="40" rx="20" fill="#4B55F0" opacity="0.35"/>
-  <!-- transfer badge -->
-  <g filter="url(#sh2)">
-    <circle cx="512" cy="700" r="112" fill="url(#badge)"/>
-  </g>
-  <circle cx="512" cy="700" r="112" fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="6"/>
-  <g fill="none" stroke="#fff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M452 668 H568 M538 638 L568 668 L538 698"/>
-    <path d="M572 734 H456 M486 704 L456 734 L486 764"/>
+  <g fill="none" stroke="#fff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" filter="url(#sh)">
+    <path d="M300 430 H690 M620 360 L690 430 L620 500"/>
+    <path d="M724 610 H334 M404 540 L334 610 L404 680"/>
   </g>
 </svg>
