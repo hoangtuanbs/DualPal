@@ -52,6 +52,8 @@ npm run check            # UI type-check
 | Ctrl/⌘ 1 / Ctrl/⌘ 2 | List / icon view |
 | Ctrl/⌘ T, Ctrl/⌘ W | New tab / close tab |
 | Ctrl Tab, Ctrl Shift Tab | Next / previous tab |
+| Ctrl/⌘ I | Show / hide the preview and info panel |
+| Ctrl/⌘ S (in the editor) | Save the file being quick-edited |
 | Ctrl/⌘ R | Refresh |
 | Ctrl/⌘ Shift . | Show hidden files |
 

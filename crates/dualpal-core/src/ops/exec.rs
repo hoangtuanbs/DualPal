@@ -62,6 +62,11 @@ pub(super) async fn run(
         } => job.transfer(sources, destination, conflict, true).await,
         Operation::Trash { targets } => job.trash(targets).await,
         Operation::Delete { targets } => job.delete(targets).await,
+        Operation::Compress {
+            sources,
+            destination,
+        } => job.compress(sources, destination).await,
+        Operation::SetMode { location, mode } => job.set_mode(location, mode).await,
         Operation::CreateDir { location } => job.create_dir(location).await,
         Operation::Rename { location, new_name } => job.rename(location, new_name).await,
     };
@@ -354,6 +359,118 @@ impl Job {
         Ok(())
     }
 
+    // ---- compress -----------------------------------------------------------
+
+    async fn compress(&mut self, sources: Vec<Location>, dest: Location) -> Result<()> {
+        use async_zip::base::write::ZipFileWriter;
+        use async_zip::{Compression, ZipEntryBuilder};
+        use futures_lite::io::AsyncWriteExt as _;
+
+        let dst_fs = self.fs(&dest.fs)?;
+        if dst_fs.exists(&dest.path).await? {
+            return Err(Error::AlreadyExists(dest.path.clone()));
+        }
+
+        // (source fs, source entry, path inside the archive)
+        let mut items: Vec<(Fs, Entry, String)> = Vec::new();
+        for src in &sources {
+            let fs = self.fs(&src.fs)?;
+            let root = fs.stat(&src.path).await?;
+            let mut stack = vec![(root.clone(), root.name.clone())];
+            while let Some((e, name)) = stack.pop() {
+                self.check()?;
+                match e.kind {
+                    EntryKind::Dir if !e.symlink => {
+                        for c in fs.list(&e.path).await?.into_iter().rev() {
+                            let child = format!("{name}/{}", c.name);
+                            stack.push((c, child));
+                        }
+                        items.push((fs.clone(), e, format!("{name}/")));
+                    }
+                    EntryKind::File => items.push((fs.clone(), e, name)),
+                    _ => self.progress.skipped += 1,
+                }
+            }
+        }
+        for (_, e, _) in &items {
+            if e.kind == EntryKind::File {
+                self.progress.files_total += 1;
+                self.progress.bytes_total += e.size;
+            }
+        }
+        self.emit(true);
+
+        let writer = dst_fs.open_write(&dest.path).await?;
+        let result: Result<()> = async {
+            let zip_err = |e: async_zip::error::ZipError| Error::Io {
+                path: dest.path.clone(),
+                source: std::io::Error::other(e),
+            };
+            let mut zip = ZipFileWriter::with_tokio(writer);
+            for (fs, e, name) in &items {
+                self.check()?;
+                self.set_current(&e.path);
+                let mut builder = ZipEntryBuilder::new(
+                    name.clone().into(),
+                    if e.is_dir() {
+                        Compression::Stored
+                    } else {
+                        Compression::Deflate
+                    },
+                );
+                if let Some(ms) = e.modified_ms {
+                    builder = builder.last_modification_date(zip_date(ms));
+                }
+                if let Some(mode) = e.mode {
+                    builder = builder.unix_permissions(mode as u16);
+                }
+                if e.is_dir() {
+                    zip.write_entry_whole(builder, &[]).await.map_err(zip_err)?;
+                    continue;
+                }
+                let mut reader = fs.open_read(&e.path).await?;
+                let mut entry = zip.write_entry_stream(builder).await.map_err(zip_err)?;
+                let mut buf = vec![0u8; CHUNK];
+                loop {
+                    self.check()?;
+                    let n = reader
+                        .read(&mut buf)
+                        .await
+                        .map_err(|err| Error::io(&e.path, err))?;
+                    if n == 0 {
+                        break;
+                    }
+                    entry
+                        .write_all(&buf[..n])
+                        .await
+                        .map_err(|err| Error::io(&dest.path, err))?;
+                    self.progress.bytes_done += n as u64;
+                    self.emit(false);
+                }
+                entry.close().await.map_err(zip_err)?;
+                self.progress.files_done += 1;
+            }
+            let mut inner = zip.close().await.map_err(zip_err)?.into_inner();
+            inner
+                .shutdown()
+                .await
+                .map_err(|err| Error::io(&dest.path, err))
+        }
+        .await;
+        if result.is_err() {
+            let _ = dst_fs.remove_file(&dest.path).await; // don't leave a broken archive
+        }
+        result
+    }
+
+    async fn set_mode(&mut self, loc: Location, mode: u32) -> Result<()> {
+        self.progress.files_total = 1;
+        self.set_current(&loc.path);
+        self.fs(&loc.fs)?.set_mode(&loc.path, mode).await?;
+        self.progress.files_done = 1;
+        Ok(())
+    }
+
     // ---- single-item operations ---------------------------------------------
 
     async fn create_dir(&mut self, loc: Location) -> Result<()> {
@@ -390,4 +507,23 @@ impl Job {
         self.progress.files_done = 1;
         Ok(())
     }
+}
+
+/// ZIP timestamp. The format has no time zone and, by convention, stores
+/// local time — which is what unzip tools show.
+fn zip_date(ms: i64) -> async_zip::ZipDateTime {
+    use chrono::{Datelike, TimeZone, Timelike};
+    let t = chrono::Local
+        .timestamp_millis_opt(ms)
+        .earliest()
+        .unwrap_or_default()
+        .naive_local();
+    async_zip::ZipDateTimeBuilder::new()
+        .year(t.year().max(1980))
+        .month(t.month())
+        .day(t.day())
+        .hour(t.hour())
+        .minute(t.minute())
+        .second(t.second())
+        .build()
 }

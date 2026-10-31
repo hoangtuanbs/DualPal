@@ -6,8 +6,10 @@
 //! operation queue and (later) the sync engine can treat all of them alike.
 
 mod local;
+mod text;
 
 pub use local::LocalFs;
+pub use text::{read_text, write_text, TextFile};
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -112,6 +114,12 @@ pub trait FileSystem: Send + Sync {
     async fn trash(&self, path: &str) -> Result<()> {
         Err(Error::Unsupported(format!(
             "this location has no Trash: {path}"
+        )))
+    }
+    /// Change Unix permission bits.
+    async fn set_mode(&self, path: &str, _mode: u32) -> Result<()> {
+        Err(Error::Unsupported(format!(
+            "changing permissions here: {path}"
         )))
     }
     /// Set the modification time. Backends that cannot do this may ignore it.

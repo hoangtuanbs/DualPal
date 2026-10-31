@@ -175,3 +175,30 @@ fn io_err(path: &str, e: std::io::Error) -> Error {
         source: e,
     }
 }
+
+// ---- preview panel ---------------------------------------------------------
+
+#[tauri::command]
+pub async fn stat(state: State<'_, AppState>, location: Location) -> CmdResult<Entry> {
+    state.registry.get(&location.fs)?.stat(&location.path).await
+}
+
+#[tauri::command]
+pub async fn read_text(
+    state: State<'_, AppState>,
+    location: Location,
+    max_bytes: usize,
+) -> CmdResult<dualpal_core::vfs::TextFile> {
+    let fs = state.registry.get(&location.fs)?;
+    dualpal_core::vfs::read_text(fs.as_ref(), &location.path, max_bytes).await
+}
+
+#[tauri::command]
+pub async fn write_text(
+    state: State<'_, AppState>,
+    location: Location,
+    text: String,
+) -> CmdResult<()> {
+    let fs = state.registry.get(&location.fs)?;
+    dualpal_core::vfs::write_text(fs.as_ref(), &location.path, &text).await
+}

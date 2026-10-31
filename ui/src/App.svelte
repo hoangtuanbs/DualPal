@@ -14,6 +14,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import OperationsPanel from "./lib/OperationsPanel.svelte";
   import Pane from "./lib/Pane.svelte";
+  import Inspector from "./lib/Inspector.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import { patternMatcher } from "./lib/fileTypes";
   import { PaneGroup, PaneState } from "./lib/pane-state.svelte";
@@ -25,6 +26,7 @@
   /** Every open tab, for refreshing after operations. */
   const allPanes = () => groups.flatMap((g) => g.tabs);
 
+  let showInspector = $state(true);
   let volumes = $state<Volume[]>([]);
   let favorites = $state<Favorite[]>([]);
 
@@ -101,6 +103,18 @@
   function trash() {
     const targets = locationsOf(active);
     if (targets.length) enqueue({ type: "trash", targets });
+  }
+
+  /** Zip the targets into a new archive next to them. */
+  function compress() {
+    const loc = active.location;
+    const t = active.targets;
+    if (!loc || !t.length) return;
+    const taken = new Set(active.entries.map((e) => e.name.toLowerCase()));
+    const stem = t.length === 1 ? t[0].name.replace(/\.[^.]+$/, "") || t[0].name : "Archive";
+    let name = `${stem}.zip`;
+    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${stem} ${n}.zip`;
+    enqueue({ type: "compress", sources: locationsOf(active), destination: { fs: loc.fs, path: join(loc, name) } });
   }
 
   function remove() {
@@ -192,6 +206,9 @@
 
   function onkeydown(e: KeyboardEvent) {
     if (dialog) return;
+    // Typing in the quick editor or another field: leave keys alone.
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
     const mod = e.metaKey || e.ctrlKey;
     const handled = () => e.preventDefault();
     const group = groups[activeIndex];
@@ -206,6 +223,10 @@
     }
     if (mod && !e.shiftKey && e.key.toLowerCase() === "w") {
       group.closeTab();
+      return handled();
+    }
+    if (mod && !e.shiftKey && e.key.toLowerCase() === "i") {
+      showInspector = !showInspector;
       return handled();
     }
     if (mod && (e.key === "1" || e.key === "2")) {
@@ -305,6 +326,7 @@
     <div class="group">
       <button onclick={newFolder} title="New folder (F7)">New Folder</button>
       <button onclick={rename} title="Rename (F2)">Rename</button>
+      <button onclick={compress} title="Compress into a ZIP archive">Compress</button>
       <button onclick={trash} title="Move to Trash (F8 / Delete). Shift+Delete deletes permanently.">Trash</button>
     </div>
     <div class="group" role="group" aria-label="View">
@@ -315,6 +337,7 @@
       <button onclick={() => selectByPattern(true)} title="Select by name or extension (+). Deselect with −.">Select…</button>
       <button aria-pressed={isFavorite} onclick={toggleFavorite} title={isFavorite ? "Remove folder from Favorites" : "Add folder to Favorites"}>★</button>
       <button onclick={() => groups[activeIndex].newTab()} title="New tab (Ctrl/⌘ T)">+ Tab</button>
+      <button aria-pressed={showInspector} onclick={() => (showInspector = !showInspector)} title="Show preview and info (Ctrl/⌘ I)">ⓘ Info</button>
     </div>
     <div class="group">
       <button onclick={() => active.refresh()} title="Refresh (Ctrl/⌘ R)">Refresh</button>
@@ -330,7 +353,7 @@
     {/if}
   </div>
 
-  <div class="middle">
+  <div class="middle" class:with-inspector={showInspector}>
     <Sidebar
       {volumes}
       {favorites}
@@ -344,6 +367,14 @@
         <Pane {group} active={i === activeIndex} onfocus={() => (activeIndex = i)} />
       {/each}
     </main>
+    {#if showInspector}
+      <Inspector
+        entry={active.current ?? null}
+        fs={active.location?.fs ?? "local"}
+        onsetmode={(location, mode) => enqueue({ type: "setMode", location, mode })}
+        onsaved={() => allPanes().forEach((p) => p.refresh())}
+      />
+    {/if}
   </div>
 
   <OperationsPanel
@@ -418,6 +449,9 @@
     display: grid;
     grid-template-columns: 200px minmax(0, 1fr);
     min-height: 0;
+  }
+  .middle.with-inspector {
+    grid-template-columns: 200px minmax(0, 1fr) 300px;
   }
   .panes {
     display: grid;

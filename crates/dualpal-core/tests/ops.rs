@@ -421,3 +421,132 @@ async fn moves_items_to_trash() {
     assert_eq!(missing.status, OperationStatus::Failed);
     assert_eq!(missing.error.unwrap().kind, "notFound");
 }
+
+// async_zip's only tokio file reader is marked deprecated in favour of an
+// unreleased API; it is fine for verifying archives in a test.
+#[allow(deprecated)]
+#[tokio::test]
+async fn compresses_files_and_folders_into_a_zip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = sample_tree(tmp.path());
+    let lone = tmp.path().join("lone.txt");
+    write(&lone, "solo");
+    let zip_path = tmp.path().join("Archive.zip");
+
+    let q = queue();
+    let op = Operation::Compress {
+        sources: vec![loc(&src), loc(&lone)],
+        destination: loc(&zip_path),
+    };
+    let info = run(&q, op.clone()).await;
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert_eq!(info.progress.files_done, 4);
+    assert_eq!(info.progress.bytes_done, 18 + 4);
+
+    let reader = async_zip::tokio::read::fs::ZipFileReader::new(&zip_path)
+        .await
+        .unwrap();
+    let mut names: Vec<String> = reader
+        .file()
+        .entries()
+        .iter()
+        .map(|e| e.filename().as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "lone.txt",
+            "src/",
+            "src/a.txt",
+            "src/sub/",
+            "src/sub/b.txt",
+            "src/sub/deep/",
+            "src/sub/deep/c.txt"
+        ]
+    );
+    let idx = reader
+        .file()
+        .entries()
+        .iter()
+        .position(|e| e.filename().as_str().unwrap() == "src/sub/deep/c.txt")
+        .unwrap();
+    let mut entry = reader.reader_with_entry(idx).await.unwrap();
+    let mut out = String::new();
+    entry.read_to_string_checked(&mut out).await.unwrap();
+    assert_eq!(out, "charlie");
+
+    // Never overwrites an existing archive.
+    let again = run(&q, op).await;
+    assert_eq!(again.error.unwrap().kind, "alreadyExists");
+}
+
+#[tokio::test]
+async fn reads_and_saves_text() {
+    use dualpal_core::vfs::{read_text, write_text, LocalFs};
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("notes.md");
+    write(&file, "héllo world");
+    let fs = LocalFs::new();
+    let p = file.to_string_lossy();
+
+    let t = read_text(&fs, &p, 1000).await.unwrap();
+    assert_eq!(
+        (t.text.as_str(), t.truncated, t.binary),
+        ("héllo world", false, false)
+    );
+    // Limit falls inside the two-byte "é": still valid text, marked truncated.
+    let t = read_text(&fs, &p, 2).await.unwrap();
+    assert_eq!((t.text.as_str(), t.truncated, t.binary), ("h", true, false));
+
+    write_text(&fs, &p, "saved ✓").await.unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "saved ✓");
+    assert_eq!(
+        std::fs::read_dir(tmp.path()).unwrap().count(),
+        1,
+        "no temp file left behind"
+    );
+
+    let bin = tmp.path().join("x.bin");
+    std::fs::write(&bin, [0u8, 159, 146, 150]).unwrap();
+    assert!(
+        read_text(&fs, &bin.to_string_lossy(), 100)
+            .await
+            .unwrap()
+            .binary
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn changes_permissions_and_saving_keeps_them() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("script.sh");
+    write(&file, "echo hi");
+    let info = run(
+        &queue(),
+        Operation::SetMode {
+            location: loc(&file),
+            mode: 0o750,
+        },
+    )
+    .await;
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+
+    dualpal_core::vfs::write_text(
+        &dualpal_core::vfs::LocalFs::new(),
+        &file.to_string_lossy(),
+        "echo bye",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+}
