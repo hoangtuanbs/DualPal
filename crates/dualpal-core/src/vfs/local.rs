@@ -215,6 +215,15 @@ impl FileSystem for LocalFs {
         .map_err(|e| Error::Invalid(e.to_string()))?
     }
 
+    #[cfg(unix)]
+    async fn set_mode(&self, path: &str, mode: u32) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(mode & 0o7777);
+        tokio::fs::set_permissions(path, perms)
+            .await
+            .map_err(|e| Error::io(path, e))
+    }
+
     async fn set_modified(&self, path: &str, modified_ms: i64) -> Result<()> {
         let path = path.to_string();
         tokio::task::spawn_blocking(move || {

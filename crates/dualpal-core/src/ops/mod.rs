@@ -57,6 +57,13 @@ pub enum Operation {
     Trash { targets: Vec<Location> },
     /// Delete files or folders permanently (recursively).
     Delete { targets: Vec<Location> },
+    /// Create a ZIP archive at `destination` holding the given items.
+    Compress {
+        sources: Vec<Location>,
+        destination: Location,
+    },
+    /// Change Unix permission bits of one item.
+    SetMode { location: Location, mode: u32 },
     /// Create a new folder at `location`.
     CreateDir { location: Location },
     /// Rename an item in place.
@@ -73,6 +80,8 @@ impl Operation {
             Operation::Move { .. } => "move",
             Operation::Trash { .. } => "trash",
             Operation::Delete { .. } => "delete",
+            Operation::Compress { .. } => "compress",
+            Operation::SetMode { .. } => "setMode",
             Operation::CreateDir { .. } => "createDir",
             Operation::Rename { .. } => "rename",
         }
@@ -104,6 +113,19 @@ impl Operation {
             }
             Operation::Trash { targets } => format!("Move {} to Trash", items(targets.len())),
             Operation::Delete { targets } => format!("Delete {}", items(targets.len())),
+            Operation::Compress {
+                sources,
+                destination,
+            } => {
+                format!(
+                    "Compress {} into {}",
+                    items(sources.len()),
+                    destination.path
+                )
+            }
+            Operation::SetMode { location, mode } => {
+                format!("Set permissions of {} to {mode:o}", location.path)
+            }
             Operation::CreateDir { location } => format!("New folder {}", location.path),
             Operation::Rename { location, new_name } => {
                 format!("Rename {} to {new_name}", location.path)

@@ -85,6 +85,9 @@ pub fn run() {
             commands::remove_favorite,
             commands::reorder_favorites,
             commands::open_path,
+            commands::stat,
+            commands::read_text,
+            commands::write_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dual Pal");

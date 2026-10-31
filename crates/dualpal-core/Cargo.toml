@@ -16,9 +16,13 @@ uuid.workspace = true
 trash.workspace = true
 sysinfo.workspace = true
 dirs.workspace = true
+async_zip.workspace = true
+futures-lite.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 uuid.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
+async_zip = { workspace = true, features = ["tokio-fs"] }

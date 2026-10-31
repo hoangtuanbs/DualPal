@@ -30,6 +30,8 @@ export type Operation =
   | { type: "move"; sources: Location[]; destination: Location; conflict?: ConflictPolicy }
   | { type: "trash"; targets: Location[] }
   | { type: "delete"; targets: Location[] }
+  | { type: "compress"; sources: Location[]; destination: Location }
+  | { type: "setMode"; location: Location; mode: number }
   | { type: "createDir"; location: Location }
   | { type: "rename"; location: Location; newName: string };
 
@@ -72,6 +74,12 @@ export interface ActivityRecord {
   bytesDone: number;
   skipped: number;
   error: string | null;
+}
+
+export interface TextFile {
+  text: string;
+  truncated: boolean;
+  binary: boolean;
 }
 
 export interface FileSystemInfo {
@@ -117,6 +125,9 @@ export const api = {
   removeFavorite: (location: Location) => invoke<Favorite[]>("remove_favorite", { location }),
   reorderFavorites: (from: number, to: number) => invoke<Favorite[]>("reorder_favorites", { from, to }),
   openPath: (location: Location) => invoke<void>("open_path", { location }),
+  stat: (location: Location) => invoke<Entry>("stat", { location }),
+  readText: (location: Location, maxBytes: number) => invoke<TextFile>("read_text", { location, maxBytes }),
+  writeText: (location: Location, text: string) => invoke<void>("write_text", { location, text }),
   onOperationUpdated: (cb: (info: OperationInfo) => void): Promise<UnlistenFn> =>
     listen<OperationInfo>("operation-updated", (e) => cb(e.payload)),
 };
