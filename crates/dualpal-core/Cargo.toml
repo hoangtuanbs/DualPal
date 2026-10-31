@@ -1,0 +1,20 @@
+[package]
+name = "dualpal-core"
+description = "Platform-independent core of Dual Pal: virtual file system, operation queue and activity log."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
