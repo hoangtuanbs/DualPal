@@ -144,6 +144,7 @@
           role="option"
           aria-selected={pane.selected.has(entry.path)}
           tabindex="-1"
+          title="{entry.name} — modified {formatDate(entry.modifiedMs)}"
           onclick={(e) => click(e, entry, i)}
           ondblclick={() => pane.activate(entry)}
         >
@@ -153,7 +154,7 @@
             {#if entry.symlink}<span class="badge" title="Symbolic link">↪</span>{/if}
           </span>
           <span class="size">{entry.kind === "dir" ? "—" : formatBytes(entry.size)}</span>
-          <span class="date" title={formatDate(entry.modifiedMs)}>{formatShortDate(entry.modifiedMs)}</span>
+          <span class="date">{formatShortDate(entry.modifiedMs)}</span>
         </div>
       {:else}
         {@const thumb = thumbnailUrl(pane.location, entry)}
