@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="l" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2EE6C5"/><stop offset="1" stop-color="#0FA3A0"/>
+    </linearGradient>
+    <linearGradient id="r" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7B61FF"/><stop offset="1" stop-color="#4A2FD6"/>
+    </linearGradient>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <g clip-path="url(#sq)">
+    <rect x="100" y="100" width="412" height="824" fill="url(#l)"/>
+    <rect x="512" y="100" width="412" height="824" fill="url(#r)"/>
+    <rect x="100" y="100" width="824" height="412" fill="#fff" fill-opacity="0.08"/>
+    <rect x="504" y="100" width="16" height="824" fill="#fff" fill-opacity="0.9"/>
+  </g>
+  <g fill="none" stroke="#fff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" filter="url(#sh)">
+    <path d="M300 430 H690 M620 360 L690 430 L620 500"/>
+    <path d="M724 610 H334 M404 540 L334 610 L404 680"/>
+  </g>
+</svg>
