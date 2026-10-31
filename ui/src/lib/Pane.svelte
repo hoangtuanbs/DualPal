@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Entry } from "./api";
   import { formatBytes, formatDate } from "./format";
-  import type { PaneState, SortKey } from "./pane.svelte";
+  import type { PaneState, SortKey } from "./pane-state.svelte";
 
   let { pane, active, onfocus }: { pane: PaneState; active: boolean; onfocus: () => void } = $props();
 

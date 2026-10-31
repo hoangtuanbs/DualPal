@@ -12,7 +12,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import OperationsPanel from "./lib/OperationsPanel.svelte";
   import Pane from "./lib/Pane.svelte";
-  import { PaneState } from "./lib/pane.svelte";
+  import { PaneState } from "./lib/pane-state.svelte";
 
   const panes = [new PaneState(), new PaneState()];
   let activeIndex = $state(0);
