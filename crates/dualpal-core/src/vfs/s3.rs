@@ -336,10 +336,15 @@ impl FileSystem for S3Fs {
                 self.copy_key(k, &format!("{to_dk}{rest}")).await?;
             }
         }
+        // Delete only what was copied: objects added under the old folder
+        // meanwhile (by someone else) stay where they are.
         for k in keys.iter().filter(|k| !k.ends_with('/')) {
             self.op.delete(k).await.map_err(|e| map_err(k, e))?;
         }
-        let _ = self.op.remove_all(&from_dk).await;
+        for k in keys.iter().rev().filter(|k| k.ends_with('/')) {
+            let _ = self.op.delete(k).await;
+        }
+        let _ = self.op.delete(&from_dk).await;
         Ok(())
     }
 

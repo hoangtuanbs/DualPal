@@ -50,8 +50,9 @@ pub fn run() {
             let preview_dir = cache_dir.join("preview");
             // Previews are only useful for one run of the app.
             let _ = std::fs::remove_dir_all(&preview_dir);
-            let edits_dir = cache_dir.join("edits");
-            let _ = std::fs::remove_dir_all(&edits_dir);
+            // Kept across runs: copies holding saves that never reached the
+            // server come back as sessions to upload.
+            let edits_dir = data_dir.join("edits");
             let editor = RemoteEditor::new(registry.clone(), edits_dir);
             let log_path = data_dir.join("activity.jsonl");
             let activity = match ActivityLog::open(&log_path, ACTIVITY_CAPACITY) {
@@ -143,6 +144,7 @@ pub fn run() {
             remote::open_file,
             remote::edit_sessions,
             remote::stop_edit_session,
+            remote::upload_edit_session,
             remote::preview_path,
             remote::settings,
             remote::save_settings,

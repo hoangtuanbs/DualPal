@@ -3,7 +3,11 @@
   import { formatTime } from "./format";
 
   /** Remote files open in an editor; each saved change is uploaded again. */
-  let { sessions, onstop }: { sessions: EditSession[]; onstop: (id: string) => void } = $props();
+  let {
+    sessions,
+    onstop,
+    onupload,
+  }: { sessions: EditSession[]; onstop: (id: string) => void; onupload: (id: string) => void } = $props();
 
   function name(s: EditSession) {
     return s.remote.path.split("/").filter(Boolean).pop() ?? s.remote.path;
@@ -30,6 +34,9 @@
       <span class="chip" class:failed={s.status === "failed"} title="{s.remote.path}\nLocal copy: {s.localPath}">
         <span class="file">{name(s)}</span>
         <span class="status">{status(s)}</span>
+        {#if s.status === "failed"}
+          <button class="upload" title="Upload this save now" onclick={() => onupload(s.id)}>Upload</button>
+        {/if}
         <button title="Stop uploading changes and delete the local copy" aria-label="Stop editing {name(s)}" onclick={() => onstop(s.id)}
           >×</button
         >
@@ -80,6 +87,10 @@
     padding: 0 4px;
     font-size: 13px;
     line-height: 1;
+  }
+  .upload {
+    font-size: 12px;
+    color: var(--accent);
   }
   button:hover {
     color: var(--text);

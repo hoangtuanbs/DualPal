@@ -212,6 +212,7 @@ export const api = {
   openFile: (location: Location, editor = false) => invoke<EditSession | null>("open_file", { location, editor }),
   editSessions: () => invoke<EditSession[]>("edit_sessions"),
   stopEditSession: (id: string) => invoke<boolean>("stop_edit_session", { id }),
+  uploadEditSession: (id: string) => invoke<EditSession>("upload_edit_session", { id }),
   previewPath: (location: Location) => invoke<string>("preview_path", { location }),
   settings: () => invoke<Settings>("settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),

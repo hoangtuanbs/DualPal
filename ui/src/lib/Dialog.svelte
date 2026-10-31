@@ -9,6 +9,7 @@
     danger = false,
     password = false,
     checkbox = null,
+    allowEmpty = false,
     onconfirm,
     oncancel,
   }: {
@@ -22,6 +23,8 @@
     password?: boolean;
     /** Label of an optional checkbox, e.g. "Remember password". */
     checkbox?: string | null;
+    /** Accept an empty text field (e.g. to clear a setting). */
+    allowEmpty?: boolean;
     onconfirm: (value: string, checked: boolean) => void;
     oncancel: () => void;
   } = $props();
@@ -51,7 +54,7 @@
 
   function submit(e: SubmitEvent) {
     e.preventDefault();
-    if (input !== null && !value.trim()) return;
+    if (input !== null && !allowEmpty && !value.trim()) return;
     onconfirm(password ? value : value.trim(), checked);
   }
 

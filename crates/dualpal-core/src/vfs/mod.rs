@@ -77,6 +77,34 @@ impl Entry {
     }
 }
 
+/// Whether `name`, coming from another file system (a server), is a plain
+/// file name on the local disk: not empty, not `.`/`..`, and without path
+/// separators or (on Windows) drive letters, which would let it point
+/// outside the folder it is joined onto.
+pub fn is_safe_local_name(name: &str) -> bool {
+    let bad_char = |c: char| c == '/' || c == '\0' || (cfg!(windows) && (c == '\\' || c == ':'));
+    !name.is_empty() && name != "." && name != ".." && !name.contains(bad_char)
+}
+
+/// `name` made safe to use as a local file name (see [`is_safe_local_name`]):
+/// unsafe characters become `_`.
+pub fn safe_local_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c == ':' || c == '\0' || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    match cleaned.as_str() {
+        "" | "." | ".." => "file".to_string(),
+        _ => cleaned,
+    }
+}
+
 pub type Reader = Box<dyn AsyncRead + Send + Unpin>;
 pub type Writer = Box<dyn AsyncWrite + Send + Unpin>;
 

@@ -489,3 +489,72 @@ async fn s3_backend_against_a_real_server() {
     c.fs.remove_dir(&base).await.unwrap();
     assert!(matches!(c.fs.stat(&base).await, Err(Error::NotFound(_))));
 }
+
+#[tokio::test]
+async fn unsent_edits_survive_failures_and_restarts() {
+    use dualpal_core::remote_edit::{EditStatus, RemoteEditor};
+    let op = opendal::Operator::new(opendal::services::Memory::default())
+        .unwrap()
+        .finish();
+    let fs: Arc<dyn FileSystem> =
+        Arc::new(S3Fs::from_operator("conn:mem".into(), "Memory".into(), op));
+    put(&*fs, "/a.txt", "v1").await;
+    let registry = Arc::new(Registry::with_local());
+    registry.register(fs.clone());
+    let tmp = tempfile::tempdir().unwrap();
+    let editor = RemoteEditor::new(registry.clone(), tmp.path());
+    let mut events = editor.subscribe();
+    let s = editor
+        .start(Location::new("conn:mem", "/a.txt"))
+        .await
+        .unwrap();
+
+    // The editor saves, and the server is disconnected before the upload.
+    std::fs::write(&s.local_path, "unsent v2").unwrap();
+    editor.stop_all_on("conn:mem");
+    registry.unregister("conn:mem");
+    let failed = editor.list().into_iter().find(|x| x.id == s.id).unwrap();
+    assert_eq!(failed.status, EditStatus::Failed, "kept, not deleted");
+    assert!(Path::new(&s.local_path).exists());
+    while events.try_recv().is_ok() {}
+
+    // "Restart": a new editor over the same folder finds the unsent save.
+    drop(editor);
+    let editor = RemoteEditor::new(registry.clone(), tmp.path());
+    let recovered = editor.list();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].status, EditStatus::Failed);
+    assert_eq!(
+        std::fs::read_to_string(&recovered[0].local_path).unwrap(),
+        "unsent v2"
+    );
+
+    // Reconnected: uploading sends it and watching resumes.
+    registry.register(fs.clone());
+    let up = editor.upload_now(recovered[0].id).await.unwrap();
+    assert_eq!(up.status, EditStatus::Uploaded);
+    assert_eq!(get(&*fs, "/a.txt").await, "unsent v2");
+
+    // A copy whose changes all reached the server is cleaned up on restart.
+    drop(editor);
+    let editor = RemoteEditor::new(registry.clone(), tmp.path());
+    assert!(editor.list().is_empty());
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn server_names_cannot_escape_local_folders() {
+    use dualpal_core::vfs::{is_safe_local_name, safe_local_name};
+    assert!(is_safe_local_name("notes.txt"));
+    assert!(!is_safe_local_name(".."));
+    assert!(!is_safe_local_name("a/b"));
+    assert!(!is_safe_local_name(""));
+    #[cfg(windows)]
+    {
+        assert!(!is_safe_local_name("C:\\Users\\x.txt"));
+        assert!(!is_safe_local_name("..\\x"));
+    }
+    assert_eq!(safe_local_name("C:\\Users\\x.txt"), "C__Users_x.txt");
+    assert_eq!(safe_local_name(".."), "file");
+    assert_eq!(safe_local_name("a/../b"), "a_.._b");
+}

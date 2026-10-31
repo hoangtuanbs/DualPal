@@ -255,6 +255,12 @@ pub fn edit_sessions(state: State<'_, AppState>) -> Vec<EditSession> {
     state.editor.list()
 }
 
+/// Upload a save that failed (or was left from an earlier run) now.
+#[tauri::command]
+pub async fn upload_edit_session(state: State<'_, AppState>, id: Uuid) -> CmdResult<EditSession> {
+    state.editor.upload_now(id).await
+}
+
 #[tauri::command]
 pub fn stop_edit_session(state: State<'_, AppState>, id: Uuid) -> bool {
     state.editor.stop(id)
@@ -285,7 +291,11 @@ pub async fn preview_path(state: State<'_, AppState>, location: Location) -> Cmd
             location.fs, location.path, entry.size, entry.modified_ms
         ))
     );
-    let local = state.preview_dir.join(key).join(&entry.name);
+    // `download` writes a temporary file first, so an existing copy is complete.
+    let local = state
+        .preview_dir
+        .join(key)
+        .join(dualpal_core::vfs::safe_local_name(&entry.name));
     if !local.exists() {
         remote_edit::download(fs.as_ref(), &location.path, &local).await?;
     }

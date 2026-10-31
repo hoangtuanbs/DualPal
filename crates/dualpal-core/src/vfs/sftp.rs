@@ -517,21 +517,40 @@ impl FileSystem for SftpFs {
 
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
         // Like a local rename, replace an existing file but never a folder.
-        // SFTP v3 refuses to rename onto an existing name, so remove it first.
+        // SFTP v3 refuses to rename onto an existing name, so the existing
+        // file is first moved aside, and put back if the rename fails: the
+        // original is never lost, even if the connection drops midway.
         let live = self.sftp().await?;
-        if let Ok(existing) = live.sftp.symlink_metadata(to).await {
-            if existing.is_dir() {
-                return Err(Error::AlreadyExists(to.to_string()));
-            }
-            live.sftp
-                .remove_file(to)
+        let Ok(existing) = live.sftp.symlink_metadata(to).await else {
+            return live
+                .sftp
+                .rename(from, to)
                 .await
-                .map_err(|e| map_err(to, e))?;
+                .map_err(|e| map_err(from, e));
+        };
+        if existing.is_dir() {
+            return Err(Error::AlreadyExists(to.to_string()));
         }
+        let parent = posix::parent(to).unwrap_or_else(|| "/".into());
+        let name = posix::file_name(to).unwrap_or_default();
+        let backup = posix::join(
+            &parent,
+            &format!(".{name}.dualpal-old-{}", uuid::Uuid::new_v4().simple()),
+        );
         live.sftp
-            .rename(from, to)
+            .rename(to, backup.as_str())
             .await
-            .map_err(|e| map_err(from, e))
+            .map_err(|e| map_err(to, e))?;
+        match live.sftp.rename(from, to).await {
+            Ok(()) => {
+                let _ = live.sftp.remove_file(backup).await;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = live.sftp.rename(backup, to).await;
+                Err(map_err(from, e))
+            }
+        }
     }
 
     async fn open_read(&self, path: &str) -> Result<Reader> {

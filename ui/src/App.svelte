@@ -55,6 +55,7 @@
     danger?: boolean;
     password?: boolean;
     checkbox?: string | null;
+    allowEmpty?: boolean;
     onconfirm: (value: string, checked: boolean) => void;
   };
   let dialog = $state<DialogSpec | null>(null);
@@ -66,6 +67,7 @@
       unlisten = await api.onOperationUpdated(onOperationUpdated);
       unlistenEdits = await api.onEditSessionUpdated(onEditSessionUpdated);
       await loadConnections();
+      editSessions = await api.editSessions();
       const home = await api.homeLocation();
       await Promise.all(groups.map((g) => g.current.open(home)));
       operations = await api.operations();
@@ -112,12 +114,18 @@
 
   /** Connect (asking for a password or a host key confirmation when needed)
    *  and open `path`, or the server's start folder, in the active pane. */
-  async function connectTo(c: ConnectionView, path?: string, opts: { secret?: string; remember?: boolean; trust?: string } = {}) {
+  async function connectTo(
+    c: ConnectionView,
+    path?: string,
+    opts: { secret?: string; remember?: boolean; trust?: string } = {},
+    // The pane that was active when the user asked, kept through the prompts.
+    pane: PaneState = active,
+  ) {
     notice = null;
     try {
       const r = await api.connect(c.id, opts);
       fsNames[c.fsId] = c.name;
-      await active.open(path ? { fs: r.location.fs, path } : r.location);
+      await pane.open(path ? { fs: r.location.fs, path } : r.location);
       await loadConnections();
     } catch (e) {
       const kind = errorKind(e);
@@ -127,7 +135,7 @@
           title: `Trust ${c.name}?`,
           message: `Dual Pal has not connected to this server before. Check that its key fingerprint is ${fp} before you continue. It will be added to ~/.ssh/known_hosts.`,
           confirmLabel: "Trust and connect",
-          onconfirm: () => connectTo(c, path, { ...opts, trust: fp }),
+          onconfirm: () => connectTo(c, path, { ...opts, trust: fp }, pane),
         };
       } else if (kind === "authFailed" && c.endpoint.type === "sftp" && c.endpoint.auth.method !== "agent") {
         const what = c.endpoint.auth.method === "keyFile" ? "key passphrase" : "password";
@@ -138,7 +146,7 @@
           password: true,
           checkbox: navigator.userAgent.includes("Windows") ? "Remember in Credential Manager" : "Remember in Keychain",
           confirmLabel: "Connect",
-          onconfirm: (secret, remember) => connectTo(c, path, { ...opts, secret, remember }),
+          onconfirm: (secret, remember) => connectTo(c, path, { ...opts, secret, remember }, pane),
         };
       } else if (kind === "authFailed" && c.endpoint.type === "s3") {
         notice = errorMessage(e);
@@ -187,6 +195,21 @@
 
   // ---- editing --------------------------------------------------------------
 
+  function stopEditing(id: string) {
+    const s = editSessions.find((x) => x.id === id);
+    if (s?.status !== "failed") {
+      api.stopEditSession(id);
+      return;
+    }
+    dialog = {
+      title: "Discard unsent changes?",
+      message: `The last save of ${s.remote.path} has not reached the server. Stopping deletes the local copy with those changes.`,
+      confirmLabel: "Discard",
+      danger: true,
+      onconfirm: () => api.stopEditSession(id),
+    };
+  }
+
   /** Open the file under the cursor in the preferred editor. */
   async function editInEditor() {
     const entry = active.current;
@@ -208,6 +231,7 @@
         ? "App used by Edit, e.g. Visual Studio Code, BBEdit or /Applications/Sublime Text.app. Leave empty for each file's default app."
         : "Program used by Edit, e.g. C:\\Program Files\\Notepad++\\notepad++.exe or code. Leave empty for each file's default app.",
       input: s.editor ?? "",
+      allowEmpty: true,
       confirmLabel: "Save",
       onconfirm: (editor) => api.saveSettings({ ...s, editor: editor || null }).catch((e) => (notice = errorMessage(e))),
     };
@@ -358,7 +382,8 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
-    if (dialog) return;
+    // A dialog or the server form is open: its keys are its own.
+    if (dialog || editing !== undefined) return;
     // Typing in the quick editor or another field: leave keys alone.
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -546,7 +571,11 @@
   </div>
 
   <div class="bottom">
-    <EditSessions sessions={editSessions} onstop={(id) => api.stopEditSession(id)} />
+    <EditSessions
+    sessions={editSessions}
+    onstop={stopEditing}
+    onupload={(id) => api.uploadEditSession(id).catch((e) => (notice = errorMessage(e)))}
+  />
     <div class="ops">
       <OperationsPanel
         {operations}
@@ -570,6 +599,7 @@
     danger={d.danger}
     password={d.password}
     checkbox={d.checkbox ?? null}
+    allowEmpty={d.allowEmpty}
     oncancel={() => (dialog = null)}
     onconfirm={(v, checked) => {
       // Read the callback before clearing: `d` is derived from `dialog`.
