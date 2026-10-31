@@ -20,3 +20,4 @@ tokio.workspace = true
 uuid.workspace = true
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
+keyring.workspace = true

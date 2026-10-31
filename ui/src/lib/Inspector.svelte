@@ -24,8 +24,29 @@
 
   const cat = $derived(entry ? category(entry) : null);
   const local = $derived(fs === "local");
-  const src = $derived(entry && local ? convertFileSrc(entry.path) : null);
   const loc = $derived(entry ? { fs, path: entry.path } : null);
+
+  /** Largest remote file downloaded automatically for a preview. */
+  const REMOTE_PREVIEW_LIMIT = 64 * 1024 * 1024;
+  const media = $derived(cat === "image" || cat === "video" || cat === "audio" || cat === "pdf");
+  let remoteSrc = $state<string | null>(null);
+  const src = $derived(entry && local ? convertFileSrc(entry.path) : remoteSrc);
+
+  // Files on a server are previewed from a downloaded copy.
+  $effect(() => {
+    const l = loc;
+    const e = entry;
+    remoteSrc = null;
+    if (!l || !e || local || !media || e.kind !== "file" || e.size > REMOTE_PREVIEW_LIMIT) return;
+    // Re-fetch when the file changes on the server.
+    void e.modifiedMs;
+    api.previewPath(l).then(
+      (p) => {
+        if (loc?.path === l.path && loc.fs === l.fs) remoteSrc = convertFileSrc(p);
+      },
+      () => {},
+    );
+  });
 
   const KIND: Record<string, string> = {
     folder: "Folder",

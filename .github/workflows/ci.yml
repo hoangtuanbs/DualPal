@@ -53,6 +53,35 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Test SSH and S3 servers (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # Throwaway servers on 127.0.0.1 for the SFTP and S3 integration tests.
+          sudo apt-get install -y openssh-server
+          T="$RUNNER_TEMP/servers"
+          mkdir -p "$T"
+          ssh-keygen -q -t ed25519 -N '' -f "$T/host_key"
+          ssh-keygen -q -t ed25519 -N '' -f "$T/client_key"
+          # A dedicated user with a password, so the account is not locked
+          # (the runner account is, and sshd refuses locked accounts).
+          sudo useradd -m dptest
+          echo 'dptest:dptest-pw' | sudo chpasswd
+          sudo install -d -m 700 -o dptest -g dptest /home/dptest/.ssh
+          sudo install -m 600 -o dptest -g dptest "$T/client_key.pub" /home/dptest/.ssh/authorized_keys
+          printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey %s/host_key\nPidFile %s/sshd.pid\nPasswordAuthentication yes\nUsePAM no\nSubsystem sftp internal-sftp\n' "$T" "$T" > "$T/sshd_config"
+          sudo mkdir -p /run/sshd
+          sudo /usr/sbin/sshd -f "$T/sshd_config"
+          echo "DUALPAL_TEST_SFTP=dptest@127.0.0.1:2222" >> "$GITHUB_ENV"
+          echo "DUALPAL_TEST_SFTP_KEY=$T/client_key" >> "$GITHUB_ENV"
+          echo "DUALPAL_TEST_SFTP_PASSWORD=dptest-pw" >> "$GITHUB_ENV"
+          # S3: the moto emulator, with one bucket.
+          python3 -m venv "$T/venv"
+          "$T/venv/bin/pip" install -q "moto[server]"
+          nohup "$T/venv/bin/moto_server" -H 127.0.0.1 -p 9000 > "$T/moto.log" 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:9000/ >/dev/null && break; sleep 1; done
+          "$T/venv/bin/python" -c "import boto3; boto3.client('s3', endpoint_url='http://127.0.0.1:9000', aws_access_key_id='k', aws_secret_access_key='s', region_name='us-east-1').create_bucket(Bucket='dualpal-test')"
+          echo "DUALPAL_TEST_S3=http://127.0.0.1:9000|dualpal-test|k|s" >> "$GITHUB_ENV"
+
       - name: Core tests
         run: cargo test --workspace
 

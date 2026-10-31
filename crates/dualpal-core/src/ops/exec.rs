@@ -128,6 +128,7 @@ impl Job {
             let name = src_fs
                 .file_name(&src.path)
                 .ok_or_else(|| Error::Invalid(format!("cannot copy {}", src.path)))?;
+            check_name(&dst_fs, &name)?;
             let target = dst_fs.join(&dest.path, &name);
             let same_fs = src.fs == dest.fs;
 
@@ -240,6 +241,7 @@ impl Job {
                         modified_ms: entry.modified_ms,
                     });
                     for child in children.into_iter().rev() {
+                        check_name(dst_fs, &child.name)?;
                         let child_dst = dst_fs.join(&dst, &child.name);
                         stack.push((child, child_dst));
                     }
@@ -511,6 +513,17 @@ impl Job {
 
 /// ZIP timestamp. The format has no time zone and, by convention, stores
 /// local time — which is what unzip tools show.
+/// Names from a server must not escape the local folder they are copied
+/// into (e.g. `..` or, on Windows, `C:\\Users\\…`).
+fn check_name(dst_fs: &Fs, name: &str) -> Result<()> {
+    if dst_fs.id() == crate::vfs::LocalFs::ID && !crate::vfs::is_safe_local_name(name) {
+        return Err(Error::Invalid(format!(
+            "unsafe file name for this computer: {name}"
+        )));
+    }
+    Ok(())
+}
+
 fn zip_date(ms: i64) -> async_zip::ZipDateTime {
     use chrono::{Datelike, TimeZone, Timelike};
     let t = chrono::Local

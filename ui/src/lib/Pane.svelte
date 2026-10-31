@@ -3,6 +3,7 @@
   import { glyph, thumbnailUrl } from "./fileTypes";
   import { formatBytes, formatDate, formatShortDate } from "./format";
   import type { PaneGroup, SortKey } from "./pane-state.svelte";
+  import { fsNames } from "./fs-names.svelte";
 
   let { group, active, onfocus }: { group: PaneGroup; active: boolean; onfocus: () => void } = $props();
   const pane = $derived(group.current);
@@ -39,7 +40,9 @@
   const crumbs = $derived.by(() => {
     const path = pane.location?.path ?? "";
     const windows = /^[A-Za-z]:/.test(path) || path.startsWith("\\\\");
-    const out: { name: string; path: string }[] = windows ? [] : [{ name: "/", path: "/" }];
+    // A server's root shows the server's name.
+    const root = (pane.location && fsNames[pane.location.fs]) || "/";
+    const out: { name: string; path: string }[] = windows ? [] : [{ name: root, path: "/" }];
     let acc = "";
     path
       .split(/[\\/]/)
@@ -102,7 +105,7 @@
     </div>
     <nav class="crumbs" aria-label="Path" bind:this={crumbsEl}>
       {#each crumbs as c, i (c.path)}
-        {#if i > 0 && c.name !== "/"}<span class="sep">›</span>{/if}
+        {#if i > 0}<span class="sep">›</span>{/if}
         <button
           class="crumb"
           onclick={() => pane.location && pane.open({ fs: pane.location.fs, path: c.path })}>{c.name}</button
@@ -144,7 +147,7 @@
           role="option"
           aria-selected={pane.selected.has(entry.path)}
           tabindex="-1"
-          title="{entry.name} — modified {formatDate(entry.modifiedMs)}"
+          title={entry.modifiedMs != null ? `${entry.name} — modified ${formatDate(entry.modifiedMs)}` : entry.name}
           onclick={(e) => click(e, entry, i)}
           ondblclick={() => pane.activate(entry)}
         >

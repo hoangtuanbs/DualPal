@@ -2,8 +2,12 @@
   import { onMount } from "svelte";
   import {
     api,
+    errorKind,
     errorMessage,
     type ActivityRecord,
+    type Connection,
+    type ConnectionView,
+    type EditSession,
     type ConflictPolicy,
     type Favorite,
     type Volume,
@@ -16,6 +20,9 @@
   import Pane from "./lib/Pane.svelte";
   import Inspector from "./lib/Inspector.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
+  import ConnectionDialog from "./lib/ConnectionDialog.svelte";
+  import EditSessions from "./lib/EditSessions.svelte";
+  import { fsNames } from "./lib/fs-names.svelte";
   import { patternMatcher } from "./lib/fileTypes";
   import { PaneGroup, PaneState } from "./lib/pane-state.svelte";
 
@@ -29,6 +36,10 @@
   let showInspector = $state(true);
   let volumes = $state<Volume[]>([]);
   let favorites = $state<Favorite[]>([]);
+  let connections = $state<ConnectionView[]>([]);
+  let editSessions = $state<EditSession[]>([]);
+  /** The connection being added (null) or edited; undefined when closed. */
+  let editing = $state<Connection | null | undefined>(undefined);
 
   let operations = $state<OperationInfo[]>([]);
   let activity = $state<ActivityRecord[]>([]);
@@ -42,14 +53,21 @@
     input?: string | null;
     confirmLabel?: string;
     danger?: boolean;
-    onconfirm: (value: string) => void;
+    password?: boolean;
+    checkbox?: string | null;
+    allowEmpty?: boolean;
+    onconfirm: (value: string, checked: boolean) => void;
   };
   let dialog = $state<DialogSpec | null>(null);
 
   onMount(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenEdits: (() => void) | undefined;
     (async () => {
       unlisten = await api.onOperationUpdated(onOperationUpdated);
+      unlistenEdits = await api.onEditSessionUpdated(onEditSessionUpdated);
+      await loadConnections();
+      editSessions = await api.editSessions();
       const home = await api.homeLocation();
       await Promise.all(groups.map((g) => g.current.open(home)));
       operations = await api.operations();
@@ -61,6 +79,7 @@
     const timer = setInterval(() => api.volumes().then((v) => (volumes = v)), 15000);
     return () => {
       unlisten?.();
+      unlistenEdits?.();
       clearInterval(timer);
     };
   });
@@ -73,6 +92,149 @@
       allPanes().forEach((p) => p.refresh());
       api.activity().then((a) => (activity = a));
     }
+  }
+
+  function onEditSessionUpdated(s: EditSession) {
+    const i = editSessions.findIndex((x) => x.id === s.id);
+    if (s.status === "stopped") {
+      if (i >= 0) editSessions.splice(i, 1);
+      return;
+    }
+    if (i >= 0) editSessions[i] = s;
+    else editSessions.push(s);
+    if (s.status === "uploaded") allPanes().forEach((p) => p.location?.fs === s.remote.fs && p.refresh());
+  }
+
+  // ---- servers --------------------------------------------------------------
+
+  async function loadConnections() {
+    connections = await api.connections();
+    for (const c of connections) fsNames[c.fsId] = c.name;
+  }
+
+  /** Connect (asking for a password or a host key confirmation when needed)
+   *  and open `path`, or the server's start folder, in the active pane. */
+  async function connectTo(
+    c: ConnectionView,
+    path?: string,
+    opts: { secret?: string; remember?: boolean; trust?: string } = {},
+    // The pane that was active when the user asked, kept through the prompts.
+    pane: PaneState = active,
+  ) {
+    notice = null;
+    try {
+      const r = await api.connect(c.id, opts);
+      fsNames[c.fsId] = c.name;
+      await pane.open(path ? { fs: r.location.fs, path } : r.location);
+      await loadConnections();
+    } catch (e) {
+      const kind = errorKind(e);
+      const fp = (e as { fingerprint?: string }).fingerprint;
+      if (kind === "unknownHost" && fp) {
+        dialog = {
+          title: `Trust ${c.name}?`,
+          message: `Dual Pal has not connected to this server before. Check that its key fingerprint is ${fp} before you continue. It will be added to ~/.ssh/known_hosts.`,
+          confirmLabel: "Trust and connect",
+          onconfirm: () => connectTo(c, path, { ...opts, trust: fp }, pane),
+        };
+      } else if (kind === "authFailed" && c.endpoint.type === "sftp" && c.endpoint.auth.method !== "agent") {
+        const what = c.endpoint.auth.method === "keyFile" ? "key passphrase" : "password";
+        dialog = {
+          title: `Sign in to ${c.name}`,
+          message: `${opts.secret ? `That ${what} did not work. ` : ""}Enter the ${what} for ${c.endpoint.user}@${c.endpoint.host}.`,
+          input: "",
+          password: true,
+          checkbox: navigator.userAgent.includes("Windows") ? "Remember in Credential Manager" : "Remember in Keychain",
+          confirmLabel: "Connect",
+          onconfirm: (secret, remember) => connectTo(c, path, { ...opts, secret, remember }, pane),
+        };
+      } else if (kind === "authFailed" && c.endpoint.type === "s3") {
+        notice = errorMessage(e);
+        editing = c;
+      } else {
+        notice = errorMessage(e);
+      }
+    }
+  }
+
+  async function disconnect(c: ConnectionView) {
+    await api.disconnect(c.id);
+    // Panes showing the server go back home.
+    const home = await api.homeLocation();
+    for (const p of allPanes()) if (p.location?.fs === c.fsId) await p.open(home, { record: false });
+    editSessions = editSessions.filter((s) => s.remote.fs !== c.fsId);
+    await loadConnections();
+  }
+
+  function removeServer(c: ConnectionView) {
+    dialog = {
+      title: `Remove ${c.name}?`,
+      message: "The server and its favorites are removed from Dual Pal, along with its saved password. Nothing on the server changes.",
+      confirmLabel: "Remove",
+      danger: true,
+      onconfirm: async () => {
+        await api.removeConnection(c.id).catch((e) => (notice = errorMessage(e)));
+        await loadConnections();
+      },
+    };
+  }
+
+  async function serverSaved(saved: Connection, connect: boolean) {
+    editing = undefined;
+    await loadConnections();
+    const c = connections.find((x) => x.id === saved.id);
+    if (c && connect) {
+      // Settings may have changed: reconnect with the new ones.
+      if (c.connected) await api.disconnect(c.id);
+      await connectTo(c);
+    }
+  }
+
+  /** The saved connection behind a file system id, if it is remote. */
+  const connectionOf = (fs: string | undefined) => connections.find((c) => c.fsId === fs);
+
+  // ---- editing --------------------------------------------------------------
+
+  function stopEditing(id: string) {
+    const s = editSessions.find((x) => x.id === id);
+    if (s?.status !== "failed") {
+      api.stopEditSession(id);
+      return;
+    }
+    dialog = {
+      title: "Discard unsent changes?",
+      message: `The last save of ${s.remote.path} has not reached the server. Stopping deletes the local copy with those changes.`,
+      confirmLabel: "Discard",
+      danger: true,
+      onconfirm: () => api.stopEditSession(id),
+    };
+  }
+
+  /** Open the file under the cursor in the preferred editor. */
+  async function editInEditor() {
+    const entry = active.current;
+    const loc = active.location;
+    if (!entry || !loc || entry.kind === "dir") return;
+    try {
+      await api.openFile({ fs: loc.fs, path: entry.path }, true);
+    } catch (e) {
+      notice = errorMessage(e);
+    }
+  }
+
+  async function chooseEditor() {
+    const s = await api.settings();
+    const mac = !navigator.userAgent.includes("Windows");
+    dialog = {
+      title: "Preferred editor",
+      message: mac
+        ? "App used by Edit, e.g. Visual Studio Code, BBEdit or /Applications/Sublime Text.app. Leave empty for each file's default app."
+        : "Program used by Edit, e.g. C:\\Program Files\\Notepad++\\notepad++.exe or code. Leave empty for each file's default app.",
+      input: s.editor ?? "",
+      allowEmpty: true,
+      confirmLabel: "Save",
+      onconfirm: (editor) => api.saveSettings({ ...s, editor: editor || null }).catch((e) => (notice = errorMessage(e))),
+    };
   }
 
   async function enqueue(op: Operation) {
@@ -102,7 +264,10 @@
 
   function trash() {
     const targets = locationsOf(active);
-    if (targets.length) enqueue({ type: "trash", targets });
+    if (!targets.length) return;
+    // Servers and buckets have no Trash: offer to delete instead.
+    if (active.location?.fs !== "local") remove();
+    else enqueue({ type: "trash", targets });
   }
 
   /** Zip the targets into a new archive next to them. */
@@ -176,7 +341,15 @@
   async function toggleFavorite() {
     const loc = active.location;
     if (!loc) return;
+    const conn = connectionOf(loc.fs);
     try {
+      if (conn) {
+        // A folder on a server becomes a favorite inside that server.
+        if (isFavorite) await api.removeConnectionFavorite(conn.id, loc.path);
+        else await api.addConnectionFavorite(conn.id, { name: active.title || loc.path, path: loc.path });
+        await loadConnections();
+        return;
+      }
       favorites = isFavorite
         ? await api.removeFavorite(loc)
         : await api.addFavorite({ name: active.title || loc.path, location: loc, icon: "folder" });
@@ -185,9 +358,13 @@
     }
   }
 
-  const isFavorite = $derived(
-    !!active.location && favorites.some((f) => f.location.fs === active.location!.fs && f.location.path === active.location!.path),
-  );
+  const isFavorite = $derived.by(() => {
+    const loc = active.location;
+    if (!loc) return false;
+    const conn = connectionOf(loc.fs);
+    if (conn) return conn.favorites.some((f) => f.path === loc.path);
+    return favorites.some((f) => f.location.fs === loc.fs && f.location.path === loc.path);
+  });
 
   function retry(id: string, conflict: ConflictPolicy) {
     const op = requests.get(id);
@@ -205,7 +382,8 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
-    if (dialog) return;
+    // A dialog or the server form is open: its keys are its own.
+    if (dialog || editing !== undefined) return;
     // Typing in the quick editor or another field: leave keys alone.
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -285,6 +463,9 @@
       case "F2":
         rename();
         return handled();
+      case "F4":
+        editInEditor();
+        return handled();
       case "F5":
         transfer("copy");
         return handled();
@@ -326,6 +507,7 @@
     <div class="group">
       <button onclick={newFolder} title="New folder (F7)">New Folder</button>
       <button onclick={rename} title="Rename (F2)">Rename</button>
+      <button onclick={editInEditor} title="Edit in your preferred editor (F4). Files on servers upload again when you save.">Edit</button>
       <button onclick={compress} title="Compress into a ZIP archive">Compress</button>
       <button onclick={trash} title="Move to Trash (F8 / Delete). Shift+Delete deletes permanently.">Trash</button>
     </div>
@@ -341,6 +523,7 @@
     </div>
     <div class="group">
       <button onclick={() => active.refresh()} title="Refresh (Ctrl/⌘ R)">Refresh</button>
+      <button onclick={chooseEditor} title="Choose the editor used by Edit">Editor…</button>
       <button
         aria-pressed={active.showHidden}
         onclick={() => (active.showHidden = !active.showHidden)}
@@ -349,7 +532,7 @@
     </div>
     {#if notice}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-      <span class="notice" onclick={() => (notice = null)}>{notice}</span>
+      <span class="notice" title={notice} onclick={() => (notice = null)}>{notice}</span>
     {/if}
   </div>
 
@@ -361,6 +544,16 @@
       onopen={(loc) => active.open(loc)}
       onremovefavorite={async (loc) => (favorites = await api.removeFavorite(loc))}
       onreorder={async (from, to) => (favorites = await api.reorderFavorites(from, to))}
+      {connections}
+      onconnect={(c, path) => connectTo(c, path)}
+      onaddserver={() => (editing = null)}
+      oneditserver={(c) => (editing = c)}
+      ondisconnect={disconnect}
+      onremoveserver={removeServer}
+      onremoveremotefavorite={async (c, path) => {
+        await api.removeConnectionFavorite(c.id, path);
+        await loadConnections();
+      }}
     />
     <main class="panes">
       {#each groups as group, i}
@@ -377,14 +570,23 @@
     {/if}
   </div>
 
-  <OperationsPanel
-    {operations}
-    {activity}
-    oncancel={(id) => api.cancel(id)}
-    onretry={retry}
-    onclear={clearFinished}
-    onclearactivity={clearActivity}
+  <div class="bottom">
+    <EditSessions
+    sessions={editSessions}
+    onstop={stopEditing}
+    onupload={(id) => api.uploadEditSession(id).catch((e) => (notice = errorMessage(e)))}
   />
+    <div class="ops">
+      <OperationsPanel
+        {operations}
+        {activity}
+        oncancel={(id) => api.cancel(id)}
+        onretry={retry}
+        onclear={clearFinished}
+        onclearactivity={clearActivity}
+      />
+    </div>
+  </div>
 </div>
 
 {#if dialog}
@@ -395,21 +597,37 @@
     input={d.input ?? null}
     confirmLabel={d.confirmLabel}
     danger={d.danger}
+    password={d.password}
+    checkbox={d.checkbox ?? null}
+    allowEmpty={d.allowEmpty}
     oncancel={() => (dialog = null)}
-    onconfirm={(v) => {
+    onconfirm={(v, checked) => {
       // Read the callback before clearing: `d` is derived from `dialog`.
       const confirm = d.onconfirm;
       dialog = null;
-      confirm(v);
+      confirm(v, checked);
     }}
   />
+{/if}
+
+{#if editing !== undefined}
+  <ConnectionDialog connection={editing} onsave={serverSaved} oncancel={() => (editing = undefined)} />
 {/if}
 
 <style>
   .app {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) 190px;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     height: 100vh;
+  }
+  .bottom {
+    display: flex;
+    flex-direction: column;
+  }
+  .ops {
+    height: 190px;
+    display: grid;
+    min-height: 0;
   }
   .toolbar {
     display: flex;
@@ -444,6 +662,11 @@
     color: var(--danger);
     font-size: 12px;
     cursor: pointer;
+    min-width: 120px;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .middle {
     display: grid;

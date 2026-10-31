@@ -19,6 +19,9 @@ dirs.workspace = true
 async_zip.workspace = true
 futures-lite.workspace = true
 chrono.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+opendal.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

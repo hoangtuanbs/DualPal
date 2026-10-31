@@ -17,6 +17,16 @@ pub enum Error {
     Unsupported(String),
     #[error("operation cancelled")]
     Cancelled,
+    #[error("could not connect: {0}")]
+    Connection(String),
+    #[error("sign-in failed: {0}")]
+    AuthFailed(String),
+    /// The server's host key is not in known_hosts yet; the user must confirm it.
+    #[error("unknown host {host}, key fingerprint {fingerprint}")]
+    UnknownHost { host: String, fingerprint: String },
+    /// The server's host key differs from the one in known_hosts.
+    #[error("the host key of {host} has changed (now {fingerprint}); this could be an attack")]
+    HostKeyChanged { host: String, fingerprint: String },
     #[error("I/O error on {path}: {source}")]
     Io {
         path: String,
@@ -49,6 +59,10 @@ impl Error {
             Error::Invalid(_) => "invalid",
             Error::Unsupported(_) => "unsupported",
             Error::Cancelled => "cancelled",
+            Error::Connection(_) => "connection",
+            Error::AuthFailed(_) => "authFailed",
+            Error::UnknownHost { .. } => "unknownHost",
+            Error::HostKeyChanged { .. } => "hostKeyChanged",
             Error::Io { .. } => "io",
         }
     }
@@ -59,9 +73,14 @@ impl Error {
 impl Serialize for Error {
     fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Error", 2)?;
+        let mut st = s.serialize_struct("Error", 3)?;
         st.serialize_field("kind", self.kind())?;
         st.serialize_field("message", &self.to_string())?;
+        if let Error::UnknownHost { fingerprint, .. } | Error::HostKeyChanged { fingerprint, .. } =
+            self
+        {
+            st.serialize_field("fingerprint", fingerprint)?;
+        }
         st.end()
     }
 }
