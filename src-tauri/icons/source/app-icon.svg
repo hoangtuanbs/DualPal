@@ -6,6 +6,9 @@
     <linearGradient id="r" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FF7A3D"/><stop offset="1" stop-color="#E8471C"/>
     </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
     <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
     <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
       <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.3"/>
@@ -14,7 +17,7 @@
   <g clip-path="url(#sq)">
     <rect x="100" y="100" width="412" height="824" fill="url(#l)"/>
     <rect x="512" y="100" width="412" height="824" fill="url(#r)"/>
-    <rect x="100" y="100" width="824" height="412" fill="#fff" fill-opacity="0.08"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#sheen)"/>
     <rect x="504" y="100" width="16" height="824" fill="#fff" fill-opacity="0.9"/>
   </g>
   <g fill="none" stroke="#fff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" filter="url(#sh)">
