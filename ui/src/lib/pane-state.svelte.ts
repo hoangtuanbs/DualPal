@@ -1,5 +1,6 @@
 import { SvelteSet } from "svelte/reactivity";
 import { api, errorMessage, type Entry, type Location } from "./api";
+import { fsNames } from "./fs-names.svelte";
 
 export type SortKey = "name" | "size" | "modified";
 export type ViewMode = "list" | "icons";
@@ -83,7 +84,8 @@ export class PaneState {
   /** A short name for tab titles. */
   get title(): string {
     const path = this.location?.path ?? "";
-    return path.split(/[\\/]/).filter(Boolean).pop() ?? path ?? "";
+    const last = path.split(/[\\/]/).filter(Boolean).pop();
+    return last ?? (this.location && fsNames[this.location.fs]) ?? path;
   }
 
   /** Mark (or unmark) every visible entry whose name matches. */
@@ -144,12 +146,13 @@ export class PaneState {
     return this.future.length > 0;
   }
 
-  /** Open a folder in place, or a file with its default application. */
+  /** Open a folder in place, or a file with its default application.
+   *  Remote files are downloaded and uploaded again when the app saves them. */
   async activate(entry: Entry) {
     if (!this.location) return;
     const loc = { fs: this.location.fs, path: entry.path };
     if (entry.kind === "dir" && !entry.name.toLowerCase().endsWith(".app")) await this.open(loc);
-    else await api.openPath(loc).catch((e) => (this.error = errorMessage(e)));
+    else await api.openFile(loc).catch((e) => (this.error = errorMessage(e)));
   }
 
   /** A new tab state at the same place with the same view settings. */

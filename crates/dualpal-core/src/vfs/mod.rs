@@ -6,9 +6,14 @@
 //! operation queue and (later) the sync engine can treat all of them alike.
 
 mod local;
+pub mod posix;
+mod s3;
+mod sftp;
 mod text;
 
 pub use local::LocalFs;
+pub use s3::{S3Fs, S3Params};
+pub use sftp::{parse_ssh_config, ssh_config_hosts, SftpFs, SftpParams, SshConfigHost};
 pub use text::{read_text, write_text, TextFile};
 
 use std::collections::HashMap;

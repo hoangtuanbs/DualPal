@@ -1,18 +1,23 @@
 //! Platform-independent core of Dual Pal.
 //!
-//! * [`vfs`] — a virtual file system abstraction. The local disk is the first
-//!   backend; SFTP and S3 plug in behind the same [`vfs::FileSystem`] trait.
+//! * [`vfs`] — a virtual file system abstraction. The local disk, SFTP
+//!   servers and S3 buckets all sit behind the same [`vfs::FileSystem`] trait.
 //! * [`ops`] — a background operation queue (copy, move, delete, rename,
 //!   create folder) that reports live progress and supports cancellation.
 //! * [`activity`] — a persistent log of finished operations.
+//! * [`connections`] — saved SFTP and S3 connections with their favorites.
+//! * [`remote_edit`] — edit remote files in a local app, uploading on save.
 //!
 //! Nothing in this crate depends on Tauri, so it can be tested on any OS and
 //! reused by other front ends (CLI, tests, a future sync engine).
 
 pub mod activity;
+pub mod connections;
 pub mod error;
 pub mod ops;
 pub mod places;
+pub mod remote_edit;
+pub mod settings;
 pub mod vfs;
 
 pub use activity::{ActivityLog, ActivityRecord};

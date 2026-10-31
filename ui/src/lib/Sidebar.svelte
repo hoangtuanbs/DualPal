@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Favorite, Location, Volume } from "./api";
+  import type { ConnectionView, Favorite, Location, Volume } from "./api";
   import { formatBytes } from "./format";
 
   let {
@@ -9,6 +9,13 @@
     onopen,
     onremovefavorite,
     onreorder,
+    connections,
+    onconnect,
+    onaddserver,
+    oneditserver,
+    ondisconnect,
+    onremoveserver,
+    onremoveremotefavorite,
   }: {
     volumes: Volume[];
     favorites: Favorite[];
@@ -17,7 +24,27 @@
     onopen: (location: Location) => void;
     onremovefavorite: (location: Location) => void;
     onreorder: (from: number, to: number) => void;
+    connections: ConnectionView[];
+    /** Connect if needed and open `path` (or the start folder). */
+    onconnect: (c: ConnectionView, path?: string) => void;
+    onaddserver: () => void;
+    oneditserver: (c: ConnectionView) => void;
+    ondisconnect: (c: ConnectionView) => void;
+    onremoveserver: (c: ConnectionView) => void;
+    onremoveremotefavorite: (c: ConnectionView, path: string) => void;
   } = $props();
+
+  /** Connections whose favorites are folded away. */
+  let collapsed = $state<Record<string, boolean>>({});
+
+  function serverIcon(c: ConnectionView) {
+    return c.endpoint.type === "s3" ? "🪣" : "🖧";
+  }
+
+  function serverTitle(c: ConnectionView) {
+    const e = c.endpoint;
+    return e.type === "sftp" ? `${e.user}@${e.host}${e.port !== 22 ? `:${e.port}` : ""}` : `s3://${e.bucket}`;
+  }
 
   const ICONS: Record<string, string> = {
     home: "🏠",
@@ -90,6 +117,94 @@
   {#if favorites.length === 0}
     <p class="hint">Add folders with ★ in the toolbar.</p>
   {/if}
+
+  <h3 class="with-action">
+    Servers
+    <button class="add" title="Add an SFTP or S3 server" aria-label="Add server" onclick={onaddserver}>+</button>
+  </h3>
+  {#each connections as c (c.id)}
+    <div
+      class="item"
+      class:current={current?.fs === c.fsId}
+      role="button"
+      tabindex="0"
+      title={serverTitle(c)}
+      onclick={() => onconnect(c)}
+      onkeydown={(e) => e.key === "Enter" && onconnect(c)}
+    >
+      {#if c.favorites.length > 0}
+        <button
+          class="disclose"
+          aria-label={collapsed[c.id] ? "Show favorites" : "Hide favorites"}
+          aria-expanded={!collapsed[c.id]}
+          onclick={(e) => {
+            e.stopPropagation();
+            collapsed[c.id] = !collapsed[c.id];
+          }}>{collapsed[c.id] ? "▸" : "▾"}</button
+        >
+      {/if}
+      <span class="icon" aria-hidden="true">{serverIcon(c)}</span>
+      <span class="name">{c.name}</span>
+      {#if c.connected}<span class="dot" title="Connected" aria-label="Connected"></span>{/if}
+      <span class="actions">
+        <button
+          title="Edit server"
+          aria-label="Edit {c.name}"
+          onclick={(e) => {
+            e.stopPropagation();
+            oneditserver(c);
+          }}>✎</button
+        >
+        {#if c.connected}
+          <button
+            title="Disconnect"
+            aria-label="Disconnect {c.name}"
+            onclick={(e) => {
+              e.stopPropagation();
+              ondisconnect(c);
+            }}>⏏</button
+          >
+        {:else}
+          <button
+            title="Remove server"
+            aria-label="Remove {c.name}"
+            onclick={(e) => {
+              e.stopPropagation();
+              onremoveserver(c);
+            }}>×</button
+          >
+        {/if}
+      </span>
+    </div>
+    {#if !collapsed[c.id]}
+      {#each c.favorites as f (f.path)}
+        <div
+          class="item nested"
+          class:current={current?.fs === c.fsId && current.path === f.path}
+          role="button"
+          tabindex="0"
+          title="{serverTitle(c)}:{f.path}"
+          onclick={() => onconnect(c, f.path)}
+          onkeydown={(e) => e.key === "Enter" && onconnect(c, f.path)}
+        >
+          <span class="icon" aria-hidden="true">📁</span>
+          <span class="name">{f.name}</span>
+          <button
+            class="remove"
+            title="Remove from this server's favorites"
+            aria-label="Remove {f.name}"
+            onclick={(e) => {
+              e.stopPropagation();
+              onremoveremotefavorite(c, f.path);
+            }}>×</button
+          >
+        </div>
+      {/each}
+    {/if}
+  {/each}
+  {#if connections.length === 0}
+    <p class="hint">Connect to SFTP servers and S3 buckets with +.</p>
+  {/if}
 </aside>
 
 <style>
@@ -157,6 +272,58 @@
   }
   .item:hover .remove {
     visibility: visible;
+  }
+  .with-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .add {
+    font-size: 15px;
+    line-height: 1;
+    padding: 0 4px;
+    color: var(--muted);
+    border-radius: 4px;
+  }
+  .add:hover {
+    background: var(--control);
+    color: var(--text);
+  }
+  .nested {
+    padding-left: 28px;
+  }
+  .disclose {
+    width: 12px;
+    margin-left: -10px;
+    margin-right: -6px;
+    padding: 0;
+    font-size: 9px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--success);
+    flex-shrink: 0;
+  }
+  .actions {
+    display: none;
+    gap: 2px;
+  }
+  .item:hover .actions {
+    display: flex;
+  }
+  .actions button {
+    color: var(--muted);
+    padding: 0 3px;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .actions button:hover,
+  .remove:hover {
+    color: var(--text);
   }
   .hint {
     margin: 4px 8px;

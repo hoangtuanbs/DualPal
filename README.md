@@ -44,6 +44,7 @@ npm run check            # UI type-check
 | Space / Insert | Mark item |
 | Ctrl/⌘ A | Mark all |
 | F2 | Rename |
+| F4 | Edit in your preferred editor (files on servers upload again when saved) |
 | F5 / F6 | Copy / move to the other pane |
 | F7 | New folder |
 | F8 / Delete | Move to Trash |
@@ -57,11 +58,28 @@ npm run check            # UI type-check
 | Ctrl/⌘ R | Refresh |
 | Ctrl/⌘ Shift . | Show hidden files |
 
+## Servers (SFTP and S3)
+
+Add servers with **+** next to *Servers* in the sidebar.
+
+- **SFTP / SSH** signs in with a password, a private key file (with or without a passphrase), or the running SSH agent plus your default keys in `~/.ssh`. Hosts from `~/.ssh/config` can be picked in the dialog. Host keys are checked against `~/.ssh/known_hosts` like the `ssh` command; a new server asks you to confirm its key fingerprint first, and a changed key is refused.
+- **S3** works with Amazon S3 and S3-compatible services (MinIO, Cloudflare R2, Wasabi, Backblaze B2…). Give the bucket, region, access key and, for non-Amazon services, the endpoint URL; most self-hosted services also need *path-style addresses*.
+- Passwords, passphrases and secret keys are stored in the macOS Keychain or the Windows Credential Manager, never in Dual Pal's own files.
+- Press ★ while browsing a server to add that folder to the server's own favorites, shown under it in the sidebar.
+- Copy and move work between any two panes: local ↔ server, server ↔ server.
+- **Edit** (F4) or double-click opens a server file in an app; each save is uploaded back. Set the app with **Editor…** in the toolbar. The *Editing* bar shows the files being watched.
+
+The SFTP backend has an integration test that needs a real SSH server:
+
+```sh
+DUALPAL_TEST_SFTP=user@127.0.0.1:2222 DUALPAL_TEST_SFTP_KEY=~/.ssh/test_key cargo test -p dualpal-core --test remote
+```
+
 ## Roadmap
 
 1. **Foundation** — Tauri app, VFS layer, operation queue, activity log. ✅
-2. **Dual-pane browser** — tabs, list/icon views, sidebar (devices, favorites), select by pattern or tag, compress, preview panel (audio/video, images, PDF, quick text edit), Move to Trash.
-3. **Remote connections** — SFTP, then S3, each with nested favorites; edit remote files in your preferred editor with automatic upload on save.
+2. **Dual-pane browser** — tabs, list/icon views, sidebar (devices, favorites), select by pattern or tag, compress, preview panel (audio/video, images, PDF, quick text edit), Move to Trash. ✅
+3. **Remote connections** — SFTP over SSH and S3, each with nested favorites; edit remote files in your preferred editor with automatic upload on save. ✅
 4. **Compare & power tools** — folder compare and one/two-way sync (saved as favorites), synchronized browsing, external file compare tools, multi-rename presets, command palette.
 
 ## Test builds

@@ -7,6 +7,8 @@
     input = null,
     confirmLabel = "OK",
     danger = false,
+    password = false,
+    checkbox = null,
     onconfirm,
     oncancel,
   }: {
@@ -16,12 +18,17 @@
     input?: string | null;
     confirmLabel?: string;
     danger?: boolean;
-    onconfirm: (value: string) => void;
+    /** Hide the typed text. */
+    password?: boolean;
+    /** Label of an optional checkbox, e.g. "Remember password". */
+    checkbox?: string | null;
+    onconfirm: (value: string, checked: boolean) => void;
     oncancel: () => void;
   } = $props();
 
   // svelte-ignore state_referenced_locally
   let value = $state(input ?? "");
+  let checked = $state(true);
   let field: HTMLInputElement | undefined = $state();
   let okButton: HTMLButtonElement | undefined = $state();
 
@@ -34,7 +41,7 @@
       if (f) {
         f.focus();
         // Select the name without its extension, like Finder and Explorer.
-        const dot = value.lastIndexOf(".");
+        const dot = password ? -1 : value.lastIndexOf(".");
         f.setSelectionRange(0, dot > 0 ? dot : value.length);
       } else {
         ok?.focus();
@@ -45,7 +52,7 @@
   function submit(e: SubmitEvent) {
     e.preventDefault();
     if (input !== null && !value.trim()) return;
-    onconfirm(value.trim());
+    onconfirm(password ? value : value.trim(), checked);
   }
 
   function keydown(e: KeyboardEvent) {
@@ -63,7 +70,10 @@
     <h2>{title}</h2>
     {#if message}<p>{message}</p>{/if}
     {#if input !== null}
-      <input bind:this={field} bind:value spellcheck="false" autocomplete="off" />
+      <input bind:this={field} bind:value type={password ? "password" : "text"} spellcheck="false" autocomplete="off" />
+    {/if}
+    {#if checkbox}
+      <label class="check"><input type="checkbox" bind:checked /> {checkbox}</label>
     {/if}
     <div class="buttons">
       <button type="button" class="secondary" onclick={oncancel}>Cancel</button>
@@ -109,6 +119,16 @@
     color: var(--text);
     font: inherit;
     margin-bottom: 14px;
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -6px 0 14px;
+  }
+  .check input {
+    width: auto;
+    margin: 0;
   }
   .buttons {
     display: flex;

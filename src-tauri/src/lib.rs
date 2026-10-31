@@ -4,10 +4,16 @@
 //! to the UI as `operation-updated` events.
 
 mod commands;
+mod remote;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
+use dualpal_core::connections::Connections;
 use dualpal_core::places::Favorites;
+use dualpal_core::remote_edit::RemoteEditor;
+use dualpal_core::settings::SettingsStore;
 use dualpal_core::{ActivityLog, OperationQueue, Registry};
 use tauri::{Emitter, Manager};
 
@@ -20,6 +26,13 @@ pub struct AppState {
     pub registry: Arc<Registry>,
     pub queue: OperationQueue,
     pub favorites: Favorites,
+    pub connections: Connections,
+    pub settings: SettingsStore,
+    pub editor: RemoteEditor,
+    /// Folder each live connection opened in, by file system id.
+    pub start_paths: Mutex<HashMap<String, String>>,
+    /// Downloaded copies of remote files for the preview panel.
+    pub preview_dir: PathBuf,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,6 +43,16 @@ pub fn run() {
             let registry = Arc::new(Registry::with_local());
             let data_dir = app.path().app_data_dir()?;
             let favorites = Favorites::open(data_dir.join("favorites.json"));
+            let connections =
+                Connections::open(data_dir.join("connections.json"), remote::secrets());
+            let settings = SettingsStore::open(data_dir.join("settings.json"));
+            let cache_dir = app.path().app_cache_dir()?;
+            let preview_dir = cache_dir.join("preview");
+            // Previews are only useful for one run of the app.
+            let _ = std::fs::remove_dir_all(&preview_dir);
+            let edits_dir = cache_dir.join("edits");
+            let _ = std::fs::remove_dir_all(&edits_dir);
+            let editor = RemoteEditor::new(registry.clone(), edits_dir);
             let log_path = data_dir.join("activity.jsonl");
             let activity = match ActivityLog::open(&log_path, ACTIVITY_CAPACITY) {
                 Ok(log) => log,
@@ -60,10 +83,30 @@ pub fn run() {
                 }
             });
 
+            let mut edits = editor.subscribe();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    match edits.recv().await {
+                        Ok(s) => {
+                            let _ = handle.emit("edit-session-updated", s);
+                        }
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break,
+                    }
+                }
+            });
+
             app.manage(AppState {
                 registry,
                 queue,
                 favorites,
+                connections,
+                settings,
+                editor,
+                start_paths: Mutex::new(HashMap::new()),
+                preview_dir,
             });
             Ok(())
         })
@@ -88,6 +131,21 @@ pub fn run() {
             commands::stat,
             commands::read_text,
             commands::write_text,
+            remote::connections,
+            remote::save_connection,
+            remote::remove_connection,
+            remote::reorder_connections,
+            remote::connect,
+            remote::disconnect,
+            remote::add_connection_favorite,
+            remote::remove_connection_favorite,
+            remote::ssh_config_hosts,
+            remote::open_file,
+            remote::edit_sessions,
+            remote::stop_edit_session,
+            remote::preview_path,
+            remote::settings,
+            remote::save_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dual Pal");
