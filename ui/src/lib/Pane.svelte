@@ -147,7 +147,7 @@
           role="option"
           aria-selected={pane.selected.has(entry.path)}
           tabindex="-1"
-          title="{entry.name} — modified {formatDate(entry.modifiedMs)}"
+          title={entry.modifiedMs != null ? `${entry.name} — modified ${formatDate(entry.modifiedMs)}` : entry.name}
           onclick={(e) => click(e, entry, i)}
           ondblclick={() => pane.activate(entry)}
         >

@@ -69,10 +69,12 @@ Add servers with **+** next to *Servers* in the sidebar.
 - Copy and move work between any two panes: local ↔ server, server ↔ server.
 - **Edit** (F4) or double-click opens a server file in an app; each save is uploaded back. Set the app with **Editor…** in the toolbar. The *Editing* bar shows the files being watched.
 
-The SFTP backend has an integration test that needs a real SSH server:
+Integration tests against real servers (an SSH server, and MinIO or the moto emulator for S3) run when these are set; Linux CI starts both:
 
 ```sh
-DUALPAL_TEST_SFTP=user@127.0.0.1:2222 DUALPAL_TEST_SFTP_KEY=~/.ssh/test_key cargo test -p dualpal-core --test remote
+DUALPAL_TEST_SFTP=user@127.0.0.1:2222 DUALPAL_TEST_SFTP_KEY=~/.ssh/test_key \
+  DUALPAL_TEST_S3="http://127.0.0.1:9000|bucket|access-key|secret-key" \
+  cargo test -p dualpal-core --test remote
 ```
 
 ## Roadmap

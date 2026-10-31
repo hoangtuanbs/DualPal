@@ -334,6 +334,13 @@ async fn sftp_backend_against_a_real_server() {
         Err(Error::AuthFailed(_))
     ));
 
+    // With DUALPAL_TEST_SFTP_PASSWORD, the right password signs in too.
+    if let Ok(good) = std::env::var("DUALPAL_TEST_SFTP_PASSWORD") {
+        connections::connect(&pw, Some(good), opts(None))
+            .await
+            .unwrap();
+    }
+
     let base = c.fs.join(
         &c.start_path,
         &format!("dualpal-test-{}", uuid::Uuid::new_v4()),
@@ -405,4 +412,80 @@ async fn remote_edits_upload_on_save() {
     assert!(editor.stop(s.id));
     assert!(!Path::new(&s.local_path).exists());
     assert!(editor.list().is_empty());
+}
+
+/// A real S3-compatible server (MinIO, moto…):
+/// `DUALPAL_TEST_S3=http://127.0.0.1:9000|bucket|access-key|secret-key`.
+/// The bucket must exist; the test works in a fresh folder inside it.
+#[tokio::test]
+async fn s3_backend_against_a_real_server() {
+    let Ok(spec) = std::env::var("DUALPAL_TEST_S3") else {
+        eprintln!("skipped: DUALPAL_TEST_S3 is not set");
+        return;
+    };
+    let parts: Vec<&str> = spec.split('|').collect();
+    let [endpoint, bucket, key, secret] = parts[..] else {
+        panic!("DUALPAL_TEST_S3 must be endpoint|bucket|key|secret");
+    };
+    let conn = Connection {
+        id: "s3t".into(),
+        name: "Test bucket".into(),
+        endpoint: Endpoint::S3 {
+            bucket: bucket.into(),
+            region: "us-east-1".into(),
+            endpoint: Some(endpoint.into()),
+            access_key_id: key.into(),
+            path_style: true,
+        },
+        initial_path: None,
+        favorites: vec![],
+    };
+
+    // A wrong secret is reported as a sign-in failure (emulators such as
+    // moto accept any key, so only check servers that refuse it).
+    match connections::connect(
+        &conn,
+        Some("wrong-secret".into()),
+        ConnectOptions::default(),
+    )
+    .await
+    {
+        Err(e) => assert!(matches!(e, Error::AuthFailed(_)), "{e}"),
+        Ok(_) => eprintln!("note: this server accepts any secret key"),
+    }
+
+    let c = connections::connect(&conn, Some(secret.into()), ConnectOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(c.start_path, "/");
+    let base = format!("/dualpal-test-{}", uuid::Uuid::new_v4());
+    c.fs.create_dir(&base).await.unwrap();
+    // A large file goes up as a multipart upload (parts of 8 MiB).
+    let big = c.fs.join(&base, "big.bin");
+    {
+        let mut w = c.fs.open_write(&big).await.unwrap();
+        let chunk = vec![42u8; 1 << 20];
+        for _ in 0..20 {
+            w.write_all(&chunk).await.unwrap();
+        }
+        w.shutdown().await.unwrap();
+    }
+    assert_eq!(c.fs.stat(&big).await.unwrap().size, 20 << 20);
+    let mut r = c.fs.open_read(&big).await.unwrap();
+    let mut n = 0usize;
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let k = r.read(&mut buf).await.unwrap();
+        if k == 0 {
+            break;
+        }
+        assert!(buf[..k].iter().all(|b| *b == 42));
+        n += k;
+    }
+    assert_eq!(n, 20 << 20);
+    c.fs.remove_file(&big).await.unwrap();
+
+    exercise(c.fs.clone(), &base).await;
+    c.fs.remove_dir(&base).await.unwrap();
+    assert!(matches!(c.fs.stat(&base).await, Err(Error::NotFound(_))));
 }
