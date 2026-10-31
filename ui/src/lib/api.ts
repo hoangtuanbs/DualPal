@@ -28,6 +28,7 @@ export type ConflictPolicy = "fail" | "skip" | "overwrite";
 export type Operation =
   | { type: "copy"; sources: Location[]; destination: Location; conflict?: ConflictPolicy }
   | { type: "move"; sources: Location[]; destination: Location; conflict?: ConflictPolicy }
+  | { type: "trash"; targets: Location[] }
   | { type: "delete"; targets: Location[] }
   | { type: "createDir"; location: Location }
   | { type: "rename"; location: Location; newName: string };
@@ -78,6 +79,20 @@ export interface FileSystemInfo {
   name: string;
 }
 
+export interface Volume {
+  name: string;
+  location: Location;
+  totalBytes: number;
+  availableBytes: number;
+  removable: boolean;
+}
+
+export interface Favorite {
+  name: string;
+  location: Location;
+  icon: string;
+}
+
 /** Errors from commands arrive as `{ kind, message }`. */
 export function errorMessage(e: unknown): string {
   if (e && typeof e === "object" && "message" in e) return String((e as ErrorInfo).message);
@@ -95,6 +110,13 @@ export const api = {
   clearFinished: () => invoke<void>("clear_finished_operations"),
   activity: () => invoke<ActivityRecord[]>("activity"),
   clearActivity: () => invoke<void>("clear_activity"),
+  volumes: () => invoke<Volume[]>("volumes"),
+  availableSpace: (location: Location) => invoke<number | null>("available_space", { location }),
+  favorites: () => invoke<Favorite[]>("favorites"),
+  addFavorite: (favorite: Favorite) => invoke<Favorite[]>("add_favorite", { favorite }),
+  removeFavorite: (location: Location) => invoke<Favorite[]>("remove_favorite", { location }),
+  reorderFavorites: (from: number, to: number) => invoke<Favorite[]>("reorder_favorites", { from, to }),
+  openPath: (location: Location) => invoke<void>("open_path", { location }),
   onOperationUpdated: (cb: (info: OperationInfo) => void): Promise<UnlistenFn> =>
     listen<OperationInfo>("operation-updated", (e) => cb(e.payload)),
 };

@@ -53,7 +53,9 @@ pub enum Operation {
         #[serde(default)]
         conflict: ConflictPolicy,
     },
-    /// Delete files or folders (recursively).
+    /// Move files or folders to the system Trash / Recycle Bin.
+    Trash { targets: Vec<Location> },
+    /// Delete files or folders permanently (recursively).
     Delete { targets: Vec<Location> },
     /// Create a new folder at `location`.
     CreateDir { location: Location },
@@ -69,6 +71,7 @@ impl Operation {
         match self {
             Operation::Copy { .. } => "copy",
             Operation::Move { .. } => "move",
+            Operation::Trash { .. } => "trash",
             Operation::Delete { .. } => "delete",
             Operation::CreateDir { .. } => "createDir",
             Operation::Rename { .. } => "rename",
@@ -99,6 +102,7 @@ impl Operation {
             } => {
                 format!("Move {} to {}", items(sources.len()), destination.path)
             }
+            Operation::Trash { targets } => format!("Move {} to Trash", items(targets.len())),
             Operation::Delete { targets } => format!("Delete {}", items(targets.len())),
             Operation::CreateDir { location } => format!("New folder {}", location.path),
             Operation::Rename { location, new_name } => {

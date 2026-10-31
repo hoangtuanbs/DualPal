@@ -67,7 +67,7 @@
   <div class="body">
     {#if tab === "operations"}
       {#if operations.length === 0}
-        <p class="empty">No operations yet. Copy (F5), move (F6) or delete (F8) files to see their progress here.</p>
+        <p class="empty">No operations yet. Copy (F5), move (F6) or trash (F8) files to see their progress here.</p>
       {/if}
       {#each [...operations].reverse() as op (op.id)}
         <div class="op {op.status}">

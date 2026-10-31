@@ -60,6 +60,7 @@ pub(super) async fn run(
             destination,
             conflict,
         } => job.transfer(sources, destination, conflict, true).await,
+        Operation::Trash { targets } => job.trash(targets).await,
         Operation::Delete { targets } => job.delete(targets).await,
         Operation::CreateDir { location } => job.create_dir(location).await,
         Operation::Rename { location, new_name } => job.rename(location, new_name).await,
@@ -303,6 +304,20 @@ impl Job {
         }
         w.flush().await.map_err(|e| Error::io(dst, e))?;
         w.shutdown().await.map_err(|e| Error::io(dst, e))
+    }
+
+    // ---- trash -------------------------------------------------------------
+
+    async fn trash(&mut self, targets: Vec<Location>) -> Result<()> {
+        self.progress.files_total = targets.len() as u64;
+        self.emit(true);
+        for t in &targets {
+            self.check()?;
+            self.set_current(&t.path);
+            self.fs(&t.fs)?.trash(&t.path).await?;
+            self.progress.files_done += 1;
+        }
+        Ok(())
     }
 
     // ---- delete ------------------------------------------------------------

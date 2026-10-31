@@ -5,6 +5,8 @@
     errorMessage,
     type ActivityRecord,
     type ConflictPolicy,
+    type Favorite,
+    type Volume,
     type Location,
     type Operation,
     type OperationInfo,
@@ -12,12 +14,19 @@
   import Dialog from "./lib/Dialog.svelte";
   import OperationsPanel from "./lib/OperationsPanel.svelte";
   import Pane from "./lib/Pane.svelte";
-  import { PaneState } from "./lib/pane-state.svelte";
+  import Sidebar from "./lib/Sidebar.svelte";
+  import { patternMatcher } from "./lib/fileTypes";
+  import { PaneGroup, PaneState } from "./lib/pane-state.svelte";
 
-  const panes = [new PaneState(), new PaneState()];
+  const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
-  const active = $derived(panes[activeIndex]);
-  const other = $derived(panes[1 - activeIndex]);
+  const active = $derived(groups[activeIndex].current);
+  const other = $derived(groups[1 - activeIndex].current);
+  /** Every open tab, for refreshing after operations. */
+  const allPanes = () => groups.flatMap((g) => g.tabs);
+
+  let volumes = $state<Volume[]>([]);
+  let favorites = $state<Favorite[]>([]);
 
   let operations = $state<OperationInfo[]>([]);
   let activity = $state<ActivityRecord[]>([]);
@@ -40,11 +49,18 @@
     (async () => {
       unlisten = await api.onOperationUpdated(onOperationUpdated);
       const home = await api.homeLocation();
-      await Promise.all(panes.map((p) => p.open(home)));
+      await Promise.all(groups.map((g) => g.current.open(home)));
       operations = await api.operations();
       activity = await api.activity();
+      favorites = await api.favorites();
+      volumes = await api.volumes();
     })().catch((e) => (notice = errorMessage(e)));
-    return () => unlisten?.();
+    // Pick up mounted/unmounted drives and changing free space.
+    const timer = setInterval(() => api.volumes().then((v) => (volumes = v)), 15000);
+    return () => {
+      unlisten?.();
+      clearInterval(timer);
+    };
   });
 
   function onOperationUpdated(info: OperationInfo) {
@@ -52,7 +68,7 @@
     if (i >= 0) operations[i] = info;
     else operations.push(info);
     if (info.status === "completed" || info.status === "failed" || info.status === "cancelled") {
-      panes.forEach((p) => p.refresh());
+      allPanes().forEach((p) => p.refresh());
       api.activity().then((a) => (activity = a));
     }
   }
@@ -80,6 +96,11 @@
     const sources = locationsOf(active);
     if (!sources.length || !other.location) return;
     enqueue({ type, sources, destination: other.location, conflict: "fail" });
+  }
+
+  function trash() {
+    const targets = locationsOf(active);
+    if (targets.length) enqueue({ type: "trash", targets });
   }
 
   function remove() {
@@ -128,6 +149,32 @@
     return dir.path.endsWith(sep) ? dir.path + name : dir.path + sep + name;
   }
 
+  function selectByPattern(select: boolean) {
+    dialog = {
+      title: select ? "Select items" : "Deselect items",
+      message: "Names to match, e.g. *.jpg; *.png or report*. Separate several with ; or ,",
+      input: select ? "*.*" : "*",
+      confirmLabel: select ? "Select" : "Deselect",
+      onconfirm: (pattern) => active.selectWhere(patternMatcher(pattern), select),
+    };
+  }
+
+  async function toggleFavorite() {
+    const loc = active.location;
+    if (!loc) return;
+    try {
+      favorites = isFavorite
+        ? await api.removeFavorite(loc)
+        : await api.addFavorite({ name: active.title || loc.path, location: loc, icon: "folder" });
+    } catch (e) {
+      notice = errorMessage(e);
+    }
+  }
+
+  const isFavorite = $derived(
+    !!active.location && favorites.some((f) => f.location.fs === active.location!.fs && f.location.path === active.location!.path),
+  );
+
   function retry(id: string, conflict: ConflictPolicy) {
     const op = requests.get(id);
     if (op && (op.type === "copy" || op.type === "move")) enqueue({ ...op, conflict });
@@ -147,16 +194,48 @@
     if (dialog) return;
     const mod = e.metaKey || e.ctrlKey;
     const handled = () => e.preventDefault();
+    const group = groups[activeIndex];
+    const icons = active.view === "icons";
+    if (e.ctrlKey && e.key === "Tab") {
+      group.cycle(e.shiftKey ? -1 : 1);
+      return handled();
+    }
+    if (mod && !e.shiftKey && e.key.toLowerCase() === "t") {
+      group.newTab();
+      return handled();
+    }
+    if (mod && !e.shiftKey && e.key.toLowerCase() === "w") {
+      group.closeTab();
+      return handled();
+    }
+    if (mod && (e.key === "1" || e.key === "2")) {
+      active.view = e.key === "1" ? "list" : "icons";
+      return handled();
+    }
     switch (e.key) {
       case "Tab":
         activeIndex = 1 - activeIndex;
         return handled();
       case "ArrowDown":
-        active.moveCursor(1);
+        active.moveCursor(icons ? active.columns : 1);
         return handled();
       case "ArrowUp":
         if (mod) active.up();
-        else active.moveCursor(-1);
+        else active.moveCursor(icons ? -active.columns : -1);
+        return handled();
+      case "ArrowLeft":
+        if (!icons) return;
+        active.moveCursor(-1);
+        return handled();
+      case "ArrowRight":
+        if (!icons) return;
+        active.moveCursor(1);
+        return handled();
+      case "+":
+        selectByPattern(true);
+        return handled();
+      case "-":
+        selectByPattern(false);
         return handled();
       case "PageDown":
         active.moveCursor(20);
@@ -174,7 +253,7 @@
         if (active.current) active.activate(active.current);
         return handled();
       case "Backspace":
-        if (mod) remove();
+        if (mod) (e.altKey ? remove() : trash());
         else active.up();
         return handled();
       case " ":
@@ -196,7 +275,8 @@
         return handled();
       case "F8":
       case "Delete":
-        remove();
+        if (e.shiftKey) remove();
+        else trash();
         return handled();
     }
     if (mod && e.key.toLowerCase() === "r") {
@@ -225,7 +305,16 @@
     <div class="group">
       <button onclick={newFolder} title="New folder (F7)">New Folder</button>
       <button onclick={rename} title="Rename (F2)">Rename</button>
-      <button onclick={remove} title="Delete (F8)">Delete</button>
+      <button onclick={trash} title="Move to Trash (F8 / Delete). Shift+Delete deletes permanently.">Trash</button>
+    </div>
+    <div class="group" role="group" aria-label="View">
+      <button aria-pressed={active.view === "list"} onclick={() => (active.view = "list")} title="List view (Ctrl/⌘ 1)">☰ List</button>
+      <button aria-pressed={active.view === "icons"} onclick={() => (active.view = "icons")} title="Icon view (Ctrl/⌘ 2)">▦ Icons</button>
+    </div>
+    <div class="group">
+      <button onclick={() => selectByPattern(true)} title="Select by name or extension (+). Deselect with −.">Select…</button>
+      <button aria-pressed={isFavorite} onclick={toggleFavorite} title={isFavorite ? "Remove folder from Favorites" : "Add folder to Favorites"}>★</button>
+      <button onclick={() => groups[activeIndex].newTab()} title="New tab (Ctrl/⌘ T)">+ Tab</button>
     </div>
     <div class="group">
       <button onclick={() => active.refresh()} title="Refresh (Ctrl/⌘ R)">Refresh</button>
@@ -241,11 +330,21 @@
     {/if}
   </div>
 
-  <main class="panes">
-    {#each panes as pane, i}
-      <Pane {pane} active={i === activeIndex} onfocus={() => (activeIndex = i)} />
-    {/each}
-  </main>
+  <div class="middle">
+    <Sidebar
+      {volumes}
+      {favorites}
+      current={active.location}
+      onopen={(loc) => active.open(loc)}
+      onremovefavorite={async (loc) => (favorites = await api.removeFavorite(loc))}
+      onreorder={async (from, to) => (favorites = await api.reorderFavorites(from, to))}
+    />
+    <main class="panes">
+      {#each groups as group, i}
+        <Pane {group} active={i === activeIndex} onfocus={() => (activeIndex = i)} />
+      {/each}
+    </main>
+  </div>
 
   <OperationsPanel
     {operations}
@@ -314,6 +413,11 @@
     color: var(--danger);
     font-size: 12px;
     cursor: pointer;
+  }
+  .middle {
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    min-height: 0;
   }
   .panes {
     display: grid;

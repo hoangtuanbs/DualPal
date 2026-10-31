@@ -39,14 +39,19 @@ npm run check            # UI type-check
 | --- | --- |
 | Tab | Switch pane |
 | ↑ ↓ / Page Up / Page Down / Home / End | Move cursor |
-| Enter | Open folder |
+| Enter | Open folder, or open file in its default app |
 | Backspace, Ctrl/⌘ ↑ | Enclosing folder |
 | Space / Insert | Mark item |
 | Ctrl/⌘ A | Mark all |
 | F2 | Rename |
 | F5 / F6 | Copy / move to the other pane |
 | F7 | New folder |
-| F8 / Delete | Delete |
+| F8 / Delete | Move to Trash |
+| Shift F8 / Shift Delete | Delete permanently (asks first) |
+| + / − | Select / deselect by name pattern (e.g. `*.jpg; *.png`) |
+| Ctrl/⌘ 1 / Ctrl/⌘ 2 | List / icon view |
+| Ctrl/⌘ T, Ctrl/⌘ W | New tab / close tab |
+| Ctrl Tab, Ctrl Shift Tab | Next / previous tab |
 | Ctrl/⌘ R | Refresh |
 | Ctrl/⌘ Shift . | Show hidden files |
 

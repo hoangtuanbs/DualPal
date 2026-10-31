@@ -12,6 +12,7 @@
 pub mod activity;
 pub mod error;
 pub mod ops;
+pub mod places;
 pub mod vfs;
 
 pub use activity::{ActivityLog, ActivityRecord};
