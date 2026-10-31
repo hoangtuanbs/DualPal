@@ -15,9 +15,16 @@
   });
 
   // Keep the cursor row in view when it moves via the keyboard.
+  // Adjusts only the list's own scrollTop: scrollIntoView misbehaves in
+  // WebKit (macOS) while the list is still being laid out.
   $effect(() => {
-    const row = listEl?.querySelector<HTMLElement>(`[data-index="${pane.cursor}"]`);
-    row?.scrollIntoView({ block: "nearest" });
+    const list = listEl;
+    const row = list?.querySelector<HTMLElement>(`[data-index="${pane.cursor}"]`);
+    if (!list || !row || list.clientHeight === 0) return;
+    const top = row.offsetTop; // .list is position: relative
+    const bottom = top + row.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
   });
 
   const crumbs = $derived.by(() => {
@@ -193,6 +200,7 @@
     text-align: right;
   }
   .list {
+    position: relative;
     flex: 1;
     overflow: auto;
     outline: none;
