@@ -2,6 +2,7 @@ import { SvelteSet } from "svelte/reactivity";
 import { api, errorMessage, type Entry, type Location } from "./api";
 
 export type SortKey = "name" | "size" | "modified";
+export type ViewMode = "list" | "icons";
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -18,6 +19,11 @@ export class PaneState {
   showHidden = $state(false);
   sortKey = $state<SortKey>("name");
   sortAsc = $state(true);
+  view = $state<ViewMode>("list");
+  /** Columns in the icon grid, reported by the view; used for ↑/↓. */
+  columns = $state(1);
+  /** Free bytes on this pane's volume, when known. */
+  freeBytes = $state<number | null>(null);
   private history = $state<Location[]>([]);
   private future = $state<Location[]>([]);
 
@@ -58,10 +64,34 @@ export class PaneState {
       this.error = null;
       const idx = opts.focusName ? this.visible.findIndex((e) => e.name === opts.focusName) : 0;
       this.cursor = Math.max(0, idx);
+      this.updateSpace();
     } catch (e) {
       this.error = errorMessage(e);
     } finally {
       this.loading = false;
+    }
+  }
+
+  private updateSpace() {
+    const loc = this.location;
+    if (!loc) return;
+    api.availableSpace(loc).then((n) => {
+      if (this.location === loc) this.freeBytes = n;
+    }, () => (this.freeBytes = null));
+  }
+
+  /** A short name for tab titles. */
+  get title(): string {
+    const path = this.location?.path ?? "";
+    return path.split(/[\\/]/).filter(Boolean).pop() ?? path ?? "";
+  }
+
+  /** Mark (or unmark) every visible entry whose name matches. */
+  selectWhere(match: (name: string) => boolean, select: boolean) {
+    for (const e of this.visible) {
+      if (!match(e.name)) continue;
+      if (select) this.selected.add(e.path);
+      else this.selected.delete(e.path);
     }
   }
 
@@ -81,6 +111,7 @@ export class PaneState {
     for (const e of this.entries) if (marked.has(e.path)) this.selected.add(e.path);
     const idx = keep ? this.visible.findIndex((e) => e.name === keep) : -1;
     this.cursor = idx >= 0 ? idx : Math.min(this.cursor, Math.max(0, this.visible.length - 1));
+    this.updateSpace();
   }
 
   async up() {
@@ -113,10 +144,23 @@ export class PaneState {
     return this.future.length > 0;
   }
 
+  /** Open a folder in place, or a file with its default application. */
   async activate(entry: Entry) {
-    if (entry.kind === "dir" && this.location) {
-      await this.open({ fs: this.location.fs, path: entry.path });
-    }
+    if (!this.location) return;
+    const loc = { fs: this.location.fs, path: entry.path };
+    if (entry.kind === "dir" && !entry.name.toLowerCase().endsWith(".app")) await this.open(loc);
+    else await api.openPath(loc).catch((e) => (this.error = errorMessage(e)));
+  }
+
+  /** A new tab state at the same place with the same view settings. */
+  clone(): PaneState {
+    const p = new PaneState();
+    p.view = this.view;
+    p.showHidden = this.showHidden;
+    p.sortKey = this.sortKey;
+    p.sortAsc = this.sortAsc;
+    if (this.location) p.open(this.location);
+    return p;
   }
 
   moveCursor(delta: number) {
@@ -136,5 +180,35 @@ export class PaneState {
       this.sortKey = key;
       this.sortAsc = true;
     }
+  }
+}
+
+/** The tabs of one side of the window. */
+export class PaneGroup {
+  tabs = $state<PaneState[]>([]);
+  index = $state(0);
+
+  constructor(first: PaneState) {
+    this.tabs = [first];
+  }
+
+  get current(): PaneState {
+    return this.tabs[Math.min(this.index, this.tabs.length - 1)];
+  }
+
+  newTab(state?: PaneState) {
+    this.tabs.push(state ?? this.current.clone());
+    this.index = this.tabs.length - 1;
+  }
+
+  closeTab(i = this.index) {
+    if (this.tabs.length <= 1) return;
+    this.tabs.splice(i, 1);
+    if (this.index >= this.tabs.length || this.index > i) this.index = Math.max(0, this.index - 1);
+  }
+
+  cycle(delta: number) {
+    const n = this.tabs.length;
+    this.index = (this.index + delta + n) % n;
   }
 }

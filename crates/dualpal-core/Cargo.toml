@@ -13,8 +13,12 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
+trash.workspace = true
+sysinfo.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 uuid.workspace = true
 serde_json.workspace = true
+dirs.workspace = true

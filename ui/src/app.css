@@ -4,6 +4,7 @@
   --chrome: #ececee;
   --pane-bg: #ffffff;
   --stripe: #f5f5f7;
+  --sidebar: #f4f4f6;
   --border: #d2d2d7;
   --control: #e3e3e6;
   --control-hover: #d8d8dc;
@@ -22,6 +23,7 @@
     --chrome: #2a2a2e;
     --pane-bg: #1e1e21;
     --stripe: #242428;
+    --sidebar: #232327;
     --border: #3a3a3f;
     --control: #3a3a3f;
     --control-hover: #47474d;

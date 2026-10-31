@@ -395,3 +395,29 @@ fn operation_json_shape() {
     .unwrap();
     assert_eq!(rename.kind(), "rename");
 }
+
+#[tokio::test]
+async fn moves_items_to_trash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("trash-me.txt");
+    write(&file, "bye");
+    let info = run(
+        &queue(),
+        Operation::Trash {
+            targets: vec![loc(&file)],
+        },
+    )
+    .await;
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert!(!file.exists());
+
+    let missing = run(
+        &queue(),
+        Operation::Trash {
+            targets: vec![loc(&tmp.path().join("nope"))],
+        },
+    )
+    .await;
+    assert_eq!(missing.status, OperationStatus::Failed);
+    assert_eq!(missing.error.unwrap().kind, "notFound");
+}

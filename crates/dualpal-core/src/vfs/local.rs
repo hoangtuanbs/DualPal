@@ -200,6 +200,21 @@ impl FileSystem for LocalFs {
         Ok(Box::new(f))
     }
 
+    async fn trash(&self, path: &str) -> Result<()> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || {
+            if std::fs::symlink_metadata(&path).is_err() {
+                return Err(Error::NotFound(path));
+            }
+            trash::delete(&path).map_err(|e| Error::Io {
+                path: path.clone(),
+                source: std::io::Error::other(e.to_string()),
+            })
+        })
+        .await
+        .map_err(|e| Error::Invalid(e.to_string()))?
+    }
+
     async fn set_modified(&self, path: &str, modified_ms: i64) -> Result<()> {
         let path = path.to_string();
         tokio::task::spawn_blocking(move || {

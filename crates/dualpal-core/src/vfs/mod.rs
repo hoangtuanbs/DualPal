@@ -108,6 +108,12 @@ pub trait FileSystem: Send + Sync {
     async fn open_read(&self, path: &str) -> Result<Reader>;
     /// Create or truncate a file for writing.
     async fn open_write(&self, path: &str) -> Result<Writer>;
+    /// Move an item to the system Trash / Recycle Bin.
+    async fn trash(&self, path: &str) -> Result<()> {
+        Err(Error::Unsupported(format!(
+            "this location has no Trash: {path}"
+        )))
+    }
     /// Set the modification time. Backends that cannot do this may ignore it.
     async fn set_modified(&self, _path: &str, _modified_ms: i64) -> Result<()> {
         Ok(())

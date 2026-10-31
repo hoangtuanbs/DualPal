@@ -7,6 +7,7 @@ mod commands;
 
 use std::sync::Arc;
 
+use dualpal_core::places::Favorites;
 use dualpal_core::{ActivityLog, OperationQueue, Registry};
 use tauri::{Emitter, Manager};
 
@@ -18,14 +19,18 @@ const MAX_CONCURRENT_OPS: usize = 2;
 pub struct AppState {
     pub registry: Arc<Registry>,
     pub queue: OperationQueue,
+    pub favorites: Favorites,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let registry = Arc::new(Registry::with_local());
-            let log_path = app.path().app_data_dir()?.join("activity.jsonl");
+            let data_dir = app.path().app_data_dir()?;
+            let favorites = Favorites::open(data_dir.join("favorites.json"));
+            let log_path = data_dir.join("activity.jsonl");
             let activity = match ActivityLog::open(&log_path, ACTIVITY_CAPACITY) {
                 Ok(log) => log,
                 Err(e) => {
@@ -55,7 +60,11 @@ pub fn run() {
                 }
             });
 
-            app.manage(AppState { registry, queue });
+            app.manage(AppState {
+                registry,
+                queue,
+                favorites,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -69,6 +78,13 @@ pub fn run() {
             commands::clear_finished_operations,
             commands::activity,
             commands::clear_activity,
+            commands::volumes,
+            commands::available_space,
+            commands::favorites,
+            commands::add_favorite,
+            commands::remove_favorite,
+            commands::reorder_favorites,
+            commands::open_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dual Pal");
