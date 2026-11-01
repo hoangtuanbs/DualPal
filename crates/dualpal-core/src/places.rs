@@ -16,6 +16,9 @@ pub struct Volume {
     pub total_bytes: u64,
     pub available_bytes: u64,
     pub removable: bool,
+    /// A WSL distribution, opened through `\\wsl.localhost\<name>\`.
+    #[serde(default)]
+    pub wsl: bool,
 }
 
 /// Mounted volumes the user cares about (system-internal mounts are hidden).
@@ -34,6 +37,7 @@ pub fn volumes() -> Vec<Volume> {
                 total_bytes: d.total_space(),
                 available_bytes: d.available_space(),
                 removable: d.is_removable(),
+                wsl: false,
             }
         })
         .collect();
@@ -41,7 +45,67 @@ pub fn volumes() -> Vec<Volume> {
         (a.location.path != "/", &a.location.path).cmp(&(b.location.path != "/", &b.location.path))
     });
     out.dedup_by(|a, b| a.location == b.location);
+    out.extend(wsl_distros());
     out
+}
+
+/// WSL distributions installed for this user (Windows only). Read from the
+/// registry so that listing them does not start their virtual machines.
+pub fn wsl_distros() -> Vec<Volume> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let output = std::process::Command::new("reg.exe")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss",
+                "/s",
+                "/v",
+                "DistributionName",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                wsl_volumes(&parse_wsl_names(&String::from_utf8_lossy(&o.stdout)))
+            }
+            _ => Vec::new(),
+        }
+    }
+    #[cfg(not(windows))]
+    Vec::new()
+}
+
+/// Distribution names from `reg query ... /v DistributionName` output, in
+/// order, without Docker Desktop's internal ones.
+pub fn parse_wsl_names(reg_output: &str) -> Vec<String> {
+    let mut names: Vec<String> = reg_output
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            (parts.next()? == "DistributionName" && parts.next()? == "REG_SZ")
+                .then(|| parts.collect::<Vec<_>>().join(" "))
+        })
+        .filter(|n| !n.is_empty() && !n.to_ascii_lowercase().starts_with("docker-desktop"))
+        .collect();
+    names.dedup();
+    names
+}
+
+/// Sidebar entries for WSL distributions, opening at the distribution's root.
+pub fn wsl_volumes(names: &[String]) -> Vec<Volume> {
+    names
+        .iter()
+        .map(|name| Volume {
+            name: name.clone(),
+            location: Location::new(LocalFs::ID, format!(r"\\wsl.localhost\{name}\")),
+            total_bytes: 0,
+            available_bytes: 0,
+            removable: false,
+            wsl: true,
+        })
+        .collect()
 }
 
 fn is_user_visible(mount: &Path) -> bool {
