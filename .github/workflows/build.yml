@@ -106,8 +106,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ls -l installers
-          gh release create "$GITHUB_REF_NAME" installers/* \
+          # Artifacts keep their bundle subfolders (msi/, nsis/, deb/...),
+          # so collect the installer files from every level.
+          mapfile -t files < <(find installers -type f)
+          printf '%s\n' "${files[@]}"
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Dual Pal ${GITHUB_REF_NAME#v}" \
             --generate-notes
