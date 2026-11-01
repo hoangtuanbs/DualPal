@@ -269,24 +269,26 @@ pub fn stop_edit_session(state: State<'_, AppState>, id: Uuid) -> bool {
 /// Largest remote file downloaded for the preview panel.
 const PREVIEW_LIMIT: u64 = 256 * 1024 * 1024;
 
-/// A local path for previewing a file: the file itself when it is local,
-/// otherwise a cached download (refreshed when the remote file changes).
-#[tauri::command]
-pub async fn preview_path(state: State<'_, AppState>, location: Location) -> CmdResult<String> {
+/// A local path for a file: the file itself when it is local, otherwise a
+/// cached download (fetched again when the remote file changes).
+pub async fn local_copy(state: &AppState, location: Location, limit: u64) -> CmdResult<String> {
     if location.fs == LocalFs::ID {
         return Ok(location.path);
     }
     let fs = state.registry.get(&location.fs)?;
     let entry = fs.stat(&location.path).await?;
-    if entry.size > PREVIEW_LIMIT {
+    if entry.is_dir() {
+        return Err(Error::Unsupported("downloading a folder for this".into()));
+    }
+    if entry.size > limit {
         return Err(Error::Unsupported(
-            "previewing a remote file this large".into(),
+            "downloading a remote file this large for this".into(),
         ));
     }
     // Key the cache on location, size and date so a changed file is fetched again.
     let key = format!(
         "{:x}",
-        fxhash(&format!(
+        dualpal_core::sync::fnv(&format!(
             "{}|{}|{}|{:?}",
             location.fs, location.path, entry.size, entry.modified_ms
         ))
@@ -302,11 +304,10 @@ pub async fn preview_path(state: State<'_, AppState>, location: Location) -> Cmd
     Ok(local.to_string_lossy().into_owned())
 }
 
-/// FNV-1a: a stable, dependency-free hash for cache folder names.
-fn fxhash(s: &str) -> u64 {
-    s.bytes().fold(0xcbf29ce484222325u64, |h, b| {
-        (h ^ b as u64).wrapping_mul(0x100000001b3)
-    })
+/// A local path for previewing a file (see [`local_copy`]).
+#[tauri::command]
+pub async fn preview_path(state: State<'_, AppState>, location: Location) -> CmdResult<String> {
+    local_copy(&state, location, PREVIEW_LIMIT).await
 }
 
 // ---- settings ----------------------------------------------------------------

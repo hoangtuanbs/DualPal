@@ -14,6 +14,9 @@
     type Location,
     type Operation,
     type OperationInfo,
+    type DiffTool,
+    type Entry,
+    type SyncFavorite,
   } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import OperationsPanel from "./lib/OperationsPanel.svelte";
@@ -25,6 +28,10 @@
   import { fsNames } from "./lib/fs-names.svelte";
   import { patternMatcher } from "./lib/fileTypes";
   import { PaneGroup, PaneState } from "./lib/pane-state.svelte";
+  import CompareView from "./lib/CompareView.svelte";
+  import MultiRename from "./lib/MultiRename.svelte";
+  import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
+  import Insights from "./lib/Insights.svelte";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -60,6 +67,18 @@
   };
   let dialog = $state<DialogSpec | null>(null);
 
+  let syncs = $state<SyncFavorite[]>([]);
+  /** The folder pair in the Compare & Sync window, when it is open. */
+  let comparing = $state<{ left: Location; right: Location; favorite: SyncFavorite | null } | null>(null);
+  let renaming = $state<{ items: Entry[]; folder: Location; others: string[] } | null>(null);
+  let showPalette = $state(false);
+  let showInsights = $state(false);
+  /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
+  let linked = $state(false);
+  let diffTools = $state<DiffTool[]>([]);
+  const isMac = navigator.userAgent.includes("Mac");
+  const MOD = isMac ? "⌘" : "Ctrl+";
+
   onMount(() => {
     let unlisten: (() => void) | undefined;
     let unlistenEdits: (() => void) | undefined;
@@ -74,13 +93,17 @@
       activity = await api.activity();
       favorites = await api.favorites();
       volumes = await api.volumes();
+      syncs = await api.syncFavorites();
+      diffTools = await api.diffTools();
     })().catch((e) => (notice = errorMessage(e)));
+    PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
     const timer = setInterval(() => api.volumes().then((v) => (volumes = v)), 15000);
     return () => {
       unlisten?.();
       unlistenEdits?.();
       clearInterval(timer);
+      PaneState.navigated = null;
     };
   });
 
@@ -114,19 +137,28 @@
 
   /** Connect (asking for a password or a host key confirmation when needed)
    *  and open `path`, or the server's start folder, in the active pane. */
-  async function connectTo(
+  function connectTo(
     c: ConnectionView,
     path?: string,
     opts: { secret?: string; remember?: boolean; trust?: string } = {},
     // The pane that was active when the user asked, kept through the prompts.
     pane: PaneState = active,
   ) {
+    return connectThen(c, (loc) => pane.open(path ? { fs: loc.fs, path } : loc), opts);
+  }
+
+  /** Connect, asking for what is needed, then run `after` with the start folder. */
+  async function connectThen(
+    c: ConnectionView,
+    after: (start: Location) => Promise<void> | void,
+    opts: { secret?: string; remember?: boolean; trust?: string } = {},
+  ) {
     notice = null;
     try {
       const r = await api.connect(c.id, opts);
       fsNames[c.fsId] = c.name;
-      await pane.open(path ? { fs: r.location.fs, path } : r.location);
       await loadConnections();
+      await after(r.location);
     } catch (e) {
       const kind = errorKind(e);
       const fp = (e as { fingerprint?: string }).fingerprint;
@@ -135,7 +167,7 @@
           title: `Trust ${c.name}?`,
           message: `Dual Pal has not connected to this server before. Check that its key fingerprint is ${fp} before you continue. It will be added to ~/.ssh/known_hosts.`,
           confirmLabel: "Trust and connect",
-          onconfirm: () => connectTo(c, path, { ...opts, trust: fp }, pane),
+          onconfirm: () => connectThen(c, after, { ...opts, trust: fp }),
         };
       } else if (kind === "authFailed" && c.endpoint.type === "sftp" && c.endpoint.auth.method !== "agent") {
         const what = c.endpoint.auth.method === "keyFile" ? "key passphrase" : "password";
@@ -146,7 +178,7 @@
           password: true,
           checkbox: navigator.userAgent.includes("Windows") ? "Remember in Credential Manager" : "Remember in Keychain",
           confirmLabel: "Connect",
-          onconfirm: (secret, remember) => connectTo(c, path, { ...opts, secret, remember }, pane),
+          onconfirm: (secret, remember) => connectThen(c, after, { ...opts, secret, remember }),
         };
       } else if (kind === "authFailed" && c.endpoint.type === "s3") {
         notice = errorMessage(e);
@@ -192,6 +224,233 @@
 
   /** The saved connection behind a file system id, if it is remote. */
   const connectionOf = (fs: string | undefined) => connections.find((c) => c.fsId === fs);
+
+  // ---- compare, sync and synchronized browsing ------------------------------------
+
+  /** A display name for a file system id. */
+  const nameOf = (fs: string) => fsNames[fs] ?? (fs === "local" ? (isMac ? "This Mac" : "This PC") : fs);
+
+  /** Open Compare & Sync for the folders in the two panes. */
+  function compareFolders() {
+    const left = groups[0].current.location;
+    const right = groups[1].current.location;
+    if (!left || !right) return;
+    if (left.fs === right.fs && left.path === right.path) {
+      notice = "Both panes show the same folder. Open the other folder in one of them to compare.";
+      return;
+    }
+    comparing = { left, right, favorite: null };
+  }
+
+  /** Open a sync favorite, connecting to its servers first. */
+  function openSync(f: SyncFavorite) {
+    for (const loc of [f.left, f.right]) {
+      const c = connectionOf(loc.fs);
+      if (loc.fs !== "local" && !c) {
+        notice = `The server of “${f.name}” has been removed.`;
+        return;
+      }
+      if (c && !c.connected) {
+        connectThen(c, () => openSync(f));
+        return;
+      }
+    }
+    comparing = { left: f.left, right: f.right, favorite: f };
+  }
+
+  async function saveSync(f: SyncFavorite) {
+    try {
+      const saved = await api.saveSyncFavorite(f);
+      syncs = await api.syncFavorites();
+      return saved;
+    } catch (e) {
+      notice = errorMessage(e);
+      return null;
+    }
+  }
+
+  function removeSync(f: SyncFavorite) {
+    dialog = {
+      title: `Remove “${f.name}”?`,
+      message: "The sync favorite is removed. No files change.",
+      confirmLabel: "Remove",
+      onconfirm: async () => {
+        await api.removeSyncFavorite(f.id);
+        syncs = await api.syncFavorites();
+      },
+    };
+  }
+
+  /** Compare two files in the external compare app: two marked files in the
+   *  active pane, or the file under the cursor in each pane, or the file of
+   *  the same name in the other pane. */
+  async function compareFiles() {
+    const loc = active.location;
+    const oloc = other.location;
+    if (!loc) return;
+    const files = (es: Entry[]) => es.filter((e) => e.kind === "file");
+    let pair: [Location, Location] | null = null;
+    const marked = files(active.targets);
+    if (active.selected.size === 2 && marked.length === 2) {
+      pair = [
+        { fs: loc.fs, path: marked[0].path },
+        { fs: loc.fs, path: marked[1].path },
+      ];
+    } else if (active.current?.kind === "file" && oloc) {
+      const twin = other.entries.find((e) => e.name === active.current!.name && e.kind === "file");
+      const counterpart = twin ?? (other.current?.kind === "file" ? other.current : undefined);
+      if (counterpart) pair = [{ fs: loc.fs, path: active.current.path }, { fs: oloc.fs, path: counterpart.path }];
+    }
+    if (!pair) {
+      notice = "Mark two files, or put the cursor on a file in each pane, to compare them.";
+      return;
+    }
+    // Keep the left pane's file on the left.
+    if (activeIndex === 1 && active.selected.size !== 2) pair.reverse();
+    await api.compareFiles(pair[0], pair[1]).catch((e) => (notice = errorMessage(e)));
+  }
+
+  async function chooseDiffTool() {
+    const s = await api.settings();
+    diffTools = await api.diffTools();
+    const found = diffTools.map((t) => t.name).join(", ");
+    dialog = {
+      title: "Compare app",
+      message: diffTools.length
+        ? `Found on this computer: ${found}. The command uses {left} and {right} for the two files. Leave it empty to use ${diffTools[0].name}.`
+        : "No compare app was found. Enter the command of one, using {left} and {right} for the two files, e.g. meld {left} {right}.",
+      input: s.diffTool ?? diffTools[0]?.command ?? "",
+      allowEmpty: true,
+      confirmLabel: "Save",
+      onconfirm: (cmd) => api.saveSettings({ ...s, diffTool: cmd || null }).catch((e) => (notice = errorMessage(e))),
+    };
+  }
+
+  async function useDiffTool(t: DiffTool) {
+    const s = await api.settings();
+    await api.saveSettings({ ...s, diffTool: t.command }).catch((e) => (notice = errorMessage(e)));
+  }
+
+  /** Path segments, for comparing folder paths on any system. */
+  const segments = (p: string) => p.split(/[\/]/).filter(Boolean);
+  let following = false;
+
+  /** Synchronized browsing: repeat a step into or out of a folder in the other pane. */
+  async function followNavigation(pane: PaneState, from: Location | null, to: Location) {
+    if (!linked || following || !from || from.fs !== to.fs) return;
+    const gi = groups.findIndex((g) => g.current === pane);
+    if (gi < 0) return;
+    const target = groups[1 - gi].current;
+    const start = target.location;
+    if (!start) return;
+    const a = segments(from.path);
+    const b = segments(to.path);
+    const common = a.findIndex((s, i) => s !== b[i]);
+    let next: Location | null = start;
+    if (b.length > a.length && (common < 0 || common >= a.length)) {
+      // Went into a subfolder: go into the same one.
+      let path = start.path;
+      for (const seg of b.slice(a.length)) path = join({ fs: start.fs, path }, seg);
+      next = { fs: start.fs, path };
+    } else if (a.length > b.length && b.every((s, i) => s === a[i])) {
+      // Went up: go up as many levels.
+      for (let i = 0; i < a.length - b.length && next; i++) next = await api.parentLocation(next);
+    } else {
+      return; // Jumped elsewhere: the other pane stays.
+    }
+    if (!next || next.path === start.path) return;
+    try {
+      const entry = await api.stat(next);
+      if (entry.kind !== "dir") throw new Error();
+    } catch {
+      notice = `The other pane has no folder “${segments(next.path).pop() ?? next.path}”.`;
+      return;
+    }
+    following = true;
+    try {
+      await target.open(next);
+    } finally {
+      following = false;
+    }
+  }
+
+  function toggleLinked() {
+    linked = !linked;
+    notice = null;
+  }
+
+  /** Show the same folder in both panes. */
+  function sameFolderInOther() {
+    if (active.location) other.open(active.location);
+  }
+
+  function swapPanes() {
+    const a = groups[0].current.location;
+    const b = groups[1].current.location;
+    if (!a || !b) return;
+    following = true;
+    Promise.all([groups[0].current.open(b), groups[1].current.open(a)]).finally(() => (following = false));
+  }
+
+  function multiRename() {
+    const loc = active.location;
+    const items = active.targets;
+    if (!loc || !items.length) return;
+    const names = new Set(items.map((e) => e.name));
+    renaming = { items, folder: loc, others: active.entries.filter((e) => !names.has(e.name)).map((e) => e.name) };
+  }
+
+  // ---- command palette -----------------------------------------------------------
+
+  const commands = $derived.by((): Command[] => {
+    const c: Command[] = [
+      { id: "copy", group: "File", title: "Copy to Other Pane", shortcut: "F5", run: () => transfer("copy") },
+      { id: "move", group: "File", title: "Move to Other Pane", shortcut: "F6", run: () => transfer("move") },
+      { id: "newFolder", group: "File", title: "New Folder", shortcut: "F7", run: newFolder },
+      { id: "rename", group: "File", title: "Rename", shortcut: "F2", run: rename },
+      { id: "multiRename", group: "File", title: "Multi Rename…", shortcut: "Shift+F2", run: multiRename },
+      { id: "edit", group: "File", title: "Edit in Editor", shortcut: "F4", run: editInEditor },
+      { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
+      { id: "trash", group: "File", title: "Move to Trash", shortcut: "F8", run: trash },
+      { id: "delete", group: "File", title: "Delete Permanently", shortcut: "Shift+Delete", run: remove },
+      { id: "compareFolders", group: "Compare", title: "Compare & Sync Folders…", shortcut: `${MOD}Shift+Y`, run: compareFolders },
+      { id: "compareFiles", group: "Compare", title: "Compare Files", shortcut: `${MOD}Shift+D`, run: compareFiles },
+      { id: "linked", group: "Compare", title: linked ? "Stop Synchronized Browsing" : "Synchronized Browsing", shortcut: `${MOD}Shift+L`, run: toggleLinked },
+      { id: "chooseDiff", group: "Settings", title: "Choose Compare App…", run: chooseDiffTool },
+      { id: "chooseEditor", group: "Settings", title: "Choose Editor…", run: chooseEditor },
+      { id: "selectAll", group: "Select", title: "Select All", shortcut: `${MOD}A`, run: () => active.visible.forEach((it) => active.selected.add(it.path)) },
+      { id: "selectPattern", group: "Select", title: "Select by Name…", shortcut: "+", run: () => selectByPattern(true) },
+      { id: "deselectPattern", group: "Select", title: "Deselect by Name…", shortcut: "−", run: () => selectByPattern(false) },
+      { id: "deselect", group: "Select", title: "Deselect All", run: () => active.selected.clear() },
+      { id: "list", group: "View", title: "List View", shortcut: `${MOD}1`, run: () => (active.view = "list") },
+      { id: "icons", group: "View", title: "Icon View", shortcut: `${MOD}2`, run: () => (active.view = "icons") },
+      { id: "hidden", group: "View", title: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files", shortcut: `${MOD}Shift+.`, run: () => (active.showHidden = !active.showHidden) },
+      { id: "info", group: "View", title: showInspector ? "Hide Info Panel" : "Show Info Panel", shortcut: `${MOD}I`, run: () => (showInspector = !showInspector) },
+      { id: "refresh", group: "View", title: "Refresh", shortcut: `${MOD}R`, run: () => active.refresh() },
+      { id: "newTab", group: "View", title: "New Tab", shortcut: `${MOD}T`, run: () => groups[activeIndex].newTab() },
+      { id: "closeTab", group: "View", title: "Close Tab", shortcut: `${MOD}W`, run: () => groups[activeIndex].closeTab() },
+      { id: "switch", group: "View", title: "Switch to Other Pane", shortcut: "Tab", run: () => (activeIndex = 1 - activeIndex) },
+      { id: "swap", group: "View", title: "Swap Panes", run: swapPanes },
+      { id: "same", group: "View", title: "Same Folder in Other Pane", run: sameFolderInOther },
+      { id: "favorite", group: "Go", title: isFavorite ? "Remove Folder from Favorites" : "Add Folder to Favorites", run: toggleFavorite },
+      { id: "back", group: "Go", title: "Back", run: () => active.back() },
+      { id: "forward", group: "Go", title: "Forward", run: () => active.forward() },
+      { id: "up", group: "Go", title: "Enclosing Folder", shortcut: `${MOD}↑`, run: () => active.up() },
+      { id: "insights", group: "Activity", title: "Activity Insights…", run: () => (showInsights = true) },
+      { id: "clearOps", group: "Activity", title: "Clear Finished Operations", run: clearFinished },
+      { id: "addServer", group: "Servers", title: "Add Server…", run: () => (editing = null) },
+    ];
+    for (const t of diffTools) c.push({ id: `diff:${t.name}`, group: "Settings", title: `Compare Files with ${t.name}`, run: () => useDiffTool(t) });
+    for (const v of volumes) c.push({ id: `vol:${v.location.path}`, group: "Go", title: `Go to ${v.name}`, run: () => active.open(v.location) });
+    for (const f of favorites) c.push({ id: `fav:${f.location.fs}:${f.location.path}`, group: "Go", title: `Go to ${f.name}`, run: () => active.open(f.location) });
+    for (const s of connections) {
+      c.push({ id: `conn:${s.id}`, group: "Servers", title: `Connect to ${s.name}`, run: () => connectTo(s) });
+      for (const f of s.favorites) c.push({ id: `conn:${s.id}:${f.path}`, group: "Servers", title: `Go to ${f.name} on ${s.name}`, run: () => connectTo(s, f.path) });
+      if (s.connected) c.push({ id: `disc:${s.id}`, group: "Servers", title: `Disconnect ${s.name}`, run: () => disconnect(s) });
+    }
+    for (const f of syncs) c.push({ id: `sync:${f.id}`, group: "Sync", title: `Sync ${f.name}`, run: () => openSync(f) });
+    return c;
+  });
 
   // ---- editing --------------------------------------------------------------
 
@@ -382,8 +641,13 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
-    // A dialog or the server form is open: its keys are its own.
-    if (dialog || editing !== undefined) return;
+    // A dialog, window or the server form is open: its keys are its own.
+    if (dialog || editing !== undefined || comparing || renaming || showPalette || showInsights) return;
+    const cmd = e.metaKey || e.ctrlKey;
+    if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
+      showPalette = true;
+      return e.preventDefault();
+    }
     // Typing in the quick editor or another field: leave keys alone.
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -461,7 +725,8 @@
         active.moveCursor(1);
         return handled();
       case "F2":
-        rename();
+        if (e.shiftKey) multiRename();
+        else rename();
         return handled();
       case "F4":
         editInEditor();
@@ -489,6 +754,18 @@
       active.visible.forEach((it) => active.selected.add(it.path));
       return handled();
     }
+    if (mod && e.shiftKey && e.key.toLowerCase() === "y") {
+      compareFolders();
+      return handled();
+    }
+    if (mod && e.shiftKey && e.key.toLowerCase() === "d") {
+      compareFiles();
+      return handled();
+    }
+    if (mod && e.shiftKey && e.key.toLowerCase() === "l") {
+      toggleLinked();
+      return handled();
+    }
     if (mod && e.shiftKey && e.key === ".") {
       active.showHidden = !active.showHidden;
       return handled();
@@ -507,9 +784,19 @@
     <div class="group">
       <button onclick={newFolder} title="New folder (F7)">New Folder</button>
       <button onclick={rename} title="Rename (F2)">Rename</button>
+      <button onclick={multiRename} title="Rename the marked items with rules and presets (Shift F2)">Multi Rename</button>
       <button onclick={editInEditor} title="Edit in your preferred editor (F4). Files on servers upload again when you save.">Edit</button>
       <button onclick={compress} title="Compress into a ZIP archive">Compress</button>
       <button onclick={trash} title="Move to Trash (F8 / Delete). Shift+Delete deletes permanently.">Trash</button>
+    </div>
+    <div class="group">
+      <button onclick={compareFolders} title="Compare the two panes' folders and sync them ({MOD}Shift Y)">Compare & Sync</button>
+      <button onclick={compareFiles} title="Open two files in your compare app ({MOD}Shift D)">Compare Files</button>
+      <button
+        aria-pressed={linked}
+        onclick={toggleLinked}
+        title="Synchronized browsing: going into or out of a folder in one pane does the same in the other ({MOD}Shift L)">🔗 Linked</button
+      >
     </div>
     <div class="group" role="group" aria-label="View">
       <button aria-pressed={active.view === "list"} onclick={() => (active.view = "list")} title="List view (Ctrl/⌘ 1)">☰ List</button>
@@ -524,6 +811,7 @@
     <div class="group">
       <button onclick={() => active.refresh()} title="Refresh (Ctrl/⌘ R)">Refresh</button>
       <button onclick={chooseEditor} title="Choose the editor used by Edit">Editor…</button>
+      <button onclick={() => (showPalette = true)} title="Find any command ({MOD}Shift P)">Commands…</button>
       <button
         aria-pressed={active.showHidden}
         onclick={() => (active.showHidden = !active.showHidden)}
@@ -554,6 +842,9 @@
         await api.removeConnectionFavorite(c.id, path);
         await loadConnections();
       }}
+      {syncs}
+      onopensync={openSync}
+      onremovesync={removeSync}
     />
     <main class="panes">
       {#each groups as group, i}
@@ -584,6 +875,7 @@
         onretry={retry}
         onclear={clearFinished}
         onclearactivity={clearActivity}
+        oninsights={() => (showInsights = true)}
       />
     </div>
   </div>
@@ -610,6 +902,39 @@
   />
 {/if}
 
+{#if comparing}
+  <CompareView
+    left={comparing.left}
+    right={comparing.right}
+    favorite={comparing.favorite}
+    {nameOf}
+    onclose={() => (comparing = null)}
+    onsavefavorite={saveSync}
+    oncomparefiles={(l, r) => api.compareFiles(l, r)}
+  />
+{/if}
+
+{#if renaming}
+  <MultiRename
+    items={renaming.items}
+    folder={renaming.folder}
+    others={renaming.others}
+    onclose={() => (renaming = null)}
+    onrename={(items) => {
+      renaming = null;
+      enqueue({ type: "batchRename", items });
+    }}
+  />
+{/if}
+
+{#if showPalette}
+  <CommandPalette {commands} onclose={() => (showPalette = false)} />
+{/if}
+
+{#if showInsights}
+  <Insights {nameOf} onclose={() => (showInsights = false)} />
+{/if}
+
 {#if editing !== undefined}
   <ConnectionDialog connection={editing} onsave={serverSaved} oncancel={() => (editing = undefined)} />
 {/if}
@@ -633,10 +958,12 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    /* Narrow windows: groups wrap onto a second row instead of being cut off. */
+    flex-wrap: wrap;
+    row-gap: 6px;
     padding: 8px 12px;
     background: var(--chrome);
     border-bottom: 1px solid var(--border);
-    overflow-x: auto;
   }
   .group {
     display: flex;

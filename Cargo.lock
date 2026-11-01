@@ -1378,6 +1378,7 @@ dependencies = [
  "dirs 6.0.0",
  "futures-lite",
  "opendal",
+ "regex",
  "russh",
  "russh-sftp",
  "serde",

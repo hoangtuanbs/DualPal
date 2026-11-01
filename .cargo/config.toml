@@ -1,0 +1,5 @@
+[env]
+# aws-lc-sys (TLS/crypto for the SSH and S3 clients) needs the NASM assembler
+# on Windows x86_64. Use its prebuilt objects instead, so a Windows build only
+# needs Rust, Node and the Visual Studio C++ Build Tools.
+AWS_LC_SYS_PREBUILT_NASM = "1"

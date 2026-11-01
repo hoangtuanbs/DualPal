@@ -9,6 +9,9 @@ const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "bas
 
 /** State of one file pane: where it is, what it shows, what is selected. */
 export class PaneState {
+  /** Called after any pane opens a folder (used for synchronized browsing). */
+  static navigated: ((pane: PaneState, from: Location | null, to: Location) => void) | null = null;
+
   location = $state<Location | null>(null);
   entries = $state<Entry[]>([]);
   /** Paths of the marked entries. */
@@ -55,6 +58,7 @@ export class PaneState {
     this.loading = true;
     try {
       const entries = await api.listDir(loc);
+      const from = this.location;
       if (opts.record !== false && this.location) {
         this.history.push(this.location);
         this.future = [];
@@ -66,6 +70,7 @@ export class PaneState {
       const idx = opts.focusName ? this.visible.findIndex((e) => e.name === opts.focusName) : 0;
       this.cursor = Math.max(0, idx);
       this.updateSpace();
+      PaneState.navigated?.(this, from, loc);
     } catch (e) {
       this.error = errorMessage(e);
     } finally {

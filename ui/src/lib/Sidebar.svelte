@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ConnectionView, Favorite, Location, Volume } from "./api";
+  import type { ConnectionView, Favorite, Location, SyncFavorite, Volume } from "./api";
   import { formatBytes } from "./format";
 
   let {
@@ -16,6 +16,9 @@
     ondisconnect,
     onremoveserver,
     onremoveremotefavorite,
+    syncs,
+    onopensync,
+    onremovesync,
   }: {
     volumes: Volume[];
     favorites: Favorite[];
@@ -32,7 +35,13 @@
     ondisconnect: (c: ConnectionView) => void;
     onremoveserver: (c: ConnectionView) => void;
     onremoveremotefavorite: (c: ConnectionView, path: string) => void;
+    /** Saved folder pairs to compare and sync. */
+    syncs: SyncFavorite[];
+    onopensync: (s: SyncFavorite) => void;
+    onremovesync: (s: SyncFavorite) => void;
   } = $props();
+
+  const MODE: Record<string, string> = { update: "→", mirror: "⇥", twoWay: "⇄" };
 
   /** Connections whose favorites are folded away. */
   let collapsed = $state<Record<string, boolean>>({});
@@ -204,6 +213,32 @@
   {/each}
   {#if connections.length === 0}
     <p class="hint">Connect to SFTP servers and S3 buckets with +.</p>
+  {/if}
+
+  {#if syncs.length > 0}
+    <h3>Syncs</h3>
+    {#each syncs as s (s.id)}
+      <div
+        class="item"
+        role="button"
+        tabindex="0"
+        title="{s.left.path} {MODE[s.mode]} {s.right.path}"
+        onclick={() => onopensync(s)}
+        onkeydown={(e) => e.key === "Enter" && onopensync(s)}
+      >
+        <span class="icon" aria-hidden="true">{MODE[s.mode]}</span>
+        <span class="name">{s.name}</span>
+        <button
+          class="remove"
+          title="Remove this sync favorite"
+          aria-label="Remove {s.name}"
+          onclick={(e) => {
+            e.stopPropagation();
+            onremovesync(s);
+          }}>×</button
+        >
+      </div>
+    {/each}
   {/if}
 </aside>
 

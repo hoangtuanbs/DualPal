@@ -2,7 +2,7 @@
 
 A fast, cross-platform dual-pane file manager for **macOS and Windows** (Linux works too), built with [Tauri 2](https://tauri.app): a Rust core and a Svelte web UI.
 
-> Status: early development. Step 1 (foundation) is in place: local browsing in two panes, background copy / move / delete / rename / new folder with live progress, cancellation and an activity history.
+> Status: early development. All four roadmap steps are in place: two-pane browsing with background operations, SFTP and S3 servers, and folder compare and sync with the power tools below.
 
 ## Layout
 
@@ -10,14 +10,18 @@ A fast, cross-platform dual-pane file manager for **macOS and Windows** (Linux w
 crates/dualpal-core   Platform-independent Rust core (no Tauri dependency)
   src/vfs/            Virtual file system: FileSystem trait, registry, local disk backend
   src/ops/            Operation queue: copy, move, delete, rename, create folder
-  src/activity.rs     Persistent activity log (JSON lines)
+  src/activity.rs     Persistent activity log (JSON lines) and insights
+  src/compare.rs      Folder comparison on any two file systems
+  src/sync.rs         One-way and two-way sync with per-pair history
+  src/rename.rs       Multi Rename rules and presets
+  src/difftools.rs    External file compare apps
 src-tauri/            Tauri shell: commands + progress events wiring the core to the UI
 ui/                   Svelte 5 + TypeScript front end (built with Vite)
 ```
 
 ### Core concepts
 
-- **`FileSystem`** — every browsable place (local disk now; SFTP and S3 next) implements this async trait. A **`Location`** is `{ fs, path }`, so the UI, the operation queue and the upcoming compare/sync engine work the same across local and remote storage. Copies between different file systems stream through the core.
+- **`FileSystem`** — every browsable place (local disk, SFTP servers, S3 buckets) implements this async trait. A **`Location`** is `{ fs, path }`, so the UI, the operation queue and the compare/sync engine work the same across local and remote storage. Copies between different file systems stream through the core.
 - **`OperationQueue`** — operations run in the background (two at a time by default), report progress (items, bytes, current file) as events, can be cancelled, and clean up partial files. Conflicts are handled per operation: `fail` (default), `skip` or `overwrite`.
 - **`ActivityLog`** — every finished operation is recorded and kept across restarts (`activity.jsonl` in the app data folder).
 
@@ -44,6 +48,7 @@ npm run check            # UI type-check
 | Space / Insert | Mark item |
 | Ctrl/⌘ A | Mark all |
 | F2 | Rename |
+| Shift F2 | Multi Rename the marked items |
 | F4 | Edit in your preferred editor (files on servers upload again when saved) |
 | F5 / F6 | Copy / move to the other pane |
 | F7 | New folder |
@@ -57,6 +62,10 @@ npm run check            # UI type-check
 | Ctrl/⌘ S (in the editor) | Save the file being quick-edited |
 | Ctrl/⌘ R | Refresh |
 | Ctrl/⌘ Shift . | Show hidden files |
+| Ctrl/⌘ Shift P | Command palette: find any command, server, favorite or sync |
+| Ctrl/⌘ Shift Y | Compare & Sync the folders of both panes |
+| Ctrl/⌘ Shift D | Compare two files in your compare app |
+| Ctrl/⌘ Shift L | Synchronized browsing on / off |
 
 ## Servers (SFTP and S3)
 
@@ -77,12 +86,22 @@ DUALPAL_TEST_SFTP=user@127.0.0.1:2222 DUALPAL_TEST_SFTP_KEY=~/.ssh/test_key \
   cargo test -p dualpal-core --test remote
 ```
 
+## Compare, sync and power tools
+
+- **Compare & Sync** compares the folders in the two panes (local or on any server) by size and date, size only, or content. Choose *Update →* (copy new and changed items to the right), *Mirror →* (make the right an exact copy) or *Two-way ⇄*. Every planned step can be changed before you press *Synchronize*, and deletions are confirmed first.
+- Two-way sync remembers each folder pair after it syncs, so it can tell a file deleted on one side from a new file on the other, and an edit on one side from an edit on both (a conflict, which is left for you to decide). The first sync of a pair never deletes. Servers that stamp uploads with their own time (S3) do not cause copies back and forth.
+- **Save as Favorite** keeps the pair, mode and options under *Syncs* in the sidebar and in the command palette; servers are connected when you open one.
+- **Linked** (synchronized browsing): going into a folder, or up, in one pane does the same in the other.
+- **Compare Files** opens two files in your compare app (FileMerge, Beyond Compare, Kaleidoscope, VS Code, BBEdit, WinMerge, Meld, P4Merge…, found automatically; choose with *Choose Compare App…* in the command palette). Server files are downloaded first. In Compare & Sync, double-click a changed file.
+- **Multi Rename** renames the marked items with rules (replace text or a regular expression, change case, insert text with `{name}` `{ext}` `{parent}` `{date}` `{n}` tokens, numbering, remove characters, change extension) and shows every new name before it renames. Rule sets can be saved as presets; a few come built in. Swapping names between items works.
+- **Activity insights** (from the Activity tab or the palette) shows what was done per day, by kind and by place, transfer speed, the largest transfers and recent failures.
+
 ## Roadmap
 
 1. **Foundation** — Tauri app, VFS layer, operation queue, activity log. ✅
 2. **Dual-pane browser** — tabs, list/icon views, sidebar (devices, favorites), select by pattern or tag, compress, preview panel (audio/video, images, PDF, quick text edit), Move to Trash. ✅
 3. **Remote connections** — SFTP over SSH and S3, each with nested favorites; edit remote files in your preferred editor with automatic upload on save. ✅
-4. **Compare & power tools** — folder compare and one/two-way sync (saved as favorites), synchronized browsing, external file compare tools, multi-rename presets, command palette.
+4. **Compare & power tools** — folder compare and one/two-way sync (saved as favorites), synchronized browsing, external file compare tools, multi-rename presets, command palette, activity insights. ✅
 
 ## Test builds
 

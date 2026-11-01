@@ -71,6 +71,16 @@ pub enum Operation {
         location: Location,
         new_name: String,
     },
+    /// Rename several items at once (Multi Rename). Names may be swapped.
+    BatchRename {
+        items: Vec<crate::rename::RenameItem>,
+    },
+    /// Carry out the steps of a folder sync between `left` and `right`.
+    Sync {
+        left: Location,
+        right: Location,
+        steps: Vec<crate::sync::SyncStep>,
+    },
 }
 
 impl Operation {
@@ -84,7 +94,46 @@ impl Operation {
             Operation::SetMode { .. } => "setMode",
             Operation::CreateDir { .. } => "createDir",
             Operation::Rename { .. } => "rename",
+            Operation::BatchRename { .. } => "batchRename",
+            Operation::Sync { .. } => "sync",
         }
+    }
+
+    /// Ids of the file systems this operation touches, for activity insights.
+    pub fn places(&self) -> Vec<String> {
+        let mut v: Vec<String> = match self {
+            Operation::Copy {
+                sources,
+                destination,
+                ..
+            }
+            | Operation::Move {
+                sources,
+                destination,
+                ..
+            }
+            | Operation::Compress {
+                sources,
+                destination,
+            } => sources
+                .iter()
+                .chain(std::iter::once(destination))
+                .map(|l| l.fs.clone())
+                .collect(),
+            Operation::Trash { targets } | Operation::Delete { targets } => {
+                targets.iter().map(|l| l.fs.clone()).collect()
+            }
+            Operation::SetMode { location, .. }
+            | Operation::CreateDir { location }
+            | Operation::Rename { location, .. } => vec![location.fs.clone()],
+            Operation::BatchRename { items } => {
+                items.iter().map(|i| i.location.fs.clone()).collect()
+            }
+            Operation::Sync { left, right, .. } => vec![left.fs.clone(), right.fs.clone()],
+        };
+        v.sort();
+        v.dedup();
+        v
     }
 
     /// One-line description for the progress view and activity log.
@@ -130,6 +179,17 @@ impl Operation {
             Operation::Rename { location, new_name } => {
                 format!("Rename {} to {new_name}", location.path)
             }
+            Operation::BatchRename { items: list } => format!("Rename {}", items(list.len())),
+            Operation::Sync { left, right, steps } => format!(
+                "Sync {} and {} ({})",
+                left.path,
+                right.path,
+                if steps.len() == 1 {
+                    "1 change".to_string()
+                } else {
+                    format!("{} changes", steps.len())
+                }
+            ),
         }
     }
 }
@@ -177,6 +237,9 @@ pub struct OperationInfo {
     pub queued_ms: i64,
     pub started_ms: Option<i64>,
     pub finished_ms: Option<i64>,
+    /// Ids of the file systems involved.
+    #[serde(default)]
+    pub places: Vec<String>,
 }
 
 struct Slot {
@@ -190,6 +253,8 @@ pub(crate) struct Inner {
     slots: Mutex<HashMap<Uuid, Slot>>,
     events: broadcast::Sender<OperationInfo>,
     permits: Semaphore,
+    /// What each sync operation did, collected until the sync engine takes it.
+    sync_results: Mutex<HashMap<Uuid, Vec<crate::sync::SyncDone>>>,
 }
 
 impl Inner {
@@ -221,6 +286,7 @@ impl OperationQueue {
                 slots: Mutex::new(HashMap::new()),
                 events,
                 permits: Semaphore::new(max_concurrent.max(1)),
+                sync_results: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -253,6 +319,7 @@ impl OperationQueue {
             queued_ms: crate::now_ms(),
             started_ms: None,
             finished_ms: None,
+            places: op.places(),
         };
         self.inner.slots.lock().unwrap().insert(
             id,
@@ -326,6 +393,16 @@ impl OperationQueue {
             .retain(|_, s| !s.info.status.is_finished());
     }
 
+    /// What a finished sync operation did (empty for other operations).
+    pub fn take_sync_results(&self, id: Uuid) -> Vec<crate::sync::SyncDone> {
+        self.inner
+            .sync_results
+            .lock()
+            .unwrap()
+            .remove(&id)
+            .unwrap_or_default()
+    }
+
     /// Wait until the operation has finished and return its final state.
     pub async fn wait(&self, id: Uuid) -> Option<OperationInfo> {
         let mut rx = self.subscribe();
@@ -368,5 +445,6 @@ fn finish(inner: &Inner, id: Uuid, result: crate::Result<()>) {
         bytes_done: info.progress.bytes_done,
         skipped: info.progress.skipped,
         error: info.error.as_ref().map(|e| e.message.clone()),
+        places: info.places.clone(),
     });
 }
