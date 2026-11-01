@@ -4,6 +4,15 @@ A fast, cross-platform dual-pane file manager for **macOS and Windows** (Linux w
 
 > Status: early development. All four roadmap steps are in place: two-pane browsing with background operations, SFTP and S3 servers, and folder compare and sync with the power tools below.
 
+![Dual Pal with a folder list on the left, photo thumbnails on the right and an image preview in the Info panel](docs/images/main-window.png)
+
+<details>
+<summary>Compare &amp; Sync</summary>
+
+![Compare and Sync showing the differences between Documents and its backup, with an action for each file](docs/images/compare-sync.png)
+
+</details>
+
 ## Layout
 
 ```
