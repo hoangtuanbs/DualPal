@@ -63,12 +63,49 @@ fn mode(_meta: &Metadata) -> Option<u32> {
     None
 }
 
+/// Whether `path` can go to the Trash. On Windows, network shares such as
+/// WSL's `\\wsl.localhost\<distro>\` have no Recycle Bin.
+pub fn has_trash(path: &str) -> bool {
+    !(cfg!(windows) && (path.starts_with(r"\\") || path.starts_with("//")))
+}
+
+/// Where a symlink points when the OS cannot follow it itself: WSL links
+/// seen through `\\wsl.localhost\<distro>\`, whose targets are Linux
+/// paths. Absolute targets are taken from the root of the share.
+fn resolve_link(path: &Path) -> Option<PathBuf> {
+    let target = std::fs::read_link(path).ok()?;
+    let target = target
+        .to_string_lossy()
+        .replace('/', std::path::MAIN_SEPARATOR_STR);
+    if target.starts_with(std::path::MAIN_SEPARATOR) {
+        use std::path::Component;
+        // Only a share's root (a Windows path prefix) stands in for Linux's "/".
+        let mut parts = path.components();
+        let prefix @ Component::Prefix(_) = parts.next()? else {
+            return None;
+        };
+        let root = PathBuf::from(prefix.as_os_str()).join(std::path::MAIN_SEPARATOR_STR);
+        Some(root.join(target.trim_start_matches(std::path::MAIN_SEPARATOR)))
+    } else {
+        Some(path.parent()?.join(target))
+    }
+}
+
+/// Metadata of what a symlink points to, also for links the OS can't follow.
+async fn follow(path: &Path) -> Option<Metadata> {
+    if let Ok(meta) = tokio::fs::metadata(path).await {
+        return Some(meta);
+    }
+    let resolved = resolve_link(path)?;
+    tokio::fs::metadata(resolved).await.ok()
+}
+
 /// Build an entry from `symlink_metadata`, following the link (if any) to
 /// learn the target's kind and size.
 async fn entry_for(path: &Path, link_meta: Metadata) -> Entry {
     let symlink = link_meta.file_type().is_symlink();
     let meta = if symlink {
-        tokio::fs::metadata(path).await.unwrap_or(link_meta)
+        follow(path).await.unwrap_or(link_meta)
     } else {
         link_meta
     };
@@ -135,9 +172,16 @@ impl FileSystem for LocalFs {
     }
 
     async fn list(&self, dir: &str) -> Result<Vec<Entry>> {
-        let mut rd = tokio::fs::read_dir(dir)
-            .await
-            .map_err(|e| Error::io(dir, e))?;
+        let mut rd = match tokio::fs::read_dir(dir).await {
+            Ok(rd) => rd,
+            // A link to a folder that the OS can't follow (WSL): list its target.
+            Err(e) => match resolve_link(Path::new(dir)) {
+                Some(target) => tokio::fs::read_dir(&target)
+                    .await
+                    .map_err(|_| Error::io(dir, e))?,
+                None => return Err(Error::io(dir, e)),
+            },
+        };
         let mut out = Vec::new();
         while let Some(de) = rd.next_entry().await.map_err(|e| Error::io(dir, e))? {
             let path: PathBuf = de.path();
@@ -202,6 +246,12 @@ impl FileSystem for LocalFs {
 
     async fn trash(&self, path: &str) -> Result<()> {
         let path = path.to_string();
+        if !has_trash(&path) {
+            // Windows deletes these for good instead of recycling them.
+            return Err(Error::Unsupported(format!(
+                "moving {path} to the Trash: network and WSL locations have no Recycle Bin"
+            )));
+        }
         tokio::task::spawn_blocking(move || {
             if std::fs::symlink_metadata(&path).is_err() {
                 return Err(Error::NotFound(path));
