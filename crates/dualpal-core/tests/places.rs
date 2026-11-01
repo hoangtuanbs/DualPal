@@ -41,3 +41,21 @@ fn volumes_include_the_system_disk() {
     let home = dirs::home_dir().unwrap();
     assert!(places::available_space(&home.to_string_lossy()).is_some());
 }
+
+#[test]
+fn wsl_names_hide_docker_and_keep_spaces() {
+    use dualpal_core::places::{wsl_names, wsl_volumes};
+    let names = wsl_names(vec![
+        "Ubuntu-22.04".into(),
+        "docker-desktop".into(),
+        "docker-desktop-data".into(),
+        "My  Distro".into(),
+        "".into(),
+        "Ubuntu-22.04".into(),
+    ]);
+    assert_eq!(names, vec!["Ubuntu-22.04", "My  Distro"]);
+    let vols = wsl_volumes(&names);
+    assert_eq!(vols[0].location.path, r"\\wsl.localhost\Ubuntu-22.04\");
+    assert_eq!(vols[1].location.path, r"\\wsl.localhost\My  Distro\");
+    assert!(vols.iter().all(|v| v.wsl));
+}

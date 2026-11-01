@@ -63,6 +63,31 @@ fn mode(_meta: &Metadata) -> Option<u32> {
     None
 }
 
+/// Whether `path` can go to the Trash. On Windows, network shares such as
+/// WSL's `\\wsl.localhost\<distro>\` have no Recycle Bin.
+pub fn has_trash(path: &str) -> bool {
+    !(cfg!(windows) && (path.starts_with(r"\\") || path.starts_with("//")))
+}
+
+/// Windows can't follow WSL's Linux symlinks, so they look like small files.
+/// Ask the distribution which of them point to folders.
+async fn mark_wsl_folder_links(entries: &mut [Entry]) {
+    let links: Vec<usize> = (0..entries.len())
+        .filter(|&i| entries[i].symlink && entries[i].kind != EntryKind::Dir)
+        .collect();
+    if links.is_empty() {
+        return;
+    }
+    let paths: Vec<String> = links.iter().map(|&i| entries[i].path.clone()).collect();
+    let dirs = super::wsl::which_are_dirs(&paths).await;
+    for (&i, is_dir) in links.iter().zip(dirs) {
+        if is_dir {
+            entries[i].kind = EntryKind::Dir;
+            entries[i].size = 0;
+        }
+    }
+}
+
 /// Build an entry from `symlink_metadata`, following the link (if any) to
 /// learn the target's kind and size.
 async fn entry_for(path: &Path, link_meta: Metadata) -> Entry {
@@ -135,9 +160,16 @@ impl FileSystem for LocalFs {
     }
 
     async fn list(&self, dir: &str) -> Result<Vec<Entry>> {
-        let mut rd = tokio::fs::read_dir(dir)
-            .await
-            .map_err(|e| Error::io(dir, e))?;
+        let mut rd = match tokio::fs::read_dir(dir).await {
+            Ok(rd) => rd,
+            // A WSL link to a folder, which Windows can't follow: list its target.
+            Err(e) => match super::wsl::resolve_dir(dir).await {
+                Some(target) => tokio::fs::read_dir(&target)
+                    .await
+                    .map_err(|_| Error::io(dir, e))?,
+                None => return Err(Error::io(dir, e)),
+            },
+        };
         let mut out = Vec::new();
         while let Some(de) = rd.next_entry().await.map_err(|e| Error::io(dir, e))? {
             let path: PathBuf = de.path();
@@ -146,6 +178,9 @@ impl FileSystem for LocalFs {
                 continue;
             };
             out.push(entry_for(&path, meta).await);
+        }
+        if super::wsl::split(dir).is_some() {
+            mark_wsl_folder_links(&mut out).await;
         }
         Ok(out)
     }
@@ -202,6 +237,12 @@ impl FileSystem for LocalFs {
 
     async fn trash(&self, path: &str) -> Result<()> {
         let path = path.to_string();
+        if !has_trash(&path) {
+            // Windows deletes these for good instead of recycling them.
+            return Err(Error::Unsupported(format!(
+                "moving {path} to the Trash: network and WSL locations have no Recycle Bin"
+            )));
+        }
         tokio::task::spawn_blocking(move || {
             if std::fs::symlink_metadata(&path).is_err() {
                 return Err(Error::NotFound(path));

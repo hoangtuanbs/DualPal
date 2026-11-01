@@ -104,6 +104,8 @@ export interface Volume {
   totalBytes: number;
   availableBytes: number;
   removable: boolean;
+  /** A WSL distribution (Windows only). */
+  wsl: boolean;
 }
 
 export interface Favorite {
