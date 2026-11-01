@@ -958,10 +958,12 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    /* Narrow windows: groups wrap onto a second row instead of being cut off. */
+    flex-wrap: wrap;
+    row-gap: 6px;
     padding: 8px 12px;
     background: var(--chrome);
     border-bottom: 1px solid var(--border);
-    overflow-x: auto;
   }
   .group {
     display: flex;
