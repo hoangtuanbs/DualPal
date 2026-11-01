@@ -808,6 +808,13 @@
         title="Linked browsing: going into or out of a folder in one pane does the same in the other ({MOD}Shift L)"><Icon name="link" /></button
       >
     </div>
+    <!-- Pushes the view and pane groups to the right; errors show in the gap. -->
+    <div class="spacer">
+      {#if notice}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <span class="notice" title={notice} onclick={() => (notice = null)}>{notice}</span>
+      {/if}
+    </div>
     <div class="group" role="group" aria-label="View">
       <button aria-pressed={active.view === "list"} onclick={() => (active.view = "list")} aria-label="List view" title="List view (Ctrl/⌘ 1)"
         ><Icon name="list" /></button
@@ -840,10 +847,6 @@
         title="Show hidden files (Ctrl/⌘ Shift .)"><Icon name="eye" /></button
       >
     </div>
-    {#if notice}
-      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-      <span class="notice" title={notice} onclick={() => (notice = null)}>{notice}</span>
-    {/if}
   </div>
 
   <div class="middle" class:with-inspector={showInspector}>
@@ -1009,6 +1012,11 @@
   .group button[aria-pressed="true"] {
     background: var(--accent);
     color: white;
+  }
+  .spacer {
+    flex: 1;
+    display: flex;
+    min-width: 0;
   }
   .notice {
     color: var(--danger);
