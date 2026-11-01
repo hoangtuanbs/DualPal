@@ -211,7 +211,14 @@ impl FileSystem for S3Fs {
                 continue;
             }
             let path = posix::join(&base, &name);
-            let meta = it.metadata();
+            let mut meta = it.metadata().clone();
+            // S3 listings carry size and date; services that leave them out
+            // (e.g. the in-memory one) are asked per file.
+            if meta.mode() == EntryMode::FILE && meta.last_modified().is_none() {
+                if let Ok(m) = self.op.stat(it.path()).await {
+                    meta = m;
+                }
+            }
             match meta.mode() {
                 EntryMode::DIR => out.push(dir_entry(path, name, ms(meta.last_modified()))),
                 _ => out.push(Entry {

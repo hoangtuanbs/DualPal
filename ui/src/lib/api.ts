@@ -1,4 +1,4 @@
-// Typed wrappers around the Tauri commands in src-tauri/src/commands.rs.
+// Typed wrappers around the Tauri commands in src-tauri/src (commands.rs, remote.rs, tools.rs).
 // Types mirror the serde shapes in crates/dualpal-core.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -33,7 +33,8 @@ export type Operation =
   | { type: "compress"; sources: Location[]; destination: Location }
   | { type: "setMode"; location: Location; mode: number }
   | { type: "createDir"; location: Location }
-  | { type: "rename"; location: Location; newName: string };
+  | { type: "rename"; location: Location; newName: string }
+  | { type: "batchRename"; items: { location: Location; newName: string }[] };
 
 export type OperationStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -63,6 +64,7 @@ export interface OperationInfo {
   queuedMs: number;
   startedMs: number | null;
   finishedMs: number | null;
+  places: string[];
 }
 
 export interface ActivityRecord {
@@ -76,6 +78,7 @@ export interface ActivityRecord {
   bytesDone: number;
   skipped: number;
   error: string | null;
+  places: string[];
 }
 
 export interface TextFile {
@@ -157,6 +160,169 @@ export interface EditSession {
 
 export interface Settings {
   editor: string | null;
+  diffTool: string | null;
+}
+
+// ---- compare and sync ----
+
+export type CompareBy = "sizeAndDate" | "size" | "content";
+
+export interface CompareOptions {
+  by: CompareBy;
+  toleranceMs: number;
+  exclude: string[];
+  includeHidden: boolean;
+}
+
+export const defaultCompareOptions = (): CompareOptions => ({
+  by: "sizeAndDate",
+  toleranceMs: 2000,
+  exclude: [".DS_Store", "Thumbs.db", "desktop.ini", "._*"],
+  includeHidden: true,
+});
+
+export type DiffState = "same" | "leftOnly" | "rightOnly" | "leftNewer" | "rightNewer" | "different" | "kindMismatch";
+
+export interface Side {
+  dir: boolean;
+  size: number;
+  modifiedMs: number | null;
+}
+
+export interface DiffItem {
+  rel: string;
+  name: string;
+  depth: number;
+  dir: boolean;
+  left: Side | null;
+  right: Side | null;
+  state: DiffState;
+}
+
+export interface Comparison {
+  left: Location;
+  right: Location;
+  options: CompareOptions;
+  items: DiffItem[];
+  summary: Record<"same" | "leftOnly" | "rightOnly" | "leftNewer" | "rightNewer" | "different" | "kindMismatch", number>;
+}
+
+export type SyncMode = "update" | "mirror" | "twoWay";
+export type SyncAction = "copyToRight" | "copyToLeft" | "deleteLeft" | "deleteRight" | "skip";
+export type SyncReason =
+  | "new"
+  | "changed"
+  | "deleted"
+  | "extra"
+  | "onlyOnTarget"
+  | "targetChanged"
+  | "conflict"
+  | "changedAndDeleted"
+  | "kindMismatch";
+
+export interface Totals {
+  files: number;
+  bytes: number;
+}
+
+export interface SyncStep {
+  rel: string;
+  dir: boolean;
+  action: SyncAction;
+  reason: SyncReason;
+  conflict: boolean;
+  left: Totals | null;
+  right: Totals | null;
+}
+
+export interface SyncPreview {
+  id: string;
+  mode: SyncMode;
+  comparison: Comparison;
+  steps: SyncStep[];
+  hasHistory: boolean;
+}
+
+export interface SyncFavorite {
+  id: string;
+  name: string;
+  left: Location;
+  right: Location;
+  mode: SyncMode;
+  options: CompareOptions;
+}
+
+// ---- Multi Rename ----
+
+export type Scope = "name" | "extension" | "whole";
+export type Position = "start" | "end";
+export type CaseKind = "lower" | "upper" | "title" | "sentence";
+
+export type RenameRule =
+  | { type: "replace"; find: string; replace: string; regex: boolean; caseSensitive: boolean; scope: Scope }
+  | { type: "case"; case: CaseKind; scope: Scope }
+  | { type: "insert"; text: string; at: Position; scope: Scope }
+  | { type: "number"; start: number; step: number; pad: number; at: Position; separator: string }
+  | { type: "remove"; count: number; from: Position; offset: number; scope: Scope }
+  | { type: "extension"; ext: string };
+
+export interface RenameInput {
+  name: string;
+  dir: boolean;
+  modifiedMs: number | null;
+  parent: string;
+}
+
+export interface RenamePreview {
+  name: string;
+  newName: string;
+  issue: string | null;
+}
+
+export interface RenamePreset {
+  name: string;
+  rules: RenameRule[];
+  builtin: boolean;
+}
+
+// ---- tools and insights ----
+
+export interface DiffTool {
+  name: string;
+  command: string;
+  folders: boolean;
+}
+
+export interface DayStat {
+  startMs: number;
+  operations: number;
+  failed: number;
+  files: number;
+  bytes: number;
+}
+
+export interface GroupStat {
+  key: string;
+  operations: number;
+  failed: number;
+  files: number;
+  bytes: number;
+}
+
+export interface Insights {
+  days: DayStat[];
+  operations: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  files: number;
+  bytes: number;
+  busyMs: number;
+  throughput: number | null;
+  byKind: GroupStat[];
+  byPlace: GroupStat[];
+  largest: ActivityRecord[];
+  failures: ActivityRecord[];
 }
 
 export function errorKind(e: unknown): string | null {
@@ -216,6 +382,25 @@ export const api = {
   previewPath: (location: Location) => invoke<string>("preview_path", { location }),
   settings: () => invoke<Settings>("settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
+  syncPlan: (left: Location, right: Location, mode: SyncMode, options: CompareOptions) =>
+    invoke<SyncPreview>("sync_plan", { left, right, mode, options }),
+  cancelCompare: () => invoke<void>("cancel_compare"),
+  runSync: (plan: string, overrides: Record<string, SyncAction>) => invoke<string>("run_sync", { plan, overrides }),
+  forgetSyncHistory: (left: Location, right: Location) => invoke<void>("forget_sync_history", { left, right }),
+  syncFavorites: () => invoke<SyncFavorite[]>("sync_favorites"),
+  saveSyncFavorite: (favorite: SyncFavorite) => invoke<SyncFavorite>("save_sync_favorite", { favorite }),
+  removeSyncFavorite: (id: string) => invoke<void>("remove_sync_favorite", { id }),
+  onCompareProgress: (cb: (p: { folders: number; current: string }) => void): Promise<UnlistenFn> =>
+    listen<{ folders: number; current: string }>("compare-progress", (e) => cb(e.payload)),
+  renamePreview: (rules: RenameRule[], inputs: RenameInput[], others: string[]) =>
+    invoke<RenamePreview[]>("rename_preview", { rules, inputs, others }),
+  renamePresets: () => invoke<RenamePreset[]>("rename_presets"),
+  saveRenamePreset: (preset: RenamePreset) => invoke<RenamePreset[]>("save_rename_preset", { preset }),
+  removeRenamePreset: (name: string) => invoke<RenamePreset[]>("remove_rename_preset", { name }),
+  diffTools: () => invoke<DiffTool[]>("diff_tools"),
+  compareFiles: (left: Location, right: Location) => invoke<void>("compare_files", { left, right }),
+  activityInsights: (days: number) =>
+    invoke<Insights>("activity_insights", { days, utcOffsetMinutes: -new Date().getTimezoneOffset() }),
   onEditSessionUpdated: (cb: (s: EditSession) => void): Promise<UnlistenFn> =>
     listen<EditSession>("edit-session-updated", (e) => cb(e.payload)),
   onOperationUpdated: (cb: (info: OperationInfo) => void): Promise<UnlistenFn> =>

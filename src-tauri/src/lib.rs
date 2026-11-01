@@ -5,6 +5,7 @@
 
 mod commands;
 mod remote;
+mod tools;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,8 +14,10 @@ use std::sync::{Arc, Mutex};
 use dualpal_core::connections::Connections;
 use dualpal_core::places::Favorites;
 use dualpal_core::remote_edit::RemoteEditor;
+use dualpal_core::rename::RenamePresets;
 use dualpal_core::settings::SettingsStore;
-use dualpal_core::{ActivityLog, OperationQueue, Registry};
+use dualpal_core::sync::{SyncEngine, SyncFavorites};
+use dualpal_core::{ActivityLog, CancellationToken, OperationQueue, Registry};
 use tauri::{Emitter, Manager};
 
 /// Keep this many finished operations in the activity log.
@@ -31,8 +34,13 @@ pub struct AppState {
     pub editor: RemoteEditor,
     /// Folder each live connection opened in, by file system id.
     pub start_paths: Mutex<HashMap<String, String>>,
-    /// Downloaded copies of remote files for the preview panel.
+    /// Downloaded copies of remote files for previews and compare apps.
     pub preview_dir: PathBuf,
+    pub sync: Arc<SyncEngine>,
+    pub sync_favorites: SyncFavorites,
+    pub rename_presets: RenamePresets,
+    /// Stops the folder comparison that is running, if any.
+    pub compare_cancel: Mutex<Option<CancellationToken>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -99,6 +107,10 @@ pub fn run() {
                 }
             });
 
+            let sync = SyncEngine::new(queue.clone(), Some(data_dir.join("sync-state")));
+            let sync_favorites = SyncFavorites::open(data_dir.join("syncs.json"));
+            let rename_presets = RenamePresets::open(data_dir.join("rename-presets.json"));
+
             app.manage(AppState {
                 registry,
                 queue,
@@ -108,6 +120,10 @@ pub fn run() {
                 editor,
                 start_paths: Mutex::new(HashMap::new()),
                 preview_dir,
+                sync,
+                sync_favorites,
+                rename_presets,
+                compare_cancel: Mutex::new(None),
             });
             Ok(())
         })
@@ -148,6 +164,20 @@ pub fn run() {
             remote::preview_path,
             remote::settings,
             remote::save_settings,
+            tools::sync_plan,
+            tools::cancel_compare,
+            tools::run_sync,
+            tools::forget_sync_history,
+            tools::sync_favorites,
+            tools::save_sync_favorite,
+            tools::remove_sync_favorite,
+            tools::rename_preview,
+            tools::rename_presets,
+            tools::save_rename_preset,
+            tools::remove_rename_preset,
+            tools::diff_tools,
+            tools::compare_files,
+            tools::activity_insights,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dual Pal");

@@ -9,6 +9,7 @@
     onretry,
     onclear,
     onclearactivity,
+    oninsights,
   }: {
     operations: OperationInfo[];
     activity: ActivityRecord[];
@@ -16,6 +17,7 @@
     onretry: (id: string, conflict: ConflictPolicy) => void;
     onclear: () => void;
     onclearactivity: () => void;
+    oninsights: () => void;
   } = $props();
 
   let tab = $state<"operations" | "activity">("operations");
@@ -60,6 +62,7 @@
     {#if tab === "operations"}
       <button class="link" onclick={onclear} disabled={!operations.some(isFinished)}>Clear finished</button>
     {:else}
+      <button class="link" onclick={oninsights}>Insights…</button>
       <button class="link" onclick={onclearactivity} disabled={activity.length === 0}>Clear history</button>
     {/if}
   </div>

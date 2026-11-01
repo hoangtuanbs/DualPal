@@ -22,8 +22,11 @@ chrono.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true
 opendal.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
+opendal.workspace = true
+tokio-util.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
 serde_json.workspace = true

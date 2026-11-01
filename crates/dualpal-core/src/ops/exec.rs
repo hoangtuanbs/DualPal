@@ -8,7 +8,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{ConflictPolicy, Inner, Operation, Progress};
+use crate::compare::{self, Side};
 use crate::error::{Error, Result};
+use crate::rename::RenameItem;
+use crate::sync::{SnapPair, SyncAction, SyncDone, SyncStep};
 use crate::vfs::{Entry, EntryKind, FileSystem, Location, Reader, Writer};
 
 const CHUNK: usize = 256 * 1024;
@@ -69,6 +72,8 @@ pub(super) async fn run(
         Operation::SetMode { location, mode } => job.set_mode(location, mode).await,
         Operation::CreateDir { location } => job.create_dir(location).await,
         Operation::Rename { location, new_name } => job.rename(location, new_name).await,
+        Operation::BatchRename { items } => job.batch_rename(items).await,
+        Operation::Sync { left, right, steps } => job.sync(left, right, steps).await,
     };
     job.emit(true);
     result
@@ -485,11 +490,7 @@ impl Job {
     }
 
     async fn rename(&mut self, loc: Location, new_name: String) -> Result<()> {
-        if new_name.is_empty()
-            || new_name == "."
-            || new_name == ".."
-            || new_name.contains(['/', '\\'])
-        {
+        if crate::rename::name_problem(&new_name).is_some() {
             return Err(Error::Invalid(format!("invalid name: {new_name:?}")));
         }
         let fs = self.fs(&loc.fs)?;
@@ -511,8 +512,6 @@ impl Job {
     }
 }
 
-/// ZIP timestamp. The format has no time zone and, by convention, stores
-/// local time — which is what unzip tools show.
 /// Names from a server must not escape the local folder they are copied
 /// into (e.g. `..` or, on Windows, `C:\\Users\\…`).
 fn check_name(dst_fs: &Fs, name: &str) -> Result<()> {
@@ -524,6 +523,8 @@ fn check_name(dst_fs: &Fs, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// ZIP timestamp. The format has no time zone and, by convention, stores
+/// local time — which is what unzip tools show.
 fn zip_date(ms: i64) -> async_zip::ZipDateTime {
     use chrono::{Datelike, TimeZone, Timelike};
     let t = chrono::Local
@@ -539,4 +540,256 @@ fn zip_date(ms: i64) -> async_zip::ZipDateTime {
         .minute(t.minute())
         .second(t.second())
         .build()
+}
+
+// ---- batch rename ---------------------------------------------------------------
+
+impl Job {
+    async fn batch_rename(&mut self, items: Vec<RenameItem>) -> Result<()> {
+        // (fs, from, to) for every item whose name changes.
+        let mut moves: Vec<(Fs, String, String)> = Vec::new();
+        for it in items {
+            if let Some(p) = crate::rename::name_problem(&it.new_name) {
+                return Err(Error::Invalid(format!("{}: {p}", it.new_name)));
+            }
+            let fs = self.fs(&it.location.fs)?;
+            check_name(&fs, &it.new_name)?;
+            let parent = fs
+                .parent(&it.location.path)
+                .ok_or_else(|| Error::Invalid(format!("cannot rename {}", it.location.path)))?;
+            let to = fs.join(&parent, &it.new_name);
+            if to != it.location.path {
+                moves.push((fs, it.location.path, to));
+            }
+        }
+        // Compare without case: most Mac and Windows disks ignore it.
+        let key = |fs: &Fs, p: &str| format!("{}\n{}", fs.id(), p.to_lowercase());
+        let sources: std::collections::HashSet<String> =
+            moves.iter().map(|(fs, from, _)| key(fs, from)).collect();
+        let mut targets = std::collections::HashSet::new();
+        let mut swaps = false;
+        for (fs, _, to) in &moves {
+            if !targets.insert(key(fs, to)) {
+                return Err(Error::Invalid(format!("two items would be named {to}")));
+            }
+            if sources.contains(&key(fs, to)) {
+                // Takes the name another item is leaving, or only changes case.
+                swaps = true;
+            } else if fs.exists(to).await? {
+                return Err(Error::AlreadyExists(to.clone()));
+            }
+        }
+        self.progress.files_total = moves.len() as u64;
+        self.emit(true);
+        if !swaps {
+            for (fs, from, to) in &moves {
+                self.check()?;
+                self.set_current(from);
+                fs.rename(from, to).await?;
+                self.progress.files_done += 1;
+            }
+            return Ok(());
+        }
+        // Names are swapped: move everything to a temporary name first.
+        let tag = &Uuid::new_v4().simple().to_string()[..8];
+        let mut parked: Vec<(Fs, String, String, String)> = Vec::new();
+        let mut result = Ok(());
+        for (i, (fs, from, to)) in moves.iter().enumerate() {
+            let parent = fs.parent(from).unwrap_or_default();
+            let tmp = fs.join(&parent, &format!(".dualpal-rename-{tag}-{i}"));
+            self.set_current(from);
+            if let Err(e) = fs.rename(from, &tmp).await {
+                result = Err(e);
+                break;
+            }
+            parked.push((fs.clone(), from.clone(), tmp, to.clone()));
+        }
+        let mut placed = 0;
+        if result.is_ok() {
+            for (fs, _, tmp, to) in &parked {
+                if let Err(e) = fs.rename(tmp, to).await {
+                    result = Err(e);
+                    break;
+                }
+                placed += 1;
+                self.progress.files_done += 1;
+                self.emit(false);
+            }
+        }
+        if result.is_err() {
+            // Put back what has not reached its new name.
+            for (fs, from, tmp, _) in parked.iter().skip(placed) {
+                let _ = fs.rename(tmp, from).await;
+            }
+        }
+        result
+    }
+}
+
+// ---- sync -------------------------------------------------------------------------
+
+impl Job {
+    fn sync_done(&self, d: SyncDone) {
+        self.inner
+            .sync_results
+            .lock()
+            .unwrap()
+            .entry(self.id)
+            .or_default()
+            .push(d);
+    }
+
+    async fn sync(&mut self, left: Location, right: Location, steps: Vec<SyncStep>) -> Result<()> {
+        let lfs = self.fs(&left.fs)?;
+        let rfs = self.fs(&right.fs)?;
+        for s in &steps {
+            let t = match s.action {
+                SyncAction::CopyToRight => s.left,
+                SyncAction::CopyToLeft => s.right,
+                _ => None,
+            };
+            match s.action {
+                SyncAction::Skip => {}
+                SyncAction::DeleteLeft | SyncAction::DeleteRight => self.progress.files_total += 1,
+                _ => {
+                    let t = t.unwrap_or_default();
+                    self.progress.files_total += t.files;
+                    self.progress.bytes_total += t.bytes;
+                }
+            }
+        }
+        self.emit(true);
+        for s in &steps {
+            self.check()?;
+            let (lp, rp) = (
+                compare::resolve(lfs.as_ref(), &left.path, &s.rel),
+                compare::resolve(rfs.as_ref(), &right.path, &s.rel),
+            );
+            match s.action {
+                SyncAction::Skip => {}
+                SyncAction::CopyToRight => {
+                    self.sync_copy(&lfs, &lp, &rfs, &right.path, &s.rel, true)
+                        .await?
+                }
+                SyncAction::CopyToLeft => {
+                    self.sync_copy(&rfs, &rp, &lfs, &left.path, &s.rel, false)
+                        .await?
+                }
+                SyncAction::DeleteLeft | SyncAction::DeleteRight => {
+                    let (fs, path) = if s.action == SyncAction::DeleteLeft {
+                        (&lfs, &lp)
+                    } else {
+                        (&rfs, &rp)
+                    };
+                    self.set_current(path);
+                    if fs.exists(path).await? {
+                        self.remove_tree(fs, path).await?;
+                    }
+                    self.progress.files_done += 1;
+                    self.sync_done(SyncDone::Deleted { rel: s.rel.clone() });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete a file or a whole folder.
+    async fn remove_tree(&mut self, fs: &Fs, path: &str) -> Result<()> {
+        let root = fs.stat(path).await?;
+        let mut items = Vec::new();
+        let mut stack = vec![root];
+        while let Some(e) = stack.pop() {
+            self.check()?;
+            let real_dir = e.is_dir() && !e.symlink;
+            if real_dir {
+                stack.extend(fs.list(&e.path).await?);
+            }
+            items.push((e.path, real_dir));
+        }
+        for (p, dir) in items.into_iter().rev() {
+            self.check()?;
+            if dir {
+                fs.remove_dir(&p).await?;
+            } else {
+                fs.remove_file(&p).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Copy the item at `rel` (a file or a whole folder) from `src` to the
+    /// same place below `dst_root`, replacing what is there.
+    async fn sync_copy(
+        &mut self,
+        src_fs: &Fs,
+        src: &str,
+        dst_fs: &Fs,
+        dst_root: &str,
+        rel: &str,
+        to_right: bool,
+    ) -> Result<()> {
+        let entry = src_fs.stat(src).await?;
+        // Create missing parent folders.
+        let segs: Vec<&str> = rel.split('/').filter(|s| !s.is_empty()).collect();
+        let mut parent = dst_root.to_string();
+        for seg in &segs[..segs.len().saturating_sub(1)] {
+            check_name(dst_fs, seg)?;
+            parent = dst_fs.join(&parent, seg);
+            if let Err(e) = dst_fs.create_dir(&parent).await {
+                // Some servers report an existing folder as a generic failure.
+                if !dst_fs.stat(&parent).await.is_ok_and(|e| e.is_dir()) {
+                    return Err(e);
+                }
+            }
+        }
+        let name = segs.last().copied().unwrap_or_default();
+        check_name(dst_fs, name)?;
+        let dst = dst_fs.join(&parent, name);
+        // A file where a folder goes (or the other way round) is replaced.
+        if let Ok(existing) = dst_fs.stat(&dst).await {
+            if existing.is_dir() != entry.is_dir() {
+                self.remove_tree(dst_fs, &dst).await?;
+            }
+        }
+        let mut plan = Vec::new();
+        self.plan(src_fs, dst_fs, entry, dst.clone(), &mut plan)
+            .await?;
+        for item in &plan {
+            self.check()?;
+            self.set_current(&item.src);
+            if item.dir {
+                match dst_fs.create_dir(&item.dst).await {
+                    Ok(()) => {}
+                    Err(Error::AlreadyExists(_)) if dst_fs.stat(&item.dst).await?.is_dir() => {}
+                    Err(e) => return Err(e),
+                }
+            } else {
+                self.copy_file(item, dst_fs, ConflictPolicy::Overwrite)
+                    .await?;
+            }
+            // Record both sides as they are now, for the next sync.
+            let suffix = item.dst[dst.len()..].replace('\\', "/");
+            let item_rel = format!("{rel}{suffix}");
+            let (a, b) = (src_fs.stat(&item.src).await?, dst_fs.stat(&item.dst).await?);
+            let (a, b) = (side(&a), side(&b));
+            let pair = if to_right {
+                SnapPair { l: a, r: b }
+            } else {
+                SnapPair { l: b, r: a }
+            };
+            self.sync_done(SyncDone::Copied {
+                rel: item_rel,
+                pair,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn side(e: &Entry) -> Side {
+    Side {
+        dir: e.is_dir(),
+        size: if e.is_dir() { 0 } else { e.size },
+        modified_ms: e.modified_ms,
+    }
 }

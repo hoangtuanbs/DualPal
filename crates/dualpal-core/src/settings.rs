@@ -14,6 +14,9 @@ pub struct Settings {
     /// Code.app` or `C:\Program Files\Notepad++\notepad++.exe`. Empty means
     /// the system's default app for the file type.
     pub editor: Option<String>,
+    /// Command line of the app used to compare two files, with `{left}`
+    /// and `{right}` (see [`crate::difftools`]). Empty means the first one found.
+    pub diff_tool: Option<String>,
 }
 
 pub struct SettingsStore {

@@ -180,6 +180,7 @@ async fn s3_backend_works_like_a_disk() {
     // The bucket root is a folder.
     assert!(fs.stat("/").await.unwrap().is_dir());
     fs.create_dir("/work").await.unwrap();
+    sync_round_trip(fs.clone(), "/work").await;
     exercise(fs, "/work").await;
 }
 
@@ -265,6 +266,86 @@ impl GetSecret for MemorySecrets {
         use dualpal_core::connections::SecretStore;
         self.get(id).unwrap()
     }
+}
+
+/// Two-way sync a local folder with `base/sync` on `fs`, then check that
+/// the next sync has nothing to do even though the server keeps its own
+/// dates, and that a local edit goes up as a single step.
+async fn sync_round_trip(fs: Arc<dyn FileSystem>, base: &str) {
+    use dualpal_core::compare::CompareOptions;
+    use dualpal_core::sync::{SyncAction, SyncEngine, SyncMode};
+    use std::collections::HashMap;
+    use tokio_util::sync::CancellationToken;
+
+    let registry = Arc::new(Registry::with_local());
+    registry.register(fs.clone());
+    let q = OperationQueue::new(registry, Arc::new(ActivityLog::in_memory(10)), 2);
+    let engine = SyncEngine::new(q.clone(), None);
+    let local = tempfile::tempdir().unwrap();
+    std::fs::create_dir(local.path().join("docs")).unwrap();
+    std::fs::write(local.path().join("docs/a.txt"), "alpha").unwrap();
+    std::fs::write(local.path().join("b.txt"), "beta").unwrap();
+    let remote_dir = fs.join(base, "sync");
+    fs.create_dir(&remote_dir).await.unwrap();
+    put(&*fs, &fs.join(&remote_dir, "c.txt"), "from the server").await;
+    let l = Location::new("local", local.path().to_string_lossy());
+    let r = Location::new(fs.id(), remote_dir.clone());
+    let plan = |mode| {
+        let (engine, l, r) = (engine.clone(), l.clone(), r.clone());
+        async move {
+            engine
+                .plan(
+                    &l,
+                    &r,
+                    mode,
+                    CompareOptions::default(),
+                    CancellationToken::new(),
+                    None,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let run = |p: dualpal_core::sync::SyncPreview| {
+        let (engine, q) = (engine.clone(), q.clone());
+        async move {
+            let run = engine.run(p.id, &HashMap::new()).unwrap();
+            run.done.await.unwrap();
+            let info = q.get(run.op).unwrap();
+            assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+        }
+    };
+    run(plan(SyncMode::TwoWay).await).await;
+    assert_eq!(
+        get(&*fs, &fs.join(&remote_dir, "docs/a.txt")).await,
+        "alpha"
+    );
+    assert_eq!(
+        std::fs::read_to_string(local.path().join("c.txt")).unwrap(),
+        "from the server"
+    );
+    let again = plan(SyncMode::TwoWay).await;
+    assert!(again.steps.is_empty(), "{:?}", again.steps);
+
+    std::fs::write(local.path().join("b.txt"), "beta, edited").unwrap();
+    let edit = plan(SyncMode::TwoWay).await;
+    let steps: Vec<_> = edit
+        .steps
+        .iter()
+        .map(|s| (s.rel.as_str(), s.action))
+        .collect();
+    assert_eq!(steps, vec![("b.txt", SyncAction::CopyToRight)]);
+    run(edit).await;
+    assert_eq!(
+        get(&*fs, &fs.join(&remote_dir, "b.txt")).await,
+        "beta, edited"
+    );
+    assert!(plan(SyncMode::TwoWay).await.steps.is_empty());
+
+    let id = q.enqueue(Operation::Delete {
+        targets: vec![Location::new(fs.id(), remote_dir)],
+    });
+    assert_eq!(q.wait(id).await.unwrap().status, OperationStatus::Completed);
 }
 
 /// `DUALPAL_TEST_SFTP=user@host:port`, `DUALPAL_TEST_SFTP_KEY=/path/to/key`.
@@ -359,6 +440,7 @@ async fn sftp_backend_against_a_real_server() {
     assert_eq!(st.modified_ms, Some(1_600_000_000_000));
     c.fs.remove_file(&c.fs.join(&base, "x.sh")).await.unwrap();
 
+    sync_round_trip(c.fs.clone(), &base).await;
     exercise(c.fs.clone(), &base).await;
     c.fs.remove_dir(&base).await.unwrap();
 }
@@ -485,6 +567,7 @@ async fn s3_backend_against_a_real_server() {
     assert_eq!(n, 20 << 20);
     c.fs.remove_file(&big).await.unwrap();
 
+    sync_round_trip(c.fs.clone(), &base).await;
     exercise(c.fs.clone(), &base).await;
     c.fs.remove_dir(&base).await.unwrap();
     assert!(matches!(c.fs.stat(&base).await, Err(Error::NotFound(_))));
