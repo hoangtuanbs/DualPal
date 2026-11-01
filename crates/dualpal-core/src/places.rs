@@ -54,43 +54,81 @@ pub fn volumes() -> Vec<Volume> {
 pub fn wsl_distros() -> Vec<Volume> {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let output = std::process::Command::new("reg.exe")
-            .args([
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss",
-                "/s",
-                "/v",
-                "DistributionName",
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
-        match output {
-            Ok(o) if o.status.success() => {
-                wsl_volumes(&parse_wsl_names(&String::from_utf8_lossy(&o.stdout)))
-            }
-            _ => Vec::new(),
-        }
+        wsl_volumes(&wsl_names(registry::wsl_distribution_names()))
     }
     #[cfg(not(windows))]
     Vec::new()
 }
 
-/// Distribution names from `reg query ... /v DistributionName` output, in
-/// order, without Docker Desktop's internal ones.
-pub fn parse_wsl_names(reg_output: &str) -> Vec<String> {
-    let mut names: Vec<String> = reg_output
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            (parts.next()? == "DistributionName" && parts.next()? == "REG_SZ")
-                .then(|| parts.collect::<Vec<_>>().join(" "))
-        })
-        .filter(|n| !n.is_empty() && !n.to_ascii_lowercase().starts_with("docker-desktop"))
-        .collect();
-    names.dedup();
+/// The distributions to show: without Docker Desktop's internal ones,
+/// empty names or duplicates.
+pub fn wsl_names(mut names: Vec<String>) -> Vec<String> {
+    names.retain(|n| !n.is_empty() && !n.to_ascii_lowercase().starts_with("docker-desktop"));
+    let mut seen = std::collections::HashSet::new();
+    names.retain(|n| seen.insert(n.clone()));
     names
+}
+
+#[cfg(windows)]
+mod registry {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+        RRF_RT_REG_SZ,
+    };
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(Some(0)).collect()
+    }
+
+    /// `DistributionName` of every subkey of HKCU\...\Lxss, read as UTF-16.
+    pub fn wsl_distribution_names() -> Vec<String> {
+        let path = wide(r"Software\Microsoft\Windows\CurrentVersion\Lxss");
+        let value = wide("DistributionName");
+        let mut names = Vec::new();
+        unsafe {
+            let mut key: HKEY = std::ptr::null_mut();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &mut key)
+                != ERROR_SUCCESS
+            {
+                return names;
+            }
+            for index in 0.. {
+                let mut sub = [0u16; 256];
+                let mut sub_len = sub.len() as u32;
+                let status = RegEnumKeyExW(
+                    key,
+                    index,
+                    sub.as_mut_ptr(),
+                    &mut sub_len,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                if status != ERROR_SUCCESS {
+                    break;
+                }
+                let mut data = [0u16; 512];
+                let mut bytes = (data.len() * 2) as u32;
+                if RegGetValueW(
+                    key,
+                    sub.as_ptr(),
+                    value.as_ptr(),
+                    RRF_RT_REG_SZ,
+                    std::ptr::null_mut(),
+                    data.as_mut_ptr().cast(),
+                    &mut bytes,
+                ) == ERROR_SUCCESS
+                {
+                    let len = data.iter().position(|&c| c == 0).unwrap_or(data.len());
+                    names.push(String::from_utf16_lossy(&data[..len]));
+                }
+            }
+            RegCloseKey(key);
+        }
+        names
+    }
 }
 
 /// Sidebar entries for WSL distributions, opening at the distribution's root.

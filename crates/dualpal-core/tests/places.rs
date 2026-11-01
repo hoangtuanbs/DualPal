@@ -43,16 +43,19 @@ fn volumes_include_the_system_disk() {
 }
 
 #[test]
-fn wsl_names_come_from_reg_output() {
-    use dualpal_core::places::{parse_wsl_names, wsl_volumes};
-    let out = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\{1b2c}\r\n    DistributionName    REG_SZ    Ubuntu-22.04\r\n\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\{3d4e}\r\n    DistributionName    REG_SZ    docker-desktop\r\n\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\{5f6a}\r\n    DistributionName    REG_SZ    My Distro\r\n\r\nEnd of search: 3 match(es) found.\r\n";
-    let names = parse_wsl_names(out);
-    assert_eq!(names, vec!["Ubuntu-22.04", "My Distro"]);
+fn wsl_names_hide_docker_and_keep_spaces() {
+    use dualpal_core::places::{wsl_names, wsl_volumes};
+    let names = wsl_names(vec![
+        "Ubuntu-22.04".into(),
+        "docker-desktop".into(),
+        "docker-desktop-data".into(),
+        "My  Distro".into(),
+        "".into(),
+        "Ubuntu-22.04".into(),
+    ]);
+    assert_eq!(names, vec!["Ubuntu-22.04", "My  Distro"]);
     let vols = wsl_volumes(&names);
     assert_eq!(vols[0].location.path, r"\\wsl.localhost\Ubuntu-22.04\");
-    assert!(vols[0].wsl);
-    assert!(parse_wsl_names(
-        "ERROR: The system was unable to find the specified registry key or value."
-    )
-    .is_empty());
+    assert_eq!(vols[1].location.path, r"\\wsl.localhost\My  Distro\");
+    assert!(vols.iter().all(|v| v.wsl));
 }
