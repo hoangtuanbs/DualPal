@@ -69,35 +69,23 @@ pub fn has_trash(path: &str) -> bool {
     !(cfg!(windows) && (path.starts_with(r"\\") || path.starts_with("//")))
 }
 
-/// Where a symlink points when the OS cannot follow it itself: WSL links
-/// seen through `\\wsl.localhost\<distro>\`, whose targets are Linux
-/// paths. Absolute targets are taken from the root of the share.
-fn resolve_link(path: &Path) -> Option<PathBuf> {
-    let target = std::fs::read_link(path).ok()?;
-    let target = target
-        .to_string_lossy()
-        .replace('/', std::path::MAIN_SEPARATOR_STR);
-    if target.starts_with(std::path::MAIN_SEPARATOR) {
-        use std::path::Component;
-        // Only a share's root (a Windows path prefix) stands in for Linux's "/".
-        let mut parts = path.components();
-        let prefix @ Component::Prefix(_) = parts.next()? else {
-            return None;
-        };
-        let root = PathBuf::from(prefix.as_os_str()).join(std::path::MAIN_SEPARATOR_STR);
-        Some(root.join(target.trim_start_matches(std::path::MAIN_SEPARATOR)))
-    } else {
-        Some(path.parent()?.join(target))
+/// Windows can't follow WSL's Linux symlinks, so they look like small files.
+/// Ask the distribution which of them point to folders.
+async fn mark_wsl_folder_links(entries: &mut [Entry]) {
+    let links: Vec<usize> = (0..entries.len())
+        .filter(|&i| entries[i].symlink && entries[i].kind != EntryKind::Dir)
+        .collect();
+    if links.is_empty() {
+        return;
     }
-}
-
-/// Metadata of what a symlink points to, also for links the OS can't follow.
-async fn follow(path: &Path) -> Option<Metadata> {
-    if let Ok(meta) = tokio::fs::metadata(path).await {
-        return Some(meta);
+    let paths: Vec<String> = links.iter().map(|&i| entries[i].path.clone()).collect();
+    let dirs = super::wsl::which_are_dirs(&paths).await;
+    for (&i, is_dir) in links.iter().zip(dirs) {
+        if is_dir {
+            entries[i].kind = EntryKind::Dir;
+            entries[i].size = 0;
+        }
     }
-    let resolved = resolve_link(path)?;
-    tokio::fs::metadata(resolved).await.ok()
 }
 
 /// Build an entry from `symlink_metadata`, following the link (if any) to
@@ -105,7 +93,7 @@ async fn follow(path: &Path) -> Option<Metadata> {
 async fn entry_for(path: &Path, link_meta: Metadata) -> Entry {
     let symlink = link_meta.file_type().is_symlink();
     let meta = if symlink {
-        follow(path).await.unwrap_or(link_meta)
+        tokio::fs::metadata(path).await.unwrap_or(link_meta)
     } else {
         link_meta
     };
@@ -174,8 +162,8 @@ impl FileSystem for LocalFs {
     async fn list(&self, dir: &str) -> Result<Vec<Entry>> {
         let mut rd = match tokio::fs::read_dir(dir).await {
             Ok(rd) => rd,
-            // A link to a folder that the OS can't follow (WSL): list its target.
-            Err(e) => match resolve_link(Path::new(dir)) {
+            // A WSL link to a folder, which Windows can't follow: list its target.
+            Err(e) => match super::wsl::resolve_dir(dir).await {
                 Some(target) => tokio::fs::read_dir(&target)
                     .await
                     .map_err(|_| Error::io(dir, e))?,
@@ -190,6 +178,9 @@ impl FileSystem for LocalFs {
                 continue;
             };
             out.push(entry_for(&path, meta).await);
+        }
+        if super::wsl::split(dir).is_some() {
+            mark_wsl_folder_links(&mut out).await;
         }
         Ok(out)
     }

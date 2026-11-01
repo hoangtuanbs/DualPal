@@ -34,12 +34,14 @@
   let checked = $state(true);
   let field: HTMLInputElement | undefined = $state();
   let okButton: HTMLButtonElement | undefined = $state();
+  let cancelButton: HTMLButtonElement | undefined = $state();
 
   // Focus once on open. `untrack` keeps this from re-running (and
   // re-selecting the text) on every keystroke.
   $effect(() => {
     const f = field;
-    const ok = okButton;
+    // A dangerous action (permanent delete) starts on Cancel, so Enter is safe.
+    const ok = danger ? cancelButton : okButton;
     untrack(() => {
       if (f) {
         f.focus();
@@ -79,7 +81,7 @@
       <label class="check"><input type="checkbox" bind:checked /> {checkbox}</label>
     {/if}
     <div class="buttons">
-      <button type="button" class="secondary" onclick={oncancel}>Cancel</button>
+      <button type="button" class="secondary" onclick={oncancel} bind:this={cancelButton}>Cancel</button>
       <button type="submit" class="primary" class:danger bind:this={okButton}>{confirmLabel}</button>
     </div>
   </form>

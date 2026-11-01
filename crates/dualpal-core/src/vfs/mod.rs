@@ -10,6 +10,7 @@ pub mod posix;
 mod s3;
 mod sftp;
 mod text;
+pub mod wsl;
 
 pub use local::LocalFs;
 pub use s3::{S3Fs, S3Params};
