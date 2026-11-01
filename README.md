@@ -103,10 +103,20 @@ DUALPAL_TEST_SFTP=user@127.0.0.1:2222 DUALPAL_TEST_SFTP_KEY=~/.ssh/test_key \
 3. **Remote connections** — SFTP over SSH and S3, each with nested favorites; edit remote files in your preferred editor with automatic upload on save. ✅
 4. **Compare & power tools** — folder compare and one/two-way sync (saved as favorites), synchronized browsing, external file compare tools, multi-rename presets, command palette, activity insights. ✅
 
+## Installing
+
+Installers for each version are on the [Releases](https://github.com/hoangtuanbs/DualPal/releases) page:
+
+- **Windows** — `Dual.Pal_<version>_x64-setup.exe` (installs for the current user, no admin needed) or `Dual.Pal_<version>_x64_en-US.msi` (for managed installs). SmartScreen may warn about an unknown publisher; choose *More info → Run anyway*.
+- **Linux** — `.deb` for Debian and Ubuntu (`sudo apt install ./Dual.Pal_<version>_amd64.deb`), `.rpm` for Fedora and openSUSE (`sudo dnf install ./Dual.Pal-<version>-1.x86_64.rpm`), or the `.AppImage`, which runs on most distributions after `chmod +x`.
+- **macOS** — the `.dmg` runs on Apple Silicon and Intel. The app is not notarized yet, so after dragging it to Applications run `xattr -cr "/Applications/Dual Pal.app"` once.
+
+To publish a release, set `version` in `src-tauri/tauri.conf.json` and the root `Cargo.toml`, merge to `main`, then push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`. The **Build installers** workflow builds all platforms and creates the release.
+
 ## Test builds
 
 Every push to `main` and every pull request runs the **Build installers** workflow (it can also be started by hand from the Actions tab). Download the installer from the run's **Artifacts** section:
 
 - **macOS** — `DualPal-macOS` contains a `.dmg` that runs on Apple Silicon and Intel. The app is not notarized yet, so after dragging it to Applications run `xattr -cr "/Applications/Dual Pal.app"` once (or right-click → Open) to get past Gatekeeper.
 - **Windows** — `DualPal-Windows` contains an `.msi` and a setup `.exe`. SmartScreen may warn about an unknown publisher; choose *More info → Run anyway*.
-- **Linux** — `DualPal-Linux` contains an `.AppImage` and a `.deb`.
+- **Linux** — `DualPal-Linux` contains an `.AppImage`, a `.deb` and an `.rpm`.
