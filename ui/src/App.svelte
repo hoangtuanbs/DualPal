@@ -33,6 +33,8 @@
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import Insights from "./lib/Insights.svelte";
   import Icon from "./lib/Icon.svelte";
+  import AboutDialog from "./lib/AboutDialog.svelte";
+  import { emailSupport, openProjectPage } from "./lib/about";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -74,6 +76,7 @@
   let renaming = $state<{ items: Entry[]; folder: Location; others: string[] } | null>(null);
   let showPalette = $state(false);
   let showInsights = $state(false);
+  let aboutPage = $state<"about" | "donate" | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
   let linked = $state(false);
   let diffTools = $state<DiffTool[]>([]);
@@ -438,6 +441,10 @@
       { id: "forward", group: "Go", title: "Forward", run: () => active.forward() },
       { id: "up", group: "Go", title: "Enclosing Folder", shortcut: `${MOD}↑`, run: () => active.up() },
       { id: "insights", group: "Activity", title: "Activity Insights…", run: () => (showInsights = true) },
+      { id: "about", group: "Help", title: "About Dual Pal", run: () => (aboutPage = "about") },
+      { id: "donate", group: "Help", title: "Donate…", run: () => (aboutPage = "donate") },
+      { id: "email", group: "Help", title: "Email Us…", run: () => emailSupport().catch((e) => (notice = errorMessage(e))) },
+      { id: "github", group: "Help", title: "Dual Pal on GitHub", run: () => openProjectPage().catch((e) => (notice = errorMessage(e))) },
       { id: "clearOps", group: "Activity", title: "Clear Finished Operations", run: clearFinished },
       { id: "addServer", group: "Servers", title: "Add Server…", run: () => (editing = null) },
     ];
@@ -643,7 +650,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (dialog || editing !== undefined || comparing || renaming || showPalette || showInsights) return;
+    if (dialog || editing !== undefined || comparing || renaming || showPalette || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -847,6 +854,12 @@
         title="Show hidden files (Ctrl/⌘ Shift .)"><Icon name="eye" /></button
       >
     </div>
+    <div class="group">
+      <button class="heart" onclick={() => (aboutPage = "donate")} aria-label="Donate" title="Support Dual Pal with a donation"
+        ><Icon name="heart" /></button
+      >
+      <button onclick={() => (aboutPage = "about")} aria-label="About" title="About Dual Pal, help and support"><Icon name="help" /></button>
+    </div>
   </div>
 
   <div class="middle" class:with-inspector={showInspector}>
@@ -956,6 +969,10 @@
   <CommandPalette {commands} onclose={() => (showPalette = false)} />
 {/if}
 
+{#if aboutPage}
+  <AboutDialog start={aboutPage} onclose={() => (aboutPage = null)} />
+{/if}
+
 {#if showInsights}
   <Insights {nameOf} onclose={() => (showInsights = false)} />
 {/if}
@@ -1008,6 +1025,9 @@
   }
   .group button:hover {
     background: var(--control-hover);
+  }
+  .group button.heart {
+    color: #e0245e;
   }
   .group button[aria-pressed="true"] {
     background: var(--accent);

@@ -129,3 +129,18 @@ Every push to `main` and every pull request runs the **Build installers** workfl
 - **macOS** — `DualPal-macOS` contains a `.dmg` that runs on Apple Silicon and Intel. The app is not notarized yet, so after dragging it to Applications run `xattr -cr "/Applications/Dual Pal.app"` once (or right-click → Open) to get past Gatekeeper.
 - **Windows** — `DualPal-Windows` contains an `.msi` and a setup `.exe`. SmartScreen may warn about an unknown publisher; choose *More info → Run anyway*.
 - **Linux** — `DualPal-Linux` contains an `.AppImage`, a `.deb` and an `.rpm`.
+
+## Help
+
+Click the **?** button at the right end of the toolbar and choose **Email Us…**, or write to [hoangtuanbs@proton.me](mailto:hoangtuanbs@proton.me).
+Bugs and ideas are also welcome as [GitHub issues](https://github.com/hoangtuanbs/DualPal/issues).
+
+## Support the project
+
+Dual Pal is free. If it saves you time, you can donate in Ethereum (also in the app with the ♥ button in the toolbar):
+
+<img src="docs/images/donate-qr.png" width="180" alt="QR code for the Ethereum donation address">
+
+`0xF8352b493e7750C03bde4bdA94A203B010933735`
+
+Ethereum (ETH) address. Please double-check the address in your wallet before sending.
