@@ -145,6 +145,8 @@ pub fn run() {
             commands::remove_favorite,
             commands::reorder_favorites,
             commands::open_path,
+            commands::about_info,
+            commands::open_url,
             commands::stat,
             commands::read_text,
             commands::write_text,

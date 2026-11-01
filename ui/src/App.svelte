@@ -32,6 +32,9 @@
   import MultiRename from "./lib/MultiRename.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import Insights from "./lib/Insights.svelte";
+  import Icon from "./lib/Icon.svelte";
+  import AboutDialog from "./lib/AboutDialog.svelte";
+  import { emailSupport, openProjectPage } from "./lib/about";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -73,6 +76,7 @@
   let renaming = $state<{ items: Entry[]; folder: Location; others: string[] } | null>(null);
   let showPalette = $state(false);
   let showInsights = $state(false);
+  let aboutPage = $state<"about" | "donate" | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
   let linked = $state(false);
   let diffTools = $state<DiffTool[]>([]);
@@ -437,6 +441,10 @@
       { id: "forward", group: "Go", title: "Forward", run: () => active.forward() },
       { id: "up", group: "Go", title: "Enclosing Folder", shortcut: `${MOD}↑`, run: () => active.up() },
       { id: "insights", group: "Activity", title: "Activity Insights…", run: () => (showInsights = true) },
+      { id: "about", group: "Help", title: "About Dual Pal", run: () => (aboutPage = "about") },
+      { id: "donate", group: "Help", title: "Donate…", run: () => (aboutPage = "donate") },
+      { id: "email", group: "Help", title: "Email Us…", run: () => emailSupport().catch((e) => (notice = errorMessage(e))) },
+      { id: "github", group: "Help", title: "Dual Pal on GitHub", run: () => openProjectPage().catch((e) => (notice = errorMessage(e))) },
       { id: "clearOps", group: "Activity", title: "Clear Finished Operations", run: clearFinished },
       { id: "addServer", group: "Servers", title: "Add Server…", run: () => (editing = null) },
     ];
@@ -642,7 +650,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (dialog || editing !== undefined || comparing || renaming || showPalette || showInsights) return;
+    if (dialog || editing !== undefined || comparing || renaming || showPalette || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -778,50 +786,80 @@
 <div class="app">
   <div class="toolbar">
     <div class="group">
-      <button onclick={() => transfer("copy")} title="Copy to the other pane (F5)">Copy →</button>
-      <button onclick={() => transfer("move")} title="Move to the other pane (F6)">Move →</button>
+      <button onclick={() => transfer("copy")} aria-label="Copy" title="Copy to the other pane (F5)"><Icon name="copy" /></button>
+      <button onclick={() => transfer("move")} aria-label="Move" title="Move to the other pane (F6)"><Icon name="move" /></button>
     </div>
     <div class="group">
-      <button onclick={newFolder} title="New folder (F7)">New Folder</button>
-      <button onclick={rename} title="Rename (F2)">Rename</button>
-      <button onclick={multiRename} title="Rename the marked items with rules and presets (Shift F2)">Multi Rename</button>
-      <button onclick={editInEditor} title="Edit in your preferred editor (F4). Files on servers upload again when you save.">Edit</button>
-      <button onclick={compress} title="Compress into a ZIP archive">Compress</button>
-      <button onclick={trash} title="Move to Trash (F8 / Delete). Shift+Delete deletes permanently.">Trash</button>
+      <button onclick={newFolder} aria-label="New Folder" title="New folder (F7)"><Icon name="folder-plus" /></button>
+      <button onclick={rename} aria-label="Rename" title="Rename (F2)"><Icon name="rename" /></button>
+      <button onclick={multiRename} aria-label="Multi Rename" title="Multi Rename: rename the marked items with rules and presets (Shift F2)"
+        ><Icon name="multi-rename" /></button
+      >
+      <button onclick={editInEditor} aria-label="Edit" title="Edit in your preferred editor (F4). Files on servers upload again when you save."
+        ><Icon name="edit" /></button
+      >
+      <button onclick={compress} aria-label="Compress" title="Compress into a ZIP archive"><Icon name="archive" /></button>
+      <button onclick={trash} aria-label="Trash" title="Move to Trash (F8 / Delete). Shift+Delete deletes permanently."><Icon name="trash" /></button>
     </div>
     <div class="group">
-      <button onclick={compareFolders} title="Compare the two panes' folders and sync them ({MOD}Shift Y)">Compare & Sync</button>
-      <button onclick={compareFiles} title="Open two files in your compare app ({MOD}Shift D)">Compare Files</button>
+      <button onclick={compareFolders} aria-label="Compare & Sync" title="Compare & Sync: compare the two panes' folders and sync them ({MOD}Shift Y)"
+        ><Icon name="sync" /></button
+      >
+      <button onclick={compareFiles} aria-label="Compare Files" title="Compare Files: open two files in your compare app ({MOD}Shift D)"
+        ><Icon name="compare-files" /></button
+      >
       <button
         aria-pressed={linked}
         onclick={toggleLinked}
-        title="Synchronized browsing: going into or out of a folder in one pane does the same in the other ({MOD}Shift L)">🔗 Linked</button
+        aria-label="Linked browsing"
+        title="Linked browsing: going into or out of a folder in one pane does the same in the other ({MOD}Shift L)"><Icon name="link" /></button
       >
     </div>
+    <!-- Pushes the view and pane groups to the right; errors show in the gap. -->
+    <div class="spacer">
+      {#if notice}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <span class="notice" title={notice} onclick={() => (notice = null)}>{notice}</span>
+      {/if}
+    </div>
     <div class="group" role="group" aria-label="View">
-      <button aria-pressed={active.view === "list"} onclick={() => (active.view = "list")} title="List view (Ctrl/⌘ 1)">☰ List</button>
-      <button aria-pressed={active.view === "icons"} onclick={() => (active.view = "icons")} title="Icon view (Ctrl/⌘ 2)">▦ Icons</button>
+      <button aria-pressed={active.view === "list"} onclick={() => (active.view = "list")} aria-label="List view" title="List view (Ctrl/⌘ 1)"
+        ><Icon name="list" /></button
+      >
+      <button aria-pressed={active.view === "icons"} onclick={() => (active.view = "icons")} aria-label="Icon view" title="Icon view (Ctrl/⌘ 2)"
+        ><Icon name="grid" /></button
+      >
     </div>
     <div class="group">
-      <button onclick={() => selectByPattern(true)} title="Select by name or extension (+). Deselect with −.">Select…</button>
-      <button aria-pressed={isFavorite} onclick={toggleFavorite} title={isFavorite ? "Remove folder from Favorites" : "Add folder to Favorites"}>★</button>
-      <button onclick={() => groups[activeIndex].newTab()} title="New tab (Ctrl/⌘ T)">+ Tab</button>
-      <button aria-pressed={showInspector} onclick={() => (showInspector = !showInspector)} title="Show preview and info (Ctrl/⌘ I)">ⓘ Info</button>
+      <button onclick={() => selectByPattern(true)} aria-label="Select" title="Select by name or extension (+). Deselect with −."><Icon name="select" /></button>
+      <button
+        aria-pressed={isFavorite}
+        onclick={toggleFavorite}
+        aria-label="Favorite"
+        title={isFavorite ? "Remove folder from Favorites" : "Add folder to Favorites"}><Icon name="star" filled={isFavorite} /></button
+      >
+      <button onclick={() => groups[activeIndex].newTab()} aria-label="New Tab" title="New tab (Ctrl/⌘ T)"><Icon name="new-tab" /></button>
+      <button aria-pressed={showInspector} onclick={() => (showInspector = !showInspector)} aria-label="Info" title="Show preview and info (Ctrl/⌘ I)"
+        ><Icon name="info" /></button
+      >
     </div>
     <div class="group">
-      <button onclick={() => active.refresh()} title="Refresh (Ctrl/⌘ R)">Refresh</button>
-      <button onclick={chooseEditor} title="Choose the editor used by Edit">Editor…</button>
-      <button onclick={() => (showPalette = true)} title="Find any command ({MOD}Shift P)">Commands…</button>
+      <button onclick={() => active.refresh()} aria-label="Refresh" title="Refresh (Ctrl/⌘ R)"><Icon name="refresh" /></button>
+      <button onclick={chooseEditor} aria-label="Editor" title="Choose the editor used by Edit"><Icon name="file-code" /></button>
+      <button onclick={() => (showPalette = true)} aria-label="Commands" title="Find any command ({MOD}Shift P)"><Icon name="command" /></button>
       <button
         aria-pressed={active.showHidden}
         onclick={() => (active.showHidden = !active.showHidden)}
-        title="Show hidden files (Ctrl/⌘ Shift .)">Hidden files</button
+        aria-label="Hidden files"
+        title="Show hidden files (Ctrl/⌘ Shift .)"><Icon name="eye" /></button
       >
     </div>
-    {#if notice}
-      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-      <span class="notice" title={notice} onclick={() => (notice = null)}>{notice}</span>
-    {/if}
+    <div class="group">
+      <button class="heart" onclick={() => (aboutPage = "donate")} aria-label="Donate" title="Support Dual Pal with a donation"
+        ><Icon name="heart" /></button
+      >
+      <button onclick={() => (aboutPage = "about")} aria-label="About" title="About Dual Pal, help and support"><Icon name="help" /></button>
+    </div>
   </div>
 
   <div class="middle" class:with-inspector={showInspector}>
@@ -931,6 +969,10 @@
   <CommandPalette {commands} onclose={() => (showPalette = false)} />
 {/if}
 
+{#if aboutPage}
+  <AboutDialog start={aboutPage} onclose={() => (aboutPage = null)} />
+{/if}
+
 {#if showInsights}
   <Insights {nameOf} onclose={() => (showInsights = false)} />
 {/if}
@@ -974,16 +1016,27 @@
     flex-shrink: 0;
   }
   .group button {
-    padding: 5px 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 9px;
     background: var(--control);
     white-space: nowrap;
   }
   .group button:hover {
     background: var(--control-hover);
   }
+  .group button.heart {
+    color: #e0245e;
+  }
   .group button[aria-pressed="true"] {
     background: var(--accent);
     color: white;
+  }
+  .spacer {
+    flex: 1;
+    display: flex;
+    min-width: 0;
   }
   .notice {
     color: var(--danger);

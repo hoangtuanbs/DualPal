@@ -1,11 +1,13 @@
 name: Build installers
 
-# Builds downloadable test installers for macOS, Windows and Linux.
-# Find them under "Artifacts" on the workflow run page.
+# Builds installers for macOS, Windows and Linux. Every run keeps them under
+# "Artifacts" on the run page; pushing a version tag such as v0.2.0 also
+# publishes them on a GitHub Release.
 on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 concurrency:
@@ -35,12 +37,13 @@ jobs:
               target/release/bundle/nsis/*.exe
           - name: Linux
             os: ubuntu-24.04
-            args: --bundles appimage,deb
+            args: --bundles appimage,deb,rpm
             rust-targets: ""
             artifact: DualPal-Linux
             paths: |
               target/release/bundle/appimage/*.AppImage
               target/release/bundle/deb/*.deb
+              target/release/bundle/rpm/*.rpm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -69,9 +72,45 @@ jobs:
       - name: Build installer
         run: npx tauri build ${{ matrix.args }}
 
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in tauri.conf.json"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.paths }}
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Artifacts keep their bundle subfolders (msi/, nsis/, deb/...),
+          # so collect the installer files from every level.
+          mapfile -t files < <(find installers -type f)
+          printf '%s\n' "${files[@]}"
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Dual Pal ${GITHUB_REF_NAME#v}" \
+            --generate-notes

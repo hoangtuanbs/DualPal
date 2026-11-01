@@ -202,3 +202,37 @@ pub async fn write_text(
     let fs = state.registry.get(&location.fs)?;
     dualpal_core::vfs::write_text(fs.as_ref(), &location.path, &text).await
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutInfo {
+    version: String,
+    os: String,
+    arch: String,
+}
+
+/// Version and platform for the About window and support emails.
+#[tauri::command]
+pub fn about_info(app: tauri::AppHandle) -> AboutInfo {
+    AboutInfo {
+        version: app.package_info().version.to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+    }
+}
+
+/// Open a web or email link in the default browser or mail app.
+/// Only https: and mailto: links are allowed.
+#[tauri::command]
+pub fn open_url(app: tauri::AppHandle, url: String) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    if !(url.starts_with("https://") || url.starts_with("mailto:")) {
+        return Err(Error::Unsupported(format!("opening {url}")));
+    }
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| Error::Io {
+            path: url.clone(),
+            source: std::io::Error::other(e.to_string()),
+        })
+}

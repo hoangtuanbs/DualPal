@@ -8,6 +8,12 @@ export interface Location {
   path: string;
 }
 
+export interface AboutInfo {
+  version: string;
+  os: string;
+  arch: string;
+}
+
 export type EntryKind = "file" | "dir" | "other";
 
 export interface Entry {
@@ -353,6 +359,8 @@ export const api = {
   removeFavorite: (location: Location) => invoke<Favorite[]>("remove_favorite", { location }),
   reorderFavorites: (from: number, to: number) => invoke<Favorite[]>("reorder_favorites", { from, to }),
   openPath: (location: Location) => invoke<void>("open_path", { location }),
+  aboutInfo: () => invoke<AboutInfo>("about_info"),
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
   stat: (location: Location) => invoke<Entry>("stat", { location }),
   readText: (location: Location, maxBytes: number) => invoke<TextFile>("read_text", { location, maxBytes }),
   writeText: (location: Location, text: string) => invoke<void>("write_text", { location, text }),
