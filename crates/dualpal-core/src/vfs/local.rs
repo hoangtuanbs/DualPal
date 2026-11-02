@@ -235,6 +235,31 @@ impl FileSystem for LocalFs {
         Ok(Box::new(f))
     }
 
+    async fn open_read_at(&self, path: &str, offset: u64) -> Result<Reader> {
+        use tokio::io::AsyncSeekExt;
+        let mut f = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| Error::io(path, e))?;
+        f.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| Error::io(path, e))?;
+        Ok(Box::new(f))
+    }
+
+    async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
+        use tokio::io::AsyncSeekExt;
+        let mut f = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .await
+            .map_err(|e| Error::io(path, e))?;
+        f.set_len(offset).await.map_err(|e| Error::io(path, e))?;
+        f.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| Error::io(path, e))?;
+        Ok(Box::new(f))
+    }
+
     async fn trash(&self, path: &str) -> Result<()> {
         let path = path.to_string();
         if !has_trash(&path) {

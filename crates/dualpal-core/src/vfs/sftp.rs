@@ -226,7 +226,15 @@ async fn open_live(p: &SftpParams) -> Result<Live> {
         .request_subsystem(true, "sftp")
         .await
         .map_err(|e| Error::Connection(format!("the server has no SFTP: {e}")))?;
-    let sftp = SftpSession::new(channel.into_stream())
+    // More requests in flight than the default 16 keep a link with a long
+    // round trip busy; a longer timeout suits a slow, busy server.
+    let sftp_config = russh_sftp::client::Config {
+        max_concurrent_reads: 64,
+        max_concurrent_writes: 64,
+        request_timeout_secs: 30,
+        ..Default::default()
+    };
+    let sftp = SftpSession::new_with_config(channel.into_stream(), sftp_config)
         .await
         .map_err(|e| Error::Connection(format!("SFTP did not start: {e}")))?;
     Ok(Live { handle, sftp })
@@ -612,6 +620,34 @@ impl FileSystem for SftpFs {
         let live = self.sftp().await?;
         let f = live.sftp.open(path).await.map_err(|e| map_err(path, e))?;
         Ok(Box::new(f))
+    }
+
+    async fn open_read_at(&self, path: &str, offset: u64) -> Result<Reader> {
+        use tokio::io::AsyncSeekExt;
+        let live = self.sftp().await?;
+        let mut f = live.sftp.open(path).await.map_err(|e| map_err(path, e))?;
+        f.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| Error::io(path, e))?;
+        Ok(Box::new(f))
+    }
+
+    async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
+        use tokio::io::AsyncSeekExt;
+        let live = self.sftp().await?;
+        let mut f = live
+            .sftp
+            .open_with_flags(path, OpenFlags::WRITE)
+            .await
+            .map_err(|e| map_err(path, e))?;
+        f.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| Error::io(path, e))?;
+        Ok(Box::new(f))
+    }
+
+    fn parallel_transfers(&self) -> usize {
+        4
     }
 
     async fn open_write(&self, path: &str) -> Result<Writer> {

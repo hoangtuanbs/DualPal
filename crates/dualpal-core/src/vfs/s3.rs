@@ -304,6 +304,14 @@ impl FileSystem for S3Fs {
         self.op.delete(&dk).await.map_err(|e| map_err(path, e))
     }
 
+    fn atomic_writes(&self) -> bool {
+        true // a multipart upload only shows up once it is complete
+    }
+
+    fn parallel_transfers(&self) -> usize {
+        4
+    }
+
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
         // Like a local rename, replace an existing file but never a folder.
         let entry = self.stat(from).await?;
