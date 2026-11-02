@@ -1,11 +1,29 @@
 <script lang="ts">
-  import type { Entry } from "./api";
+  import type { Entry, Location } from "./api";
   import { glyph, thumbnailUrl } from "./fileTypes";
   import { formatBytes, formatDate, formatShortDate } from "./format";
   import type { PaneGroup, SortKey } from "./pane-state.svelte";
   import { fsNames } from "./fs-names.svelte";
+  import { drag, dragging, fromKeyboard, type DropTarget } from "./drag.svelte";
 
-  let { group, active, onfocus }: { group: PaneGroup; active: boolean; onfocus: () => void } = $props();
+  let {
+    group,
+    index,
+    active,
+    onfocus,
+    oncontext,
+    ondrop,
+  }: {
+    group: PaneGroup;
+    /** 0 = left pane, 1 = right pane. */
+    index: number;
+    active: boolean;
+    onfocus: () => void;
+    /** Right-click at (x, y) on an entry, or on empty space (null). */
+    oncontext: (x: number, y: number, entry: Entry | null) => void;
+    /** Dragged items let go over a folder. */
+    ondrop: (items: Entry[], from: Location, target: DropTarget, move: boolean) => void;
+  } = $props();
   const pane = $derived(group.current);
 
   /** Icon grid cell width incl. gap, in px. */
@@ -61,9 +79,126 @@
     return out;
   });
 
+  // ---- drag and drop ------------------------------------------------------
+  // Pointer events rather than HTML drag and drop, which the Windows webview
+  // only delivers when the app does not take file drops from Explorer.
+
+  /** Where a press started that may become a drag. */
+  let press: { x: number; y: number; entry: Entry; index: number } | null = null;
+  /** The item last clicked, which a Ctrl/⌘-click adds to the marked items. */
+  let clicked: string | null = null;
+  /** Swallows the click that ends a drag. */
+  let justDragged = false;
+
+  function pointerdown(e: PointerEvent, entry: Entry, i: number) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault(); // no text selection while dragging
+    // That also keeps focus where it was, e.g. in the quick editor: move it
+    // to the list so that the keys work on the files again.
+    listEl?.focus({ preventScroll: true });
+    press = { x: e.clientX, y: e.clientY, entry, index: i };
+    window.addEventListener("pointermove", pointermove);
+    window.addEventListener("pointerup", pointerup);
+    window.addEventListener("pointercancel", cancelDrag);
+    window.addEventListener("blur", cancelDrag);
+  }
+
+  function stopListening() {
+    window.removeEventListener("pointermove", pointermove);
+    window.removeEventListener("pointerup", pointerup);
+    window.removeEventListener("pointercancel", cancelDrag);
+    window.removeEventListener("blur", cancelDrag);
+    press = null;
+  }
+
+  /** A press or drag that ends without a drop: Esc, focus lost, cancelled. */
+  function cancelDrag() {
+    const was = press !== null;
+    stopListening();
+    if (was && dragging() && drag.from === index) endDrag();
+  }
+
+  function pointermove(e: PointerEvent) {
+    if (!press) return;
+    if (!dragging()) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 6) return;
+      onfocus();
+      // Dragging an unmarked item drags just that item.
+      if (!pane.selected.has(press.entry.path)) {
+        pane.selected.clear();
+        pane.cursor = press.index;
+      }
+      drag.items = pane.targets;
+      drag.from = index;
+      drag.source = pane.location;
+    }
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    drag.move = e.shiftKey;
+    drag.target = dropTarget(e.clientX, e.clientY);
+  }
+
+  function pointerup(e: PointerEvent) {
+    stopListening();
+    if (!dragging()) return;
+    justDragged = true;
+    setTimeout(() => (justDragged = false));
+    const { items, source, target } = drag;
+    endDrag();
+    if (source && target) ondrop(items, source, target, e.shiftKey);
+  }
+
+  function endDrag() {
+    drag.items = [];
+    drag.target = null;
+    drag.source = null;
+    drag.from = -1;
+  }
+
+  /** The folder under (x, y): a folder row, or else the pane's own folder. */
+  function dropTarget(x: number, y: number): DropTarget | null {
+    const el = document.elementFromPoint(x, y);
+    const paneEl = el?.closest<HTMLElement>("[data-pane]");
+    const fs = paneEl?.dataset.fs;
+    const path = paneEl?.dataset.path;
+    if (!paneEl || !fs || path == null) return null;
+    const p = Number(paneEl.dataset.pane);
+    const dragged = new Set(drag.items.map((it) => it.path));
+    const row = el?.closest<HTMLElement>("[data-dir]");
+    const sameFs = drag.source?.fs === fs;
+    if (row?.dataset.dir && !(sameFs && dragged.has(row.dataset.dir))) {
+      return { pane: p, folder: { fs, path: row.dataset.dir }, name: row.dataset.name ?? "", row: row.dataset.dir };
+    }
+    // Dropping back into the folder the items came from does nothing.
+    if (sameFs && drag.source?.path === path) return null;
+    return { pane: p, folder: { fs, path }, name: paneEl.dataset.title || path, row: null };
+  }
+
+  function keydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && dragging() && drag.from === index) {
+      e.stopPropagation();
+      e.preventDefault();
+      cancelDrag();
+    }
+  }
+
+  function contextmenu(e: MouseEvent, entry: Entry, i: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    onfocus();
+    // Right-clicking an unmarked item acts on just that item.
+    if (!pane.selected.has(entry.path)) pane.selected.clear();
+    pane.cursor = i;
+    oncontext(e.clientX, e.clientY, entry);
+  }
+
   function click(e: MouseEvent, entry: Entry, index: number) {
+    if (justDragged) return;
     onfocus();
     if (e.metaKey || e.ctrlKey) {
+      // Like Explorer and Finder: the item clicked just before joins in.
+      const prev = pane.current;
+      if (pane.selected.size === 0 && prev && prev.path === clicked && prev.path !== entry.path) pane.selected.add(prev.path);
       pane.toggle(entry);
     } else if (e.shiftKey) {
       const [a, b] = [Math.min(pane.cursor, index), Math.max(pane.cursor, index)];
@@ -71,6 +206,7 @@
     } else {
       pane.selected.clear();
     }
+    clicked = entry.path;
     pane.cursor = index;
   }
 
@@ -87,8 +223,19 @@
   });
 </script>
 
+<svelte:window onkeydown={keydown} />
+
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<section class="pane" class:active onclick={onfocus}>
+<section
+  class="pane"
+  class:active
+  class:drop-target={drag.target?.pane === index && !drag.target.row}
+  data-pane={index}
+  data-fs={pane.location?.fs}
+  data-path={pane.location?.path}
+  data-title={pane.title}
+  onclick={onfocus}
+>
   {#if group.tabs.length > 1}
     <div class="tabs" role="tablist">
       {#each group.tabs as tab, i}
@@ -135,6 +282,13 @@
     bind:clientWidth={listWidth}
     role="listbox"
     aria-multiselectable="true"
+    tabindex="-1"
+    oncontextmenu={(e) => {
+      if (fromKeyboard(e)) return; // the app opens the menu for the cursor row
+      e.preventDefault();
+      onfocus();
+      oncontext(e.clientX, e.clientY, null);
+    }}
   >
     {#if pane.error}
       <p class="message error">{pane.error}</p>
@@ -148,13 +302,18 @@
           class:cursor={i === pane.cursor}
           class:selected={pane.selected.has(entry.path)}
           class:hidden-file={entry.hidden}
+          class:drop-target={drag.target?.pane === index && drag.target.row === entry.path}
           data-index={i}
+          data-dir={entry.kind === "dir" ? entry.path : undefined}
+          data-name={entry.name}
           role="option"
           aria-selected={pane.selected.has(entry.path)}
           tabindex="-1"
           title={entry.modifiedMs != null ? `${entry.name} — modified ${formatDate(entry.modifiedMs)}` : entry.name}
           onclick={(e) => click(e, entry, i)}
           ondblclick={() => pane.activate(entry)}
+          onpointerdown={(e) => pointerdown(e, entry, i)}
+          oncontextmenu={(e) => contextmenu(e, entry, i)}
         >
           <span class="name">
             <span class="icon" aria-hidden="true">{glyph(entry)}</span>
@@ -171,13 +330,18 @@
           class:cursor={i === pane.cursor}
           class:selected={pane.selected.has(entry.path)}
           class:hidden-file={entry.hidden}
+          class:drop-target={drag.target?.pane === index && drag.target.row === entry.path}
           data-index={i}
+          data-dir={entry.kind === "dir" ? entry.path : undefined}
+          data-name={entry.name}
           role="option"
           aria-selected={pane.selected.has(entry.path)}
           tabindex="-1"
           title={entry.name}
           onclick={(e) => click(e, entry, i)}
           ondblclick={() => pane.activate(entry)}
+          onpointerdown={(e) => pointerdown(e, entry, i)}
+          oncontextmenu={(e) => contextmenu(e, entry, i)}
         >
           <div class="thumb">
             {#if thumb}
@@ -301,6 +465,17 @@
   }
   .row:nth-child(even) {
     background: var(--stripe);
+  }
+  .pane.drop-target .list {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+  }
+  .row.drop-target,
+  .cell.drop-target {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: 4px;
   }
   .row.selected {
     background: var(--selection);

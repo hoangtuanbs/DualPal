@@ -161,13 +161,14 @@ export class PaneState {
   }
 
   /** A new tab state at the same place with the same view settings. */
-  clone(): PaneState {
+  /** A new pane with the same view settings, showing `at` (default: this folder). */
+  clone(at: Location | null = this.location): PaneState {
     const p = new PaneState();
     p.view = this.view;
     p.showHidden = this.showHidden;
     p.sortKey = this.sortKey;
     p.sortAsc = this.sortAsc;
-    if (this.location) p.open(this.location);
+    if (at) p.open(at);
     return p;
   }
 
