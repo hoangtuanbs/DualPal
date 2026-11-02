@@ -67,12 +67,14 @@ pub fn load_key(
 fn key_text(bytes: &[u8]) -> String {
     let utf16 = |be: bool, b: &[u8]| {
         let units: Vec<u16> = b
-            .chunks_exact(2)
-            .map(|c| {
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| {
                 if be {
-                    u16::from_be_bytes([c[0], c[1]])
+                    u16::from_be_bytes(c)
                 } else {
-                    u16::from_le_bytes([c[0], c[1]])
+                    u16::from_le_bytes(c)
                 }
             })
             .collect();
