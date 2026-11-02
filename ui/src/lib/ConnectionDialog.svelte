@@ -180,7 +180,7 @@
       </div>
       <label class="row">
         <span>User</span>
-        <input bind:value={user} required autocapitalize="off" spellcheck="false" />
+        <input bind:value={user} required={!host.includes("@")} autocapitalize="off" spellcheck="false" />
       </label>
       <label class="row">
         <span>Sign in with</span>
