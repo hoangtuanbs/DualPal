@@ -296,6 +296,9 @@ async fn names_differing_only_in_case_are_copied_one_at_a_time() {
     for name in ["a.txt", "A.txt", "b.txt", "c.txt"] {
         std::fs::write(src.join(name), name).unwrap();
     }
+    if std::fs::read_dir(&src).unwrap().count() < 4 {
+        return; // this disk ignores case itself, so there is no clash to test
+    }
 
     let remote = Remote::new(0);
     let q = setup(&remote);
