@@ -107,8 +107,8 @@ DUALPAL_TEST_SFTP=user@127.0.0.1:2222 DUALPAL_TEST_SFTP_KEY=~/.ssh/test_key \
 
 The three arrow buttons in the toolbar keep the two panes' folders in sync while they are on:
 
-- **Auto-upload** copies new and changed files from the pane on this computer to the server pane (from left to right when both panes are alike). **Auto-download** copies the other way. Neither deletes anything.
-- **Auto-sync both ways** copies changes in either pane to the other and passes on deletions made since the last sync. Items changed on both sides are left alone.
+- **→** copies new and changed files from the left pane to the right, and **←** from the right pane to the left. Neither deletes anything.
+- **⇄** copies changes in either pane to the other and passes on deletions made since the last sync. Items changed on both sides are left alone.
 
 Folders on this computer are watched, so a change is synced within a couple of seconds. Servers, buckets and Windows network or WSL folders send no change notifications, so they are checked every 10 seconds. While auto-sync runs, the panes are locked and a bar shows what it is doing; click the lit button again, or *Stop*, to end it. Each sync appears under *Operations*.
 

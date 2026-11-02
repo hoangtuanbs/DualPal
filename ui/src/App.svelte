@@ -147,17 +147,15 @@
 
   // ---- auto-sync ------------------------------------------------------------------
 
-  type LiveKind = "upload" | "download" | "both";
+  type LiveKind = "right" | "left" | "both";
 
-  /** The folders auto-sync copies from and to. Upload goes from the pane on
-   *  this computer to the server pane; when both panes are on the same
-   *  kind of place, from the left pane to the right. */
+  /** The folders auto-sync copies from and to: → copies the left pane to
+   *  the right, ← the right pane to the left. */
   function liveSides(kind: LiveKind): { from: Location; to: Location } | null {
     const l = groups[0].current.location;
     const r = groups[1].current.location;
     if (!l || !r) return null;
-    const [up, down] = l.fs !== "local" && r.fs === "local" ? [r, l] : [l, r];
-    return kind === "download" ? { from: down, to: up } : { from: up, to: down };
+    return kind === "left" ? { from: r, to: l } : { from: l, to: r };
   }
 
   async function toggleLive(kind: LiveKind) {
@@ -186,8 +184,8 @@
       return;
     }
     if (!liveKind) {
-      const up = liveSides("upload");
-      liveKind = s.direction === "both" ? "both" : up && sameLoc(up.from, s.from) ? "upload" : "download";
+      const l = groups[0].current.location;
+      liveKind = s.direction === "both" ? "both" : l && sameLoc(l, s.to) ? "left" : "right";
     }
     // Show what a sync changed.
     if (s.syncs !== lastSyncs) {
@@ -203,6 +201,11 @@
     const name = loc.path.split(/[\\/]/).filter(Boolean).pop() ?? loc.path;
     return loc.fs === "local" ? name || loc.path : `${name || "/"} on ${nameOf(loc.fs)}`;
   }
+
+  /** The synced folders as they sit in the panes, and the arrow between them. */
+  const liveLeft = $derived(live ? (liveKind === "left" ? live.to : live.from) : null);
+  const liveRight = $derived(live ? (liveKind === "left" ? live.from : live.to) : null);
+  const liveArrow = $derived(liveKind === "both" ? "⇄" : liveKind === "left" ? "←" : "→");
 
   const liveText = $derived.by(() => {
     if (!live) return "";
@@ -1108,26 +1111,14 @@
       >
     </div>
     <div class="group live" role="group" aria-label="Auto-sync">
-      <button
-        aria-pressed={liveKind === "upload"}
-        onclick={() => toggleLive("upload")}
-        aria-label="Auto-upload"
-        title="Auto-upload: keep copying new and changed files from the pane on this computer to the server pane (left to right when both are alike) as they change. Never deletes. Click again to stop."
-        ><Icon name="upload" /></button
+      <button aria-pressed={liveKind === "right"} onclick={() => toggleLive("right")} aria-label="Auto-sync left to right"
+        title="Auto-sync → : copy changes from left to right"><Icon name="arrow-right" /></button
       >
-      <button
-        aria-pressed={liveKind === "download"}
-        onclick={() => toggleLive("download")}
-        aria-label="Auto-download"
-        title="Auto-download: keep copying new and changed files from the server pane to the pane on this computer (right to left when both are alike) as they change. Never deletes. Click again to stop."
-        ><Icon name="download" /></button
+      <button aria-pressed={liveKind === "left"} onclick={() => toggleLive("left")} aria-label="Auto-sync right to left"
+        title="Auto-sync ← : copy changes from right to left"><Icon name="arrow-left" /></button
       >
-      <button
-        aria-pressed={liveKind === "both"}
-        onclick={() => toggleLive("both")}
-        aria-label="Auto-sync both ways"
-        title="Auto-sync both ways: copy changes in either pane to the other as they happen, and pass on deletions made since the last sync. Click again to stop."
-        ><Icon name="up-down" /></button
+      <button aria-pressed={liveKind === "both"} onclick={() => toggleLive("both")} aria-label="Auto-sync both ways"
+        title="Auto-sync ⇄ : copy changes both ways"><Icon name="arrow-left-right" /></button
       >
     </div>
     <!-- Pushes the view and pane groups to the right; errors show in the gap. -->
@@ -1178,11 +1169,10 @@
   </div>
 
   <div class="live-bar" class:on={live} class:failed={live?.state === "failed"} role="status">
-    {#if live}
-      <Icon name={liveKind === "download" ? "download" : liveKind === "both" ? "up-down" : "upload"} />
-      <strong>{liveKind === "both" ? "Auto-sync" : liveKind === "download" ? "Auto-download" : "Auto-upload"}</strong>
-      <span class="live-places" title="{live.from.path} {live.direction === 'both' ? '⇄' : '→'} {live.to.path}"
-        >{placeName(live.from)} {live.direction === "both" ? "⇄" : "→"} {placeName(live.to)}</span
+    {#if live && liveLeft && liveRight}
+      <strong>Auto-sync</strong>
+      <span class="live-places" title="{liveLeft.path} {liveArrow} {liveRight.path}"
+        >{placeName(liveLeft)} {liveArrow} {placeName(liveRight)}</span
       >
       <span class="live-state">{liveText}</span>
       <span class="live-note">Panes are locked while this runs.</span>
