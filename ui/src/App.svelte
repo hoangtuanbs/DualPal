@@ -532,8 +532,9 @@
   function trash() {
     const targets = locationsOf(active);
     if (!targets.length) return;
-    // Servers and buckets have no Trash: offer to delete instead.
+    // Servers, buckets and Windows network or WSL folders have no Trash: offer to delete instead.
     if (active.location?.fs !== "local") remove();
+    else if (isWindowsShare(active.location.path)) remove("This location has no Recycle Bin.");
     else enqueue({ type: "trash", targets });
   }
 
@@ -549,12 +550,17 @@
     enqueue({ type: "compress", sources: locationsOf(active), destination: { fs: loc.fs, path: join(loc, name) } });
   }
 
-  function remove() {
+  /** \\server\share\ paths, including WSL's \\wsl.localhost\<distro>\. */
+  function isWindowsShare(path: string) {
+    return path.startsWith("\\\\");
+  }
+
+  function remove(why?: string) {
     const targets = locationsOf(active);
     if (!targets.length) return;
     dialog = {
       title: `Delete ${describe(active)}?`,
-      message: "This permanently deletes the selected items. It cannot be undone.",
+      message: `${why ? why + " " : ""}This permanently deletes the selected items. It cannot be undone.`,
       confirmLabel: "Delete",
       danger: true,
       onconfirm: () => enqueue({ type: "delete", targets }),

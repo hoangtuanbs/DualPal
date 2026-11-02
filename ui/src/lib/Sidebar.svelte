@@ -82,13 +82,28 @@
 
 <aside class="sidebar">
   <h3>Devices</h3>
-  {#each volumes as v (v.location.path)}
+  {#each volumes.filter((v) => !v.wsl) as v (v.location.path)}
     <button class="item" class:current={isCurrent(v.location)} onclick={() => onopen(v.location)} title={v.location.path}>
       <span class="icon" aria-hidden="true">{v.removable ? "💽" : "🖴"}</span>
       <span class="name">{v.name}</span>
       <span class="meta">{formatBytes(v.availableBytes)}</span>
     </button>
   {/each}
+
+  {#if volumes.some((v) => v.wsl)}
+    <h3>Linux (WSL)</h3>
+    {#each volumes.filter((v) => v.wsl) as v (v.location.path)}
+      <button
+        class="item"
+        class:current={isCurrent(v.location)}
+        onclick={() => onopen(v.location)}
+        title={`${v.location.path}\nOpening a stopped distribution starts it, which can take a few seconds.`}
+      >
+        <span class="icon" aria-hidden="true">🐧</span>
+        <span class="name">{v.name}</span>
+      </button>
+    {/each}
+  {/if}
 
   <h3>Favorites</h3>
   {#each favorites as f, i (f.location.path)}

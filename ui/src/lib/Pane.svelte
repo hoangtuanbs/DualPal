@@ -44,15 +44,20 @@
     const root = (pane.location && fsNames[pane.location.fs]) || "/";
     const out: { name: string; path: string }[] = windows ? [] : [{ name: root, path: "/" }];
     let acc = "";
-    path
-      .split(/[\\/]/)
-      .filter(Boolean)
-      .forEach((part, i) => {
-        if (!windows) acc = `${acc}/${part}`;
-        // Drive roots keep their trailing separator ("C:\").
-        else acc = i === 0 ? `${part}\\` : `${acc.endsWith("\\") ? acc : acc + "\\"}${part}`;
-        out.push({ name: part, path: acc });
-      });
+    let parts = path.split(/[\\/]/).filter(Boolean);
+    // A network share (\\server\share\, also WSL's \\wsl.localhost\Ubuntu\)
+    // is one root crumb named after the share.
+    if (path.startsWith("\\\\") && parts.length >= 2) {
+      acc = `\\\\${parts[0]}\\${parts[1]}\\`;
+      out.push({ name: parts[1], path: acc });
+      parts = parts.slice(2);
+    }
+    for (const part of parts) {
+      if (!windows) acc = `${acc}/${part}`;
+      // Drive roots keep their trailing separator ("C:\").
+      else acc = acc === "" ? `${part}\\` : `${acc.endsWith("\\") ? acc : acc + "\\"}${part}`;
+      out.push({ name: part, path: acc });
+    }
     return out;
   });
 
