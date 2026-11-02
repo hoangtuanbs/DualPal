@@ -22,6 +22,9 @@
   import OperationsPanel from "./lib/OperationsPanel.svelte";
   import Pane from "./lib/Pane.svelte";
   import Inspector from "./lib/Inspector.svelte";
+  import ContextMenu, { type MenuItem } from "./lib/ContextMenu.svelte";
+  import { drag, type DropTarget } from "./lib/drag.svelte";
+  import { copyText } from "./lib/about";
   import Sidebar from "./lib/Sidebar.svelte";
   import ConnectionDialog from "./lib/ConnectionDialog.svelte";
   import EditSessions from "./lib/EditSessions.svelte";
@@ -44,6 +47,8 @@
   const allPanes = () => groups.flatMap((g) => g.tabs);
 
   let showInspector = $state(true);
+  /** The open right-click menu. */
+  let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
   let volumes = $state<Volume[]>([]);
   let favorites = $state<Favorite[]>([]);
   let connections = $state<ConnectionView[]>([]);
@@ -477,15 +482,27 @@
     };
   }
 
-  /** Open the file under the cursor in the preferred editor. */
+  /** Open the marked files, or the file under the cursor, in the preferred editor. */
   async function editInEditor() {
-    const entry = active.current;
+    await openFiles(true);
+  }
+
+  /** Open the marked files (or the one under the cursor) in their apps, or
+   *  in the preferred editor. */
+  async function openFiles(editor: boolean) {
     const loc = active.location;
-    if (!entry || !loc || entry.kind === "dir") return;
-    try {
-      await api.openFile({ fs: loc.fs, path: entry.path }, true);
-    } catch (e) {
-      notice = errorMessage(e);
+    const files = active.targets.filter((e) => e.kind === "file");
+    if (!loc || !files.length) return;
+    if (files.length > 20) {
+      notice = `Open at most 20 files at once (${files.length} are marked).`;
+      return;
+    }
+    for (const f of files) {
+      try {
+        await api.openFile({ fs: loc.fs, path: f.path }, editor);
+      } catch (e) {
+        notice = errorMessage(e);
+      }
     }
   }
 
@@ -582,6 +599,8 @@
   }
 
   function rename() {
+    // Several marked items: rename them together.
+    if (active.selected.size > 1) return multiRename();
     const entry = active.current;
     const loc = active.location;
     if (!entry || !loc) return;
@@ -639,6 +658,112 @@
     return favorites.some((f) => f.location.fs === loc.fs && f.location.path === loc.path);
   });
 
+  // ---- right-click menu and drag and drop -------------------------------------------
+
+  function openMenu(x: number, y: number, entry: Entry | null) {
+    menu = { x, y, items: entry ? entryMenu(entry) : folderMenu() };
+  }
+
+  /** The menu for the marked items, or the one right-clicked. */
+  function entryMenu(entry: Entry): MenuItem[] {
+    const t = active.targets;
+    const n = t.length;
+    const files = t.filter((e) => e.kind === "file");
+    const dest = other.location ? `“${other.title || other.location.path}”` : "the other pane";
+    const what = n === 1 ? "" : ` ${n} Items`;
+    const single = n === 1 ? t[0] : null;
+    return [
+      single
+        ? {
+            label: "Open",
+            icon: single.kind === "dir" ? "folder-open" : undefined,
+            shortcut: "Enter",
+            run: () => active.activate(single),
+          }
+        : { label: `Open ${files.length} Files`, disabled: !files.length, run: () => openFiles(false) },
+      ...(single?.kind === "dir" && active.location
+        ? [{ label: "Open in New Tab", icon: "new-tab", run: () => openInNewTab(single) }]
+        : []),
+      {
+        label: files.length > 1 ? `Edit ${files.length} Files` : "Edit in Editor",
+        icon: "edit",
+        shortcut: "F4",
+        disabled: !files.length,
+        run: editInEditor,
+      },
+      "separator",
+      { label: `Copy${what} to ${dest}`, icon: "copy", shortcut: "F5", disabled: !other.location, run: () => transfer("copy") },
+      { label: `Move${what} to ${dest}`, icon: "move", shortcut: "F6", disabled: !other.location, run: () => transfer("move") },
+      "separator",
+      single
+        ? { label: "Rename…", icon: "rename", shortcut: "F2", run: rename }
+        : { label: `Rename${what}…`, icon: "multi-rename", shortcut: "Shift+F2", run: multiRename },
+      { label: "Compress into ZIP", icon: "archive", run: compress },
+      {
+        label: n === 1 ? "Copy Path" : `Copy ${n} Paths`,
+        icon: "clipboard",
+        run: async () => {
+          if (!(await copyText(t.map((e) => e.path).join("\n")))) notice = "Could not copy to the clipboard.";
+        },
+      },
+      ...(n === 2 && files.length === 2
+        ? [{ label: "Compare Files", icon: "compare-files", shortcut: `${MOD}Shift+D`, run: compareFiles }]
+        : []),
+      ...(single ? [{ label: "Show Info", icon: "info", shortcut: `${MOD}I`, run: () => (showInspector = true) }] : []),
+      "separator",
+      { label: `Move${what} to Trash`, icon: "trash", shortcut: "F8", run: trash },
+      { label: `Delete${what} Permanently…`, shortcut: "Shift+Del", danger: true, run: () => remove() },
+    ];
+  }
+
+  /** The menu for empty space in a pane. */
+  function folderMenu(): MenuItem[] {
+    return [
+      { label: "New Folder…", icon: "folder-plus", shortcut: "F7", run: newFolder },
+      { label: "Refresh", icon: "refresh", shortcut: `${MOD}R`, run: () => active.refresh() },
+      "separator",
+      { label: "Select All", icon: "select", shortcut: `${MOD}A`, run: () => active.visible.forEach((it) => active.selected.add(it.path)) },
+      { label: "Select by Name…", shortcut: "+", run: () => selectByPattern(true) },
+      {
+        label: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files",
+        icon: "eye",
+        shortcut: `${MOD}Shift+.`,
+        run: () => (active.showHidden = !active.showHidden),
+      },
+      "separator",
+      { label: "Compare & Sync Folders…", icon: "sync", shortcut: `${MOD}Shift+Y`, run: compareFolders },
+      { label: isFavorite ? "Remove from Favorites" : "Add to Favorites", icon: "star", run: toggleFavorite },
+    ];
+  }
+
+  function openInNewTab(entry: Entry) {
+    const loc = active.location;
+    if (!loc) return;
+    const group = groups[activeIndex];
+    group.newTab();
+    group.current.open({ fs: loc.fs, path: entry.path });
+  }
+
+  /** The keyboard's menu key, or Shift+F10: the menu for the cursor row. */
+  function menuFromKeyboard() {
+    const row = document.querySelector<HTMLElement>(`[data-pane="${activeIndex}"] [data-index="${active.cursor}"]`);
+    const r = row?.getBoundingClientRect();
+    if (!r || !active.current) return;
+    if (!active.selected.has(active.current.path)) active.selected.clear();
+    openMenu(r.left + 32, r.bottom, active.current);
+  }
+
+  /** Items dragged from a pane and let go over a folder. */
+  function dropped(items: Entry[], from: Location, target: DropTarget, move: boolean) {
+    if (!items.length) return;
+    enqueue({
+      type: move ? "move" : "copy",
+      sources: items.map((e) => ({ fs: from.fs, path: e.path })),
+      destination: target.folder,
+      conflict: "fail",
+    });
+  }
+
   function retry(id: string, conflict: ConflictPolicy) {
     const op = requests.get(id);
     if (op && (op.type === "copy" || op.type === "move")) enqueue({ ...op, conflict });
@@ -654,9 +779,16 @@
     activity = [];
   }
 
+  /** Shift+↑/↓: mark the items the cursor passes over. */
+  function extendSelection(delta: number) {
+    if (active.current) active.selected.add(active.current.path);
+    active.moveCursor(delta);
+    if (active.current) active.selected.add(active.current.path);
+  }
+
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (dialog || editing !== undefined || comparing || renaming || showPalette || showInsights || aboutPage) return;
+    if (menu || dialog || editing !== undefined || comparing || renaming || showPalette || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -694,11 +826,16 @@
         activeIndex = 1 - activeIndex;
         return handled();
       case "ArrowDown":
-        active.moveCursor(icons ? active.columns : 1);
+        if (e.shiftKey) extendSelection(icons ? active.columns : 1);
+        else active.moveCursor(icons ? active.columns : 1);
         return handled();
       case "ArrowUp":
         if (mod) active.up();
+        else if (e.shiftKey) extendSelection(icons ? -active.columns : -1);
         else active.moveCursor(icons ? -active.columns : -1);
+        return handled();
+      case "ContextMenu":
+        menuFromKeyboard();
         return handled();
       case "ArrowLeft":
         if (!icons) return;
@@ -741,6 +878,10 @@
       case "F2":
         if (e.shiftKey) multiRename();
         else rename();
+        return handled();
+      case "F10":
+        if (!e.shiftKey) return;
+        menuFromKeyboard();
         return handled();
       case "F4":
         editInEditor();
@@ -787,7 +928,14 @@
   }
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window
+  {onkeydown}
+  oncontextmenu={(e) => {
+    // No browser menu (Reload, Inspect…) outside text fields.
+    const t = e.target as HTMLElement | null;
+    if (!t?.closest("input, textarea, [contenteditable]")) e.preventDefault();
+  }}
+/>
 
 <div class="app">
   <div class="toolbar">
@@ -892,7 +1040,14 @@
     />
     <main class="panes">
       {#each groups as group, i}
-        <Pane {group} active={i === activeIndex} onfocus={() => (activeIndex = i)} />
+        <Pane
+          {group}
+          index={i}
+          active={i === activeIndex}
+          onfocus={() => (activeIndex = i)}
+          oncontext={openMenu}
+          ondrop={dropped}
+        />
       {/each}
     </main>
     {#if showInspector}
@@ -971,6 +1126,19 @@
   />
 {/if}
 
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />
+{/if}
+
+{#if drag.items.length}
+  <div class="drag-ghost" style:left="{drag.x + 14}px" style:top="{drag.y + 10}px">
+    {drag.items.length === 1 ? drag.items[0].name : `${drag.items.length} items`}
+    {#if drag.target}
+      <span class="drag-action">{drag.move ? "Move" : "Copy"} to “{drag.target.name}”</span>
+    {/if}
+  </div>
+{/if}
+
 {#if showPalette}
   <CommandPalette {commands} onclose={() => (showPalette = false)} />
 {/if}
@@ -988,6 +1156,28 @@
 {/if}
 
 <style>
+  .drag-ghost {
+    position: fixed;
+    z-index: 30;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 320px;
+    padding: 5px 9px;
+    border-radius: 7px;
+    background: var(--pane-bg);
+    border: 1px solid var(--border);
+    box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .drag-action {
+    color: var(--accent);
+    font-size: 11.5px;
+  }
   .app {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;

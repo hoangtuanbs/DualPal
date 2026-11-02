@@ -46,6 +46,12 @@ cargo test --workspace   # core tests
 npm run check            # UI type-check
 ```
 
+## Mouse
+
+- **Click** an item to put the cursor on it; **Ctrl/⌘-click** marks several, **Shift-click** marks a range. Operations act on all marked items, or on the item under the cursor when none are marked.
+- **Right-click** an item for its menu: open, edit, copy or move to the other pane, rename, compress, copy path, compare, trash or delete. With several items marked, the menu acts on all of them. Right-click empty space for new folder, refresh, select and more.
+- **Drag** items to the other pane, or onto a folder in either pane, to copy them there. Hold **Shift** when you let go to move instead; **Esc** cancels.
+
 ## Keyboard
 
 | Key | Action |
@@ -55,7 +61,9 @@ npm run check            # UI type-check
 | Enter | Open folder, or open file in its default app |
 | Backspace, Ctrl/⌘ ↑ | Enclosing folder |
 | Space / Insert | Mark item |
+| Shift ↑ / Shift ↓ | Mark the items the cursor passes |
 | Ctrl/⌘ A | Mark all |
+| Menu key / Shift F10 | Menu for the item under the cursor |
 | F2 | Rename |
 | Shift F2 | Multi Rename the marked items |
 | F4 | Edit in your preferred editor (files on servers upload again when saved) |
