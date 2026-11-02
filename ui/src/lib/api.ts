@@ -216,6 +216,25 @@ export interface Comparison {
 }
 
 export type SyncMode = "update" | "mirror" | "twoWay";
+
+export type LiveDirection = "oneWay" | "both";
+export type LiveState = "syncing" | "watching" | "failed";
+/** What auto-sync is doing. */
+export interface LiveStatus {
+  from: Location;
+  to: Location;
+  direction: LiveDirection;
+  state: LiveState;
+  /** False for sides checked every few seconds (servers, network and WSL folders). */
+  fromWatched: boolean;
+  toWatched: boolean;
+  lastSyncMs: number | null;
+  itemsSynced: number;
+  syncs: number;
+  error: string | null;
+  /** Items changed on both sides, which two-way sync leaves alone. */
+  conflicts: number;
+}
 export type SyncAction = "copyToRight" | "copyToLeft" | "deleteLeft" | "deleteRight" | "skip";
 export type SyncReason =
   | "new"
@@ -411,6 +430,13 @@ export const api = {
   compareFiles: (left: Location, right: Location) => invoke<void>("compare_files", { left, right }),
   activityInsights: (days: number) =>
     invoke<Insights>("activity_insights", { days, utcOffsetMinutes: -new Date().getTimezoneOffset() }),
+  liveSyncStart: (from: Location, to: Location, direction: LiveDirection) =>
+    invoke<LiveStatus>("live_sync_start", { from, to, direction }),
+  liveSyncStop: () => invoke<void>("live_sync_stop"),
+  liveSyncStatus: () => invoke<LiveStatus | null>("live_sync_status"),
+  /** Auto-sync updates; null once it stops. */
+  onLiveSyncUpdated: (cb: (s: LiveStatus | null) => void): Promise<UnlistenFn> =>
+    listen<LiveStatus | null>("live-sync-updated", (e) => cb(e.payload)),
   onEditSessionUpdated: (cb: (s: EditSession) => void): Promise<UnlistenFn> =>
     listen<EditSession>("edit-session-updated", (e) => cb(e.payload)),
   onOperationUpdated: (cb: (info: OperationInfo) => void): Promise<UnlistenFn> =>

@@ -15,6 +15,7 @@
     type Operation,
     type OperationInfo,
     type DiffTool,
+    type LiveStatus,
     type Entry,
     type SyncFavorite,
   } from "./lib/api";
@@ -86,14 +87,20 @@
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
   let linked = $state(false);
   let diffTools = $state<DiffTool[]>([]);
+  /** Auto-sync, while it runs. The panes are frozen meanwhile. */
+  let live = $state<LiveStatus | null>(null);
+  let liveKind = $state<LiveKind | null>(null);
+  const frozen = $derived(live !== null);
   const isMac = navigator.userAgent.includes("Mac");
   const MOD = isMac ? "⌘" : "Ctrl+";
 
   onMount(() => {
     let unlisten: (() => void) | undefined;
     let unlistenEdits: (() => void) | undefined;
+    let unlistenLive: (() => void) | undefined;
     (async () => {
       unlisten = await api.onOperationUpdated(onOperationUpdated);
+      unlistenLive = await api.onLiveSyncUpdated(onLiveSyncUpdated);
       unlistenEdits = await api.onEditSessionUpdated(onEditSessionUpdated);
       await loadConnections();
       editSessions = await api.editSessions();
@@ -105,6 +112,9 @@
       volumes = await api.volumes();
       syncs = await api.syncFavorites();
       diffTools = await api.diffTools();
+      // Auto-sync left running when the window reloaded.
+      const running = await api.liveSyncStatus();
+      if (running) onLiveSyncUpdated(running);
     })().catch((e) => (notice = errorMessage(e)));
     PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
@@ -112,6 +122,7 @@
     return () => {
       unlisten?.();
       unlistenEdits?.();
+      unlistenLive?.();
       clearInterval(timer);
       PaneState.navigated = null;
     };
@@ -126,6 +137,78 @@
       api.activity().then((a) => (activity = a));
     }
   }
+
+  // ---- auto-sync ------------------------------------------------------------------
+
+  type LiveKind = "upload" | "download" | "both";
+
+  /** The folders auto-sync copies from and to. Upload goes from the pane on
+   *  this computer to the server pane; when both panes are on the same
+   *  kind of place, from the left pane to the right. */
+  function liveSides(kind: LiveKind): { from: Location; to: Location } | null {
+    const l = groups[0].current.location;
+    const r = groups[1].current.location;
+    if (!l || !r) return null;
+    const [up, down] = l.fs !== "local" && r.fs === "local" ? [r, l] : [l, r];
+    return kind === "download" ? { from: down, to: up } : { from: up, to: down };
+  }
+
+  async function toggleLive(kind: LiveKind) {
+    if (liveKind === kind) {
+      await api.liveSyncStop().catch((e) => (notice = errorMessage(e)));
+      return;
+    }
+    const sides = liveSides(kind);
+    if (!sides) return;
+    try {
+      notice = null;
+      const status = await api.liveSyncStart(sides.from, sides.to, kind === "both" ? "both" : "oneWay");
+      liveKind = kind;
+      onLiveSyncUpdated(status);
+    } catch (e) {
+      notice = errorMessage(e);
+    }
+  }
+
+  let lastSyncs = 0;
+  function onLiveSyncUpdated(s: LiveStatus | null) {
+    live = s;
+    if (!s) {
+      liveKind = null;
+      lastSyncs = 0;
+      return;
+    }
+    if (!liveKind) {
+      const up = liveSides("upload");
+      liveKind = s.direction === "both" ? "both" : up && sameLoc(up.from, s.from) ? "upload" : "download";
+    }
+    // Show what a sync changed.
+    if (s.syncs !== lastSyncs) {
+      lastSyncs = s.syncs;
+      allPanes().forEach((p) => p.refresh());
+    }
+  }
+
+  const sameLoc = (a: Location, b: Location) => a.fs === b.fs && a.path === b.path;
+
+  /** A folder's name for the auto-sync bar, with its server's name. */
+  function placeName(loc: Location) {
+    const name = loc.path.split(/[\\/]/).filter(Boolean).pop() ?? loc.path;
+    return loc.fs === "local" ? name || loc.path : `${name || "/"} on ${nameOf(loc.fs)}`;
+  }
+
+  const liveText = $derived.by(() => {
+    if (!live) return "";
+    if (live.state === "syncing") return "Syncing…";
+    if (live.state === "failed") return `Failed: ${live.error ?? "unknown error"}. Trying again shortly.`;
+    const time = live.lastSyncMs ? new Date(live.lastSyncMs).toLocaleTimeString() : "";
+    const how =
+      live.fromWatched && live.toWatched ? "watching for changes" : "watching here, checking the server every 10 s";
+    const parts = [`Up to date at ${time}`, how];
+    if (live.itemsSynced) parts.push(`${live.itemsSynced} ${live.itemsSynced === 1 ? "item" : "items"} synced`);
+    if (live.conflicts) parts.push(`${live.conflicts} changed on both sides, left alone`);
+    return parts.join(" · ");
+  });
 
   function onEditSessionUpdated(s: EditSession) {
     const i = editSessions.findIndex((x) => x.id === s.id);
@@ -833,7 +916,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (menu || dialog || editing !== undefined || comparing || renaming || showPalette || showInsights || aboutPage) return;
+    if (frozen || menu || dialog || editing !== undefined || comparing || renaming || showPalette || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -987,11 +1070,11 @@
 
 <div class="app">
   <div class="toolbar">
-    <div class="group">
+    <div class="group" inert={frozen}>
       <button onclick={() => transfer("copy")} aria-label="Copy" title="Copy to the other pane (F5)"><Icon name="copy" /></button>
       <button onclick={() => transfer("move")} aria-label="Move" title="Move to the other pane (F6)"><Icon name="move" /></button>
     </div>
-    <div class="group">
+    <div class="group" inert={frozen}>
       <button onclick={newFolder} aria-label="New Folder" title="New folder (F7)"><Icon name="folder-plus" /></button>
       <button onclick={rename} aria-label="Rename" title="Rename (F2)"><Icon name="rename" /></button>
       <button onclick={multiRename} aria-label="Multi Rename" title="Multi Rename: rename the marked items with rules and presets (Shift F2)"
@@ -1003,7 +1086,7 @@
       <button onclick={compress} aria-label="Compress" title="Compress into a ZIP archive"><Icon name="archive" /></button>
       <button onclick={trash} aria-label="Trash" title="Move to Trash (F8 / Delete). Shift+Delete deletes permanently."><Icon name="trash" /></button>
     </div>
-    <div class="group">
+    <div class="group" inert={frozen}>
       <button onclick={compareFolders} aria-label="Compare & Sync" title="Compare & Sync: compare the two panes' folders and sync them ({MOD}Shift Y)"
         ><Icon name="sync" /></button
       >
@@ -1017,6 +1100,29 @@
         title="Linked browsing: going into or out of a folder in one pane does the same in the other ({MOD}Shift L)"><Icon name="link" /></button
       >
     </div>
+    <div class="group live" role="group" aria-label="Auto-sync">
+      <button
+        aria-pressed={liveKind === "upload"}
+        onclick={() => toggleLive("upload")}
+        aria-label="Auto-upload"
+        title="Auto-upload: keep copying new and changed files from the pane on this computer to the server pane (left to right when both are alike) as they change. Never deletes. Click again to stop."
+        ><Icon name="upload" /></button
+      >
+      <button
+        aria-pressed={liveKind === "download"}
+        onclick={() => toggleLive("download")}
+        aria-label="Auto-download"
+        title="Auto-download: keep copying new and changed files from the server pane to the pane on this computer (right to left when both are alike) as they change. Never deletes. Click again to stop."
+        ><Icon name="download" /></button
+      >
+      <button
+        aria-pressed={liveKind === "both"}
+        onclick={() => toggleLive("both")}
+        aria-label="Auto-sync both ways"
+        title="Auto-sync both ways: copy changes in either pane to the other as they happen, and pass on deletions made since the last sync. Click again to stop."
+        ><Icon name="up-down" /></button
+      >
+    </div>
     <!-- Pushes the view and pane groups to the right; errors show in the gap. -->
     <div class="spacer">
       {#if notice}
@@ -1024,7 +1130,7 @@
         <span class="notice" title={notice} onclick={() => (notice = null)}>{notice}</span>
       {/if}
     </div>
-    <div class="group" role="group" aria-label="View">
+    <div class="group" role="group" aria-label="View" inert={frozen}>
       <button aria-pressed={active.view === "list"} onclick={() => (active.view = "list")} aria-label="List view" title="List view (Ctrl/⌘ 1)"
         ><Icon name="list" /></button
       >
@@ -1032,7 +1138,7 @@
         ><Icon name="grid" /></button
       >
     </div>
-    <div class="group">
+    <div class="group" inert={frozen}>
       <button onclick={() => selectByPattern(true)} aria-label="Select" title="Select by name or extension (+). Deselect with −."><Icon name="select" /></button>
       <button
         aria-pressed={isFavorite}
@@ -1045,7 +1151,7 @@
         ><Icon name="info" /></button
       >
     </div>
-    <div class="group">
+    <div class="group" inert={frozen}>
       <button onclick={() => active.refresh()} aria-label="Refresh" title="Refresh (Ctrl/⌘ R)"><Icon name="refresh" /></button>
       <button onclick={chooseEditor} aria-label="Editor" title="Choose the editor used by Edit"><Icon name="file-code" /></button>
       <button onclick={() => (showPalette = true)} aria-label="Commands" title="Find any command ({MOD}Shift P)"><Icon name="command" /></button>
@@ -1064,7 +1170,20 @@
     </div>
   </div>
 
-  <div class="middle" class:with-inspector={showInspector}>
+  <div class="live-bar" class:on={live} class:failed={live?.state === "failed"} role="status">
+    {#if live}
+      <Icon name={liveKind === "download" ? "download" : liveKind === "both" ? "up-down" : "upload"} />
+      <strong>{liveKind === "both" ? "Auto-sync" : liveKind === "download" ? "Auto-download" : "Auto-upload"}</strong>
+      <span class="live-places" title="{live.from.path} {live.direction === 'both' ? '⇄' : '→'} {live.to.path}"
+        >{placeName(live.from)} {live.direction === "both" ? "⇄" : "→"} {placeName(live.to)}</span
+      >
+      <span class="live-state">{liveText}</span>
+      <span class="live-note">Panes are locked while this runs.</span>
+      <button onclick={() => liveKind && toggleLive(liveKind)}>Stop</button>
+    {/if}
+  </div>
+
+  <div class="middle" class:with-inspector={showInspector} class:frozen inert={frozen}>
     <Sidebar
       {volumes}
       {favorites}
@@ -1226,9 +1345,62 @@
     color: var(--accent);
     font-size: 11.5px;
   }
+  .live-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    font-size: 12.5px;
+    background: color-mix(in srgb, var(--accent) 12%, var(--pane-bg));
+    border-bottom: 1px solid var(--border);
+    min-width: 0;
+  }
+  .live-bar:not(.on) {
+    display: none;
+  }
+  .live-bar.on {
+    height: 34px;
+  }
+  .live-bar.failed {
+    background: color-mix(in srgb, var(--danger) 12%, var(--pane-bg));
+  }
+  .live-bar :global(.icon) {
+    color: var(--accent);
+  }
+  .live-places {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40%;
+  }
+  .live-state {
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .live-note {
+    color: var(--muted);
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  .live-bar button {
+    padding: 3px 12px;
+    border-radius: 6px;
+    background: var(--control);
+  }
+  .live-bar button:hover {
+    background: var(--control-hover);
+  }
+  .middle.frozen {
+    opacity: 0.7;
+  }
   .app {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     height: 100vh;
   }
   .bottom {

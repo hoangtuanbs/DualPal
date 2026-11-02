@@ -19,6 +19,7 @@ pub mod compare;
 pub mod connections;
 pub mod difftools;
 pub mod error;
+pub mod livesync;
 pub mod ops;
 pub mod places;
 pub mod remote_edit;

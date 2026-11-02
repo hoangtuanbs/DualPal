@@ -23,6 +23,7 @@ russh.workspace = true
 russh-sftp.workspace = true
 opendal.workspace = true
 regex.workspace = true
+notify.workspace = true
 
 [dev-dependencies]
 opendal.workspace = true
