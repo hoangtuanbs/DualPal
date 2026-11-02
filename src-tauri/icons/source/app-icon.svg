@@ -1,27 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="l" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFC94D"/><stop offset="1" stop-color="#FF9A1F"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3A3F4B"/><stop offset="1" stop-color="#16181E"/>
     </linearGradient>
-    <linearGradient id="r" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FF7A3D"/><stop offset="1" stop-color="#E8471C"/>
+    <linearGradient id="l" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFE08A"/><stop offset="0.55" stop-color="#FFB52E"/><stop offset="1" stop-color="#F08C00"/>
     </linearGradient>
-    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity="0.14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    <linearGradient id="r" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF7F50"/><stop offset="0.55" stop-color="#F0441F"/><stop offset="1" stop-color="#B8260E"/>
     </linearGradient>
-    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.75"/><stop offset="1" stop-color="#fff" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.35"/><stop offset="0.5" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="lp"><rect x="148" y="148" width="342" height="728" rx="80"/></clipPath>
+    <clipPath id="rp"><rect x="534" y="148" width="342" height="728" rx="80"/></clipPath>
     <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.3"/>
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity="0.45"/>
     </filter>
   </defs>
-  <g clip-path="url(#sq)">
-    <rect x="100" y="100" width="412" height="824" fill="url(#l)"/>
-    <rect x="512" y="100" width="412" height="824" fill="url(#r)"/>
-    <rect x="100" y="100" width="824" height="824" fill="url(#sheen)"/>
-    <rect x="504" y="100" width="16" height="824" fill="#fff" fill-opacity="0.9"/>
-  </g>
-  <g fill="none" stroke="#fff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" filter="url(#sh)">
-    <path d="M300 430 H690 M620 360 L690 430 L620 500"/>
-    <path d="M724 610 H334 M404 540 L334 610 L404 680"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="url(#rim)" stroke-width="4"/>
+  <rect x="148" y="148" width="342" height="728" rx="80" fill="url(#l)"/>
+  <rect x="534" y="148" width="342" height="728" rx="80" fill="url(#r)"/>
+  <!-- glossy reflection: a curved highlight over the top of each pane -->
+  <path clip-path="url(#lp)" d="M148 148 H490 V440 C410 500 250 500 148 470 Z" fill="url(#gloss)" opacity="0.85"/>
+  <path clip-path="url(#rp)" d="M534 148 H876 V440 C796 500 636 500 534 470 Z" fill="url(#gloss)" opacity="0.7"/>
+  <rect x="148" y="148" width="342" height="728" rx="80" fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="6"/>
+  <rect x="534" y="148" width="342" height="728" rx="80" fill="none" stroke="#fff" stroke-opacity="0.25" stroke-width="6"/>
+  <g fill="none" stroke="#fff" stroke-width="58" stroke-linecap="round" stroke-linejoin="round" filter="url(#sh)">
+    <path d="M290 410 H720 M640 330 L720 410 L640 490"/>
+    <path d="M734 630 H304 M384 550 L304 630 L384 710"/>
   </g>
 </svg>
