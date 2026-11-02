@@ -24,6 +24,8 @@ struct Remote {
     open_writers: Arc<AtomicUsize>,
     most_writers: Arc<AtomicUsize>,
     resumed_at: Mutex<Vec<u64>>,
+    /// Fail every write, as a full disk would, without retrying.
+    broken: std::sync::atomic::AtomicBool,
 }
 
 impl Remote {
@@ -34,6 +36,7 @@ impl Remote {
             open_writers: Arc::default(),
             most_writers: Arc::default(),
             resumed_at: Mutex::default(),
+            broken: Default::default(),
         })
     }
 
@@ -127,11 +130,18 @@ impl FileSystem for Remote {
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
         self.local.rename(from, to).await
     }
+    async fn set_mode(&self, path: &str, mode: u32) -> Result<()> {
+        self.local.set_mode(path, mode).await
+    }
     async fn open_read(&self, path: &str) -> Result<Reader> {
         self.local.open_read(path).await
     }
     async fn open_write(&self, path: &str) -> Result<Writer> {
-        Ok(self.wrap(self.local.open_write(path).await?))
+        let w = self.wrap(self.local.open_write(path).await?);
+        if self.broken.load(Ordering::SeqCst) {
+            return Err(dualpal_core::Error::PermissionDenied(path.into()));
+        }
+        Ok(w)
     }
     async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
         self.resumed_at.lock().unwrap().push(offset);
@@ -231,14 +241,67 @@ async fn a_failed_copy_leaves_the_old_file_alone() {
     std::fs::create_dir_all(&dst).unwrap();
     std::fs::write(&src, "new").unwrap();
     std::fs::write(dst.join("doc.txt"), "old").unwrap();
-    // Make the temporary name a folder, so the copy cannot write it.
-    std::fs::create_dir(dst.join(".doc.txt.dualpal-part")).unwrap();
+    // Someone else's file with the name an older version used: not touched.
+    std::fs::write(dst.join(".doc.txt.dualpal-part"), "theirs").unwrap();
 
     let remote = Remote::new(0);
+    remote.broken.store(true, Ordering::SeqCst);
     let q = setup(&remote);
     let id = q.enqueue(copy(&src, &dst, ConflictPolicy::Overwrite));
     let info = q.wait(id).await.unwrap();
 
     assert_eq!(info.status, OperationStatus::Failed);
     assert_eq!(std::fs::read_to_string(dst.join("doc.txt")).unwrap(), "old");
+    assert_eq!(leftovers(&dst), vec![".doc.txt.dualpal-part".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(dst.join(".doc.txt.dualpal-part")).unwrap(),
+        "theirs"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn overwriting_keeps_the_old_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("run.sh");
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    std::fs::write(&src, "new").unwrap();
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(dst.join("run.sh"), "old").unwrap();
+    std::fs::set_permissions(dst.join("run.sh"), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let remote = Remote::new(0);
+    let q = setup(&remote);
+    let id = q.enqueue(copy(&src, &dst, ConflictPolicy::Overwrite));
+    let info = q.wait(id).await.unwrap();
+
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert_eq!(std::fs::read_to_string(dst.join("run.sh")).unwrap(), "new");
+    let mode = std::fs::metadata(dst.join("run.sh"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
+}
+
+#[tokio::test]
+async fn names_differing_only_in_case_are_copied_one_at_a_time() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    for name in ["a.txt", "A.txt", "b.txt", "c.txt"] {
+        std::fs::write(src.join(name), name).unwrap();
+    }
+
+    let remote = Remote::new(0);
+    let q = setup(&remote);
+    let id = q.enqueue(copy(&src, &dst, ConflictPolicy::Skip));
+    let info = q.wait(id).await.unwrap();
+
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert_eq!(remote.most_writers.load(Ordering::SeqCst), 1);
 }

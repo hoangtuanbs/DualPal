@@ -595,10 +595,11 @@ impl FileSystem for SftpFs {
             return Err(Error::AlreadyExists(to.to_string()));
         }
         let parent = posix::parent(to).unwrap_or_else(|| "/".into());
-        let name = posix::file_name(to).unwrap_or_default();
+        // Not built from the name, which may already be close to the
+        // server's limit on a name's length.
         let backup = posix::join(
             &parent,
-            &format!(".{name}.dualpal-old-{}", uuid::Uuid::new_v4().simple()),
+            &format!(".dualpal-old-{}", uuid::Uuid::new_v4().simple()),
         );
         live.sftp
             .rename(to, backup.as_str())

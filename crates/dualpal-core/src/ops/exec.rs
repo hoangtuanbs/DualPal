@@ -286,6 +286,15 @@ impl Job {
             .unwrap_or(1)
             .max(dst_fs.parallel_transfers())
             .max(1);
+        // Two files whose names differ only in case land on the same file on
+        // most Mac and Windows disks; copy those one at a time, so that the
+        // conflict rule decides between them.
+        let mut seen = std::collections::HashSet::new();
+        let workers = if files.iter().all(|i| seen.insert(i.dst.to_lowercase())) {
+            workers
+        } else {
+            1
+        };
         // Stops the other copies when one fails.
         let stop = self.cancel.child_token();
         let queue = Mutex::new(files.into_iter());
@@ -348,7 +357,12 @@ impl Job {
             return Err(Error::Cancelled);
         }
         self.set_current(&item.src);
-        if dst_fs.exists(&item.dst).await? {
+        let existing = match dst_fs.stat(&item.dst).await {
+            Ok(e) => Some(e),
+            Err(Error::NotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+        if existing.is_some() {
             match conflict {
                 ConflictPolicy::Fail => return Err(Error::AlreadyExists(item.dst.clone())),
                 ConflictPolicy::Skip => {
@@ -368,10 +382,11 @@ impl Job {
         let retry = item.src_fs.id() != LocalFs::ID || dst_fs.id() != LocalFs::ID;
         let mut offset = 0; // bytes of this file already in place
         let mut attempt = 0;
+        let mut created = false; // whether `part` is ours to remove
         let result = loop {
             let mut sent = offset;
             let tried = self
-                .copy_attempt(item, dst_fs, &part, offset, &mut sent, stop)
+                .copy_attempt(item, dst_fs, &part, offset, (&mut sent, &mut created), stop)
                 .await;
             let e = match tried {
                 Ok(()) => break Ok(()),
@@ -407,10 +422,20 @@ impl Job {
             }
         };
         if let Err(e) = result {
-            let _ = dst_fs.remove_file(&part).await; // don't leave a partial file
+            // Don't leave a partial file. An upload that only appears once
+            // complete has left nothing, and the file at `part` is the
+            // original there.
+            if created && !dst_fs.atomic_writes() {
+                let _ = dst_fs.remove_file(&part).await;
+            }
             return Err(e);
         }
         if part != item.dst {
+            // The new file replaces the old one, so give it the old one's
+            // permissions, as writing into it would have kept them.
+            if let Some(mode) = existing.and_then(|e| e.mode) {
+                let _ = dst_fs.set_mode(&part, mode & 0o7777).await;
+            }
             if let Err(e) = dst_fs.rename(&part, &item.dst).await {
                 let _ = dst_fs.remove_file(&part).await;
                 return Err(e);
@@ -425,14 +450,14 @@ impl Job {
     }
 
     /// Copy `item` into `part` from `offset` on, adding each byte written to
-    /// `sent` and to the progress.
+    /// `sent` and to the progress, and setting `created` once `part` may exist.
     async fn copy_attempt(
         &self,
         item: &Item,
         dst_fs: &Fs,
         part: &str,
         offset: u64,
-        sent: &mut u64,
+        (sent, created): (&mut u64, &mut bool),
         stop: &CancellationToken,
     ) -> Result<()> {
         let (mut reader, mut writer) = if offset > 0 {
@@ -441,10 +466,11 @@ impl Job {
                 dst_fs.open_write_at(part, offset).await?,
             )
         } else {
-            (
-                item.src_fs.open_read(&item.src).await?,
-                dst_fs.open_write(part).await?,
-            )
+            let reader = item.src_fs.open_read(&item.src).await?;
+            let writer = dst_fs.open_write(part).await;
+            // Even a failed open may have created the file.
+            *created = true;
+            (reader, writer?)
         };
         let mut buf = vec![0u8; CHUNK];
         loop {
@@ -700,14 +726,16 @@ async fn resume_offset(dst_fs: &Fs, part: &str, size: u64) -> u64 {
 }
 
 /// The hidden name a file is written under until its copy is complete.
+/// It is new each time, so it never belongs to another file.
 fn part_path(fs: &Fs, dst: &str) -> String {
     let parent = fs.parent(dst).unwrap_or_default();
     let name = fs.file_name(dst).unwrap_or_default();
+    let tag = &Uuid::new_v4().simple().to_string()[..12];
     // Keep within the usual 255-byte limit on a name.
     let part = if name.len() <= 200 {
-        format!(".{name}.dualpal-part")
+        format!(".{name}.{tag}.dualpal-part")
     } else {
-        format!(".dualpal-{}.part", Uuid::new_v4().simple())
+        format!(".dualpal-{tag}.part")
     };
     fs.join(&parent, &part)
 }
