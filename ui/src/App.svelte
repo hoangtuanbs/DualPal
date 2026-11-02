@@ -105,16 +105,23 @@
       await loadConnections();
       editSessions = await api.editSessions();
       const home = await api.homeLocation();
-      await Promise.all(groups.map((g) => g.current.open(home)));
+      // Auto-sync left running when the window reloaded: show its folders,
+      // the source on the left, before the panes are locked.
+      const running = await api.liveSyncStatus();
+      const start = running ? [running.from, running.to] : [home, home];
+      await Promise.all(
+        groups.map(async (g, i) => {
+          await g.current.open(start[i]);
+          if (!g.current.location) await g.current.open(home);
+        }),
+      );
       operations = await api.operations();
       activity = await api.activity();
       favorites = await api.favorites();
       volumes = await api.volumes();
       syncs = await api.syncFavorites();
       diffTools = await api.diffTools();
-      // Auto-sync left running when the window reloaded.
-      const running = await api.liveSyncStatus();
-      if (running) onLiveSyncUpdated(running);
+      if (running) onLiveSyncUpdated(await api.liveSyncStatus());
     })().catch((e) => (notice = errorMessage(e)));
     PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
@@ -1064,7 +1071,7 @@
     if (t?.closest("input, textarea, [contenteditable]")) return;
     e.preventDefault();
     // The Menu key, which WebView2 delivers only as this event.
-    if (fromKeyboard(e) && !menu && !dialog) menuFromKeyboard();
+    if (fromKeyboard(e) && !menu && !dialog && !frozen) menuFromKeyboard();
   }}
 />
 
@@ -1355,8 +1362,11 @@
     border-bottom: 1px solid var(--border);
     min-width: 0;
   }
+  /* Hidden but kept in the grid, so the rows below keep their places. */
   .live-bar:not(.on) {
-    display: none;
+    height: 0;
+    overflow: hidden;
+    border-bottom: 0;
   }
   .live-bar.on {
     height: 34px;
@@ -1397,6 +1407,9 @@
   }
   .middle.frozen {
     opacity: 0.7;
+  }
+  .toolbar .group[inert] {
+    opacity: 0.4;
   }
   .app {
     display: grid;

@@ -75,6 +75,8 @@ pub struct LiveStatus {
 struct Running {
     cancel: CancellationToken,
     status: Arc<Mutex<LiveStatus>>,
+    /// Ends once the last copy has stopped and its snapshot is saved.
+    task: tokio::task::JoinHandle<()>,
 }
 
 /// Runs at most one auto-sync at a time.
@@ -83,6 +85,9 @@ pub struct LiveSync {
     queue: OperationQueue,
     tx: broadcast::Sender<Option<LiveStatus>>,
     running: Mutex<Option<Running>>,
+    /// Held while starting or stopping, so that a new auto-sync never
+    /// begins before the old one has finished copying.
+    switching: tokio::sync::Mutex<()>,
 }
 
 impl LiveSync {
@@ -93,6 +98,7 @@ impl LiveSync {
             queue,
             tx,
             running: Mutex::new(None),
+            switching: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -107,8 +113,8 @@ impl LiveSync {
     }
 
     /// Start keeping `from` and `to` in sync, replacing an auto-sync that
-    /// is running. Must be called within a Tokio runtime.
-    pub fn start(
+    /// is running once it has stopped. Must be called within a Tokio runtime.
+    pub async fn start(
         self: &Arc<Self>,
         from: Location,
         to: Location,
@@ -119,7 +125,8 @@ impl LiveSync {
                 "both panes show the same folder; open another folder in one of them".into(),
             ));
         }
-        self.stop();
+        let _switching = self.switching.lock().await;
+        self.halt().await;
         let changed = Arc::new(Notify::new());
         // Keep the watchers alive as long as the task runs.
         let from_watch = watch(&from, changed.clone());
@@ -138,26 +145,38 @@ impl LiveSync {
             conflicts: 0,
         }));
         let cancel = CancellationToken::new();
-        *self.running.lock().unwrap() = Some(Running {
-            cancel: cancel.clone(),
-            status: status.clone(),
-        });
         let first = status.lock().unwrap().clone();
         let _ = self.tx.send(Some(first.clone()));
 
         let this = self.clone();
-        tokio::spawn(async move {
-            let _watchers = (from_watch, to_watch);
-            this.run(status, changed, cancel).await;
+        let task = {
+            let (status, cancel) = (status.clone(), cancel.clone());
+            tokio::spawn(async move {
+                let _watchers = (from_watch, to_watch);
+                this.run(status, changed, cancel).await;
+            })
+        };
+        *self.running.lock().unwrap() = Some(Running {
+            cancel,
+            status,
+            task,
         });
         Ok(first)
     }
 
-    /// Stop auto-sync. A sync step already copying is cancelled.
-    pub fn stop(&self) {
-        if let Some(r) = self.running.lock().unwrap().take() {
+    /// Stop auto-sync, returning once a copy in progress has been
+    /// cancelled and has stopped.
+    pub async fn stop(&self) {
+        let _switching = self.switching.lock().await;
+        self.halt().await;
+    }
+
+    async fn halt(&self) {
+        let running = self.running.lock().unwrap().take();
+        if let Some(r) = running {
             r.cancel.cancel();
             let _ = self.tx.send(None);
+            let _ = r.task.await;
         }
     }
 
@@ -256,12 +275,11 @@ impl LiveSync {
             .iter()
             .filter(|s| s.action != SyncAction::Skip)
             .count() as u64;
-        let conflicts = preview
-            .steps
-            .iter()
-            .filter(|s| s.action == SyncAction::Skip)
-            .count() as u64;
+        let conflicts = preview.steps.iter().filter(|s| s.conflict).count() as u64;
         if items == 0 {
+            // Nothing to copy; remember that the folders matched, so that a
+            // later deletion is passed on rather than copied back.
+            self.engine.settle(preview.id)?;
             return Ok(Pass { items, conflicts });
         }
         let run = self.engine.run(preview.id, &Default::default())?;

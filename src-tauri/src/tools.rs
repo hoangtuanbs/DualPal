@@ -214,12 +214,14 @@ pub async fn live_sync_start(
     to: Location,
     direction: LiveDirection,
 ) -> CmdResult<LiveStatus> {
-    state.live.start(from, to, direction)
+    state.live.start(from, to, direction).await
 }
 
+/// Returns once a copy in progress has stopped.
 #[tauri::command]
-pub fn live_sync_stop(state: State<'_, AppState>) {
-    state.live.stop();
+pub async fn live_sync_stop(state: State<'_, AppState>) -> CmdResult<()> {
+    state.live.stop().await;
+    Ok(())
 }
 
 #[tauri::command]
