@@ -440,9 +440,66 @@ async fn sftp_backend_against_a_real_server() {
     assert_eq!(st.modified_ms, Some(1_600_000_000_000));
     c.fs.remove_file(&c.fs.join(&base, "x.sh")).await.unwrap();
 
+    // With DUALPAL_TEST_SFTP_DROP (a command that cuts open SSH sessions,
+    // e.g. `docker exec dualpal-test-sftp drop-connections`), an upload that
+    // loses its connection midway carries on and arrives intact.
+    if let Ok(drop_cmd) = std::env::var("DUALPAL_TEST_SFTP_DROP") {
+        upload_survives_a_dropped_connection(c.fs.clone(), &base, &drop_cmd).await;
+    }
+
     sync_round_trip(c.fs.clone(), &base).await;
     exercise(c.fs.clone(), &base).await;
     c.fs.remove_dir(&base).await.unwrap();
+}
+
+async fn upload_survives_a_dropped_connection(fs: Arc<dyn FileSystem>, base: &str, drop_cmd: &str) {
+    let tmp = tempfile::tempdir().unwrap();
+    let len = 96 * 1024 * 1024;
+    let data: Vec<u8> = (0..len).map(|i| (i * 7 + i / 251) as u8).collect();
+    let src = tmp.path().join("big.bin");
+    std::fs::write(&src, &data).unwrap();
+
+    let registry = Arc::new(Registry::with_local());
+    registry.register(fs.clone());
+    let q = OperationQueue::new(registry, Arc::new(ActivityLog::in_memory(10)), 1);
+    let id = q.enqueue(Operation::Copy {
+        sources: vec![Location::new("local", src.to_string_lossy())],
+        destination: Location::new(fs.id(), base),
+        conflict: ConflictPolicy::Fail,
+    });
+    // Cut the connection once some of the file is across.
+    let mut dropped = false;
+    while !q.get(id).unwrap().status.is_finished() {
+        if !dropped && q.get(id).unwrap().progress.bytes_done > 16 * 1024 * 1024 {
+            let out = std::process::Command::new("sh")
+                .args(["-c", drop_cmd])
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{drop_cmd}: {out:?}");
+            dropped = true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let info = q.wait(id).await.unwrap();
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert!(dropped, "the upload finished before the connection was cut");
+
+    let remote = fs.join(base, "big.bin");
+    let mut got = Vec::new();
+    fs.open_read(&remote)
+        .await
+        .unwrap()
+        .read_to_end(&mut got)
+        .await
+        .unwrap();
+    assert!(got == data, "the uploaded file differs");
+    let leftovers: Vec<String> = names(&*fs, base)
+        .await
+        .into_iter()
+        .filter(|n| n.contains("dualpal"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+    fs.remove_file(&remote).await.unwrap();
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 //! Executors for each [`Operation`] kind.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,7 +12,7 @@ use crate::compare::{self, Side};
 use crate::error::{Error, Result};
 use crate::rename::RenameItem;
 use crate::sync::{SnapPair, SyncAction, SyncDone, SyncStep};
-use crate::vfs::{Entry, EntryKind, FileSystem, Location, Reader, Writer};
+use crate::vfs::{Entry, EntryKind, FileSystem, LocalFs, Location};
 
 const CHUNK: usize = 256 * 1024;
 /// Minimum time between progress broadcasts, so a fast copy of many small
@@ -35,8 +35,10 @@ struct Job {
     inner: Arc<Inner>,
     id: Uuid,
     cancel: CancellationToken,
-    progress: Progress,
-    last_emit: Instant,
+    // Locks rather than plain fields, so that several files can be copied at
+    // once. Never held across an await.
+    progress: Mutex<Progress>,
+    last_emit: Mutex<Instant>,
 }
 
 pub(super) async fn run(
@@ -49,8 +51,8 @@ pub(super) async fn run(
         inner,
         id,
         cancel,
-        progress: Progress::default(),
-        last_emit: Instant::now(),
+        progress: Mutex::new(Progress::default()),
+        last_emit: Mutex::new(Instant::now()),
     };
     let result = match op {
         Operation::Copy {
@@ -92,16 +94,24 @@ impl Job {
         }
     }
 
-    fn emit(&mut self, force: bool) {
-        if force || self.last_emit.elapsed() >= EMIT_INTERVAL {
-            self.last_emit = Instant::now();
-            let p = self.progress.clone();
-            self.inner.update(self.id, |i| i.progress = p);
-        }
+    fn prog(&self) -> MutexGuard<'_, Progress> {
+        self.progress.lock().unwrap()
     }
 
-    fn set_current(&mut self, path: &str) {
-        self.progress.current = Some(path.to_string());
+    fn emit(&self, force: bool) {
+        {
+            let mut last = self.last_emit.lock().unwrap();
+            if !force && last.elapsed() < EMIT_INTERVAL {
+                return;
+            }
+            *last = Instant::now();
+        }
+        let p = self.prog().clone();
+        self.inner.update(self.id, |i| i.progress = p);
+    }
+
+    fn set_current(&self, path: &str) {
+        self.prog().current = Some(path.to_string());
         self.emit(false);
     }
 
@@ -159,14 +169,14 @@ impl Job {
                     return Err(Error::AlreadyExists(target));
                 }
                 if exists && conflict == ConflictPolicy::Skip {
-                    self.progress.skipped += 1;
+                    self.prog().skipped += 1;
                     continue;
                 }
                 // Fast path: a rename. Falls back to copy + delete when it
                 // fails (e.g. across volumes) or the target must be merged.
                 if !exists && src_fs.rename(&src.path, &target).await.is_ok() {
-                    self.progress.files_total += 1;
-                    self.progress.files_done += 1;
+                    self.prog().files_total += 1;
+                    self.prog().files_done += 1;
                     self.set_current(&src.path);
                     continue;
                 }
@@ -181,25 +191,13 @@ impl Job {
 
         for item in &plan {
             if !item.dir {
-                self.progress.files_total += 1;
-                self.progress.bytes_total += item.size;
+                self.prog().files_total += 1;
+                self.prog().bytes_total += item.size;
             }
         }
         self.emit(true);
 
-        for item in &plan {
-            self.check()?;
-            self.set_current(&item.src);
-            if item.dir {
-                match dst_fs.create_dir(&item.dst).await {
-                    Ok(()) => {}
-                    Err(Error::AlreadyExists(_)) if dst_fs.stat(&item.dst).await?.is_dir() => {}
-                    Err(e) => return Err(e),
-                }
-            } else if self.copy_file(item, &dst_fs, conflict).await? && is_move {
-                item.src_fs.remove_file(&item.src).await?;
-            }
-        }
+        self.copy_all(&plan, &dst_fs, conflict, is_move).await?;
 
         // Remove now-empty source folders of a move, deepest first. Folders
         // that still hold skipped files stay where they are.
@@ -259,75 +257,255 @@ impl Job {
                     size: entry.size,
                     modified_ms: entry.modified_ms,
                 }),
-                _ => self.progress.skipped += 1,
+                _ => self.prog().skipped += 1,
             }
         }
         Ok(())
     }
 
+    /// Create the folders of `plan`, then copy its files, several at a time
+    /// when either side is remote storage. A move removes each source file
+    /// once its copy is complete.
+    async fn copy_all(
+        &self,
+        plan: &[Item],
+        dst_fs: &Fs,
+        conflict: ConflictPolicy,
+        is_move: bool,
+    ) -> Result<()> {
+        for item in plan.iter().filter(|i| i.dir) {
+            self.check()?;
+            self.set_current(&item.src);
+            make_dir(dst_fs, &item.dst).await?;
+        }
+        let files: Vec<&Item> = plan.iter().filter(|i| !i.dir).collect();
+        let workers = files
+            .iter()
+            .map(|i| i.src_fs.parallel_transfers())
+            .max()
+            .unwrap_or(1)
+            .max(dst_fs.parallel_transfers())
+            .max(1);
+        // Two files whose names differ only in case land on the same file on
+        // most Mac and Windows disks; copy those one at a time, so that the
+        // conflict rule decides between them.
+        let mut seen = std::collections::HashSet::new();
+        let workers = if files.iter().all(|i| seen.insert(i.dst.to_lowercase())) {
+            workers
+        } else {
+            1
+        };
+        // Stops the other copies when one fails.
+        let stop = self.cancel.child_token();
+        let queue = Mutex::new(files.into_iter());
+        let mut tasks = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            tasks.push(self.copy_worker(&queue, dst_fs, conflict, is_move, &stop));
+        }
+        let results: Vec<Result<()>> = futures_util::future::join_all(tasks).await;
+        self.check()?;
+        // Report the failure that stopped the others, not their "cancelled".
+        let mut errors = results.into_iter().filter_map(|r| r.err());
+        let first = errors.next();
+        match errors.find(|e| !matches!(e, Error::Cancelled)).or(first) {
+            Some(Error::Cancelled) | None => Ok(()),
+            Some(e) => Err(e),
+        }
+    }
+
+    /// Copy files from `queue` until it is empty or a copy fails.
+    async fn copy_worker(
+        &self,
+        queue: &Mutex<std::vec::IntoIter<&Item>>,
+        dst_fs: &Fs,
+        conflict: ConflictPolicy,
+        is_move: bool,
+        stop: &CancellationToken,
+    ) -> Result<()> {
+        loop {
+            let Some(item) = queue.lock().unwrap().next() else {
+                return Ok(());
+            };
+            let result = async {
+                if self.copy_file(item, dst_fs, conflict, stop).await? && is_move {
+                    item.src_fs.remove_file(&item.src).await?;
+                }
+                Ok(())
+            }
+            .await;
+            if result.is_err() {
+                stop.cancel();
+                return result;
+            }
+        }
+    }
+
+    /// Copy one file. It is written under a temporary name and renamed into
+    /// place once complete, so the target never holds half a file. A copy to
+    /// or from remote storage that fails midway is retried a few times,
+    /// carrying on from where it stopped when the target allows it.
+    ///
     /// Returns true if the file was copied, false if it was skipped.
     async fn copy_file(
-        &mut self,
+        &self,
         item: &Item,
         dst_fs: &Fs,
         conflict: ConflictPolicy,
+        stop: &CancellationToken,
     ) -> Result<bool> {
-        if dst_fs.exists(&item.dst).await? {
+        if stop.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        self.set_current(&item.src);
+        let existing = match dst_fs.stat(&item.dst).await {
+            Ok(e) => Some(e),
+            Err(Error::NotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+        if existing.is_some() {
             match conflict {
                 ConflictPolicy::Fail => return Err(Error::AlreadyExists(item.dst.clone())),
                 ConflictPolicy::Skip => {
-                    self.progress.skipped += 1;
-                    self.progress.bytes_done += item.size;
+                    let mut p = self.prog();
+                    p.skipped += 1;
+                    p.bytes_done += item.size;
                     return Ok(false);
                 }
                 ConflictPolicy::Overwrite => {}
             }
         }
-        let mut reader = item.src_fs.open_read(&item.src).await?;
-        let mut writer = dst_fs.open_write(&item.dst).await?;
-        if let Err(e) = self
-            .pump(&mut reader, &mut writer, &item.src, &item.dst)
-            .await
-        {
-            drop(writer);
-            let _ = dst_fs.remove_file(&item.dst).await; // don't leave a partial file
+        let part = if dst_fs.atomic_writes() {
+            item.dst.clone()
+        } else {
+            part_path(dst_fs, &item.dst)
+        };
+        let retry = item.src_fs.id() != LocalFs::ID || dst_fs.id() != LocalFs::ID;
+        let mut offset = 0; // bytes of this file already in place
+        let mut attempt = 0;
+        let mut created = false; // whether `part` is ours to remove
+        let result = loop {
+            let mut sent = offset;
+            let tried = self
+                .copy_attempt(item, dst_fs, &part, offset, (&mut sent, &mut created), stop)
+                .await;
+            let e = match tried {
+                Ok(()) => break Ok(()),
+                Err(e) => e,
+            };
+            // Take back the progress of bytes that will be sent again.
+            let moved = sent > offset;
+            let resume = if retry && attempt < RETRY_DELAYS.len() && is_transient(&e, moved) {
+                let delay = RETRY_DELAYS[attempt];
+                attempt += 1;
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = stop.cancelled() => {}
+                }
+                if stop.is_cancelled() {
+                    None
+                } else {
+                    Some(resume_offset(dst_fs, &part, item.size).await)
+                }
+            } else {
+                None
+            };
+            self.prog().bytes_done -= sent - resume.unwrap_or(sent).min(sent);
+            match resume {
+                Some(next) => offset = next,
+                None => {
+                    break Err(if stop.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        e
+                    })
+                }
+            }
+        };
+        if let Err(e) = result {
+            // Don't leave a partial file. An upload that only appears once
+            // complete has left nothing, and the file at `part` is the
+            // original there.
+            if created && !dst_fs.atomic_writes() {
+                let _ = dst_fs.remove_file(&part).await;
+            }
             return Err(e);
+        }
+        if part != item.dst {
+            // The new file replaces the old one, so give it the old one's
+            // permissions, as writing into it would have kept them.
+            if let Some(mode) = existing.and_then(|e| e.mode) {
+                let _ = dst_fs.set_mode(&part, mode & 0o7777).await;
+            }
+            if let Err(e) = dst_fs.rename(&part, &item.dst).await {
+                let _ = dst_fs.remove_file(&part).await;
+                return Err(e);
+            }
         }
         if let Some(ms) = item.modified_ms {
             let _ = dst_fs.set_modified(&item.dst, ms).await;
         }
-        self.progress.files_done += 1;
+        self.prog().files_done += 1;
+        self.emit(false);
         Ok(true)
     }
 
-    async fn pump(&mut self, r: &mut Reader, w: &mut Writer, src: &str, dst: &str) -> Result<()> {
+    /// Copy `item` into `part` from `offset` on, adding each byte written to
+    /// `sent` and to the progress, and setting `created` once `part` may exist.
+    async fn copy_attempt(
+        &self,
+        item: &Item,
+        dst_fs: &Fs,
+        part: &str,
+        offset: u64,
+        (sent, created): (&mut u64, &mut bool),
+        stop: &CancellationToken,
+    ) -> Result<()> {
+        let (mut reader, mut writer) = if offset > 0 {
+            (
+                item.src_fs.open_read_at(&item.src, offset).await?,
+                dst_fs.open_write_at(part, offset).await?,
+            )
+        } else {
+            let reader = item.src_fs.open_read(&item.src).await?;
+            let writer = dst_fs.open_write(part).await;
+            // Even a failed open may have created the file.
+            *created = true;
+            (reader, writer?)
+        };
         let mut buf = vec![0u8; CHUNK];
         loop {
-            self.check()?;
-            let n = r.read(&mut buf).await.map_err(|e| Error::io(src, e))?;
+            if stop.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let n = reader
+                .read(&mut buf)
+                .await
+                .map_err(|e| Error::io(&item.src, e))?;
             if n == 0 {
                 break;
             }
-            w.write_all(&buf[..n])
+            writer
+                .write_all(&buf[..n])
                 .await
-                .map_err(|e| Error::io(dst, e))?;
-            self.progress.bytes_done += n as u64;
+                .map_err(|e| Error::io(part, e))?;
+            *sent += n as u64;
+            self.prog().bytes_done += n as u64;
             self.emit(false);
         }
-        w.flush().await.map_err(|e| Error::io(dst, e))?;
-        w.shutdown().await.map_err(|e| Error::io(dst, e))
+        writer.flush().await.map_err(|e| Error::io(part, e))?;
+        writer.shutdown().await.map_err(|e| Error::io(part, e))
     }
 
     // ---- trash -------------------------------------------------------------
 
     async fn trash(&mut self, targets: Vec<Location>) -> Result<()> {
-        self.progress.files_total = targets.len() as u64;
+        self.prog().files_total = targets.len() as u64;
         self.emit(true);
         for t in &targets {
             self.check()?;
             self.set_current(&t.path);
             self.fs(&t.fs)?.trash(&t.path).await?;
-            self.progress.files_done += 1;
+            self.prog().files_done += 1;
         }
         Ok(())
     }
@@ -351,7 +529,7 @@ impl Job {
                 items.push((fs.clone(), e.path, real_dir));
             }
         }
-        self.progress.files_total = items.len() as u64;
+        self.prog().files_total = items.len() as u64;
         self.emit(true);
         for (fs, path, dir) in items.into_iter().rev() {
             self.check()?;
@@ -361,7 +539,7 @@ impl Job {
             } else {
                 fs.remove_file(&path).await?;
             }
-            self.progress.files_done += 1;
+            self.prog().files_done += 1;
         }
         Ok(())
     }
@@ -395,14 +573,14 @@ impl Job {
                         items.push((fs.clone(), e, format!("{name}/")));
                     }
                     EntryKind::File => items.push((fs.clone(), e, name)),
-                    _ => self.progress.skipped += 1,
+                    _ => self.prog().skipped += 1,
                 }
             }
         }
         for (_, e, _) in &items {
             if e.kind == EntryKind::File {
-                self.progress.files_total += 1;
-                self.progress.bytes_total += e.size;
+                self.prog().files_total += 1;
+                self.prog().bytes_total += e.size;
             }
         }
         self.emit(true);
@@ -451,11 +629,11 @@ impl Job {
                         .write_all(&buf[..n])
                         .await
                         .map_err(|err| Error::io(&dest.path, err))?;
-                    self.progress.bytes_done += n as u64;
+                    self.prog().bytes_done += n as u64;
                     self.emit(false);
                 }
                 entry.close().await.map_err(zip_err)?;
-                self.progress.files_done += 1;
+                self.prog().files_done += 1;
             }
             let mut inner = zip.close().await.map_err(zip_err)?.into_inner();
             inner
@@ -471,10 +649,10 @@ impl Job {
     }
 
     async fn set_mode(&mut self, loc: Location, mode: u32) -> Result<()> {
-        self.progress.files_total = 1;
+        self.prog().files_total = 1;
         self.set_current(&loc.path);
         self.fs(&loc.fs)?.set_mode(&loc.path, mode).await?;
-        self.progress.files_done = 1;
+        self.prog().files_done = 1;
         Ok(())
     }
 
@@ -482,10 +660,10 @@ impl Job {
 
     async fn create_dir(&mut self, loc: Location) -> Result<()> {
         let fs = self.fs(&loc.fs)?;
-        self.progress.files_total = 1;
+        self.prog().files_total = 1;
         self.set_current(&loc.path);
         fs.create_dir(&loc.path).await?;
-        self.progress.files_done = 1;
+        self.prog().files_done = 1;
         Ok(())
     }
 
@@ -504,18 +682,76 @@ impl Job {
         if !case_only && fs.exists(&target).await? {
             return Err(Error::AlreadyExists(target));
         }
-        self.progress.files_total = 1;
+        self.prog().files_total = 1;
         self.set_current(&loc.path);
         fs.rename(&loc.path, &target).await?;
-        self.progress.files_done = 1;
+        self.prog().files_done = 1;
         Ok(())
+    }
+}
+
+/// Waits before each new try of a copy that failed midway.
+const RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+    Duration::from_secs(10),
+];
+
+/// Written bytes this close to the end of a cut-off file are sent again:
+/// SFTP writes are acknowledged out of order, so the last ones in flight
+/// may have left gaps.
+const RESUME_MARGIN: u64 = 4 * 1024 * 1024;
+
+/// A dropped connection, or a read or write failing partway through a file,
+/// which may work if tried again. A file that cannot even be opened, or a
+/// missing file or denied permission, will not.
+fn is_transient(e: &Error, moved: bool) -> bool {
+    match e {
+        Error::Connection(_) => true,
+        Error::Io { .. } => moved,
+        _ => false,
+    }
+}
+
+/// Where to carry on with a copy into `part` that was cut off: just before
+/// its end, or 0 to start over when the target cannot be written midway.
+async fn resume_offset(dst_fs: &Fs, part: &str, size: u64) -> u64 {
+    match dst_fs.stat(part).await {
+        Ok(e) if !dst_fs.atomic_writes() && e.size <= size => {
+            let keep = e.size.saturating_sub(RESUME_MARGIN);
+            keep - keep % CHUNK as u64
+        }
+        _ => 0,
+    }
+}
+
+/// The hidden name a file is written under until its copy is complete.
+/// It is new each time, so it never belongs to another file.
+fn part_path(fs: &Fs, dst: &str) -> String {
+    let parent = fs.parent(dst).unwrap_or_default();
+    let name = fs.file_name(dst).unwrap_or_default();
+    let tag = &Uuid::new_v4().simple().to_string()[..12];
+    // Keep within the usual 255-byte limit on a name.
+    let part = if name.len() <= 200 {
+        format!(".{name}.{tag}.dualpal-part")
+    } else {
+        format!(".dualpal-{tag}.part")
+    };
+    fs.join(&parent, &part)
+}
+
+async fn make_dir(fs: &Fs, path: &str) -> Result<()> {
+    match fs.create_dir(path).await {
+        Ok(()) => Ok(()),
+        Err(Error::AlreadyExists(_)) if fs.stat(path).await?.is_dir() => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
 /// Names from a server must not escape the local folder they are copied
 /// into (e.g. `..` or, on Windows, `C:\\Users\\…`).
 fn check_name(dst_fs: &Fs, name: &str) -> Result<()> {
-    if dst_fs.id() == crate::vfs::LocalFs::ID && !crate::vfs::is_safe_local_name(name) {
+    if dst_fs.id() == LocalFs::ID && !crate::vfs::is_safe_local_name(name) {
         return Err(Error::Invalid(format!(
             "unsafe file name for this computer: {name}"
         )));
@@ -579,14 +815,14 @@ impl Job {
                 return Err(Error::AlreadyExists(to.clone()));
             }
         }
-        self.progress.files_total = moves.len() as u64;
+        self.prog().files_total = moves.len() as u64;
         self.emit(true);
         if !swaps {
             for (fs, from, to) in &moves {
                 self.check()?;
                 self.set_current(from);
                 fs.rename(from, to).await?;
-                self.progress.files_done += 1;
+                self.prog().files_done += 1;
             }
             return Ok(());
         }
@@ -612,7 +848,7 @@ impl Job {
                     break;
                 }
                 placed += 1;
-                self.progress.files_done += 1;
+                self.prog().files_done += 1;
                 self.emit(false);
             }
         }
@@ -650,11 +886,11 @@ impl Job {
             };
             match s.action {
                 SyncAction::Skip => {}
-                SyncAction::DeleteLeft | SyncAction::DeleteRight => self.progress.files_total += 1,
+                SyncAction::DeleteLeft | SyncAction::DeleteRight => self.prog().files_total += 1,
                 _ => {
                     let t = t.unwrap_or_default();
-                    self.progress.files_total += t.files;
-                    self.progress.bytes_total += t.bytes;
+                    self.prog().files_total += t.files;
+                    self.prog().bytes_total += t.bytes;
                 }
             }
         }
@@ -685,7 +921,7 @@ impl Job {
                     if fs.exists(path).await? {
                         self.remove_tree(fs, path).await?;
                     }
-                    self.progress.files_done += 1;
+                    self.prog().files_done += 1;
                     self.sync_done(SyncDone::Deleted { rel: s.rel.clone() });
                 }
             }
@@ -754,19 +990,10 @@ impl Job {
         let mut plan = Vec::new();
         self.plan(src_fs, dst_fs, entry, dst.clone(), &mut plan)
             .await?;
+        self.copy_all(&plan, dst_fs, ConflictPolicy::Overwrite, false)
+            .await?;
         for item in &plan {
             self.check()?;
-            self.set_current(&item.src);
-            if item.dir {
-                match dst_fs.create_dir(&item.dst).await {
-                    Ok(()) => {}
-                    Err(Error::AlreadyExists(_)) if dst_fs.stat(&item.dst).await?.is_dir() => {}
-                    Err(e) => return Err(e),
-                }
-            } else {
-                self.copy_file(item, dst_fs, ConflictPolicy::Overwrite)
-                    .await?;
-            }
             // Record both sides as they are now, for the next sync.
             let suffix = item.dst[dst.len()..].replace('\\', "/");
             let item_rel = format!("{rel}{suffix}");

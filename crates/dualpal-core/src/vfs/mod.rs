@@ -144,6 +144,35 @@ pub trait FileSystem: Send + Sync {
     async fn open_read(&self, path: &str) -> Result<Reader>;
     /// Create or truncate a file for writing.
     async fn open_write(&self, path: &str) -> Result<Writer>;
+    /// Open a file for reading, starting `offset` bytes in.
+    async fn open_read_at(&self, path: &str, offset: u64) -> Result<Reader> {
+        use tokio::io::AsyncReadExt;
+        let mut r = self.open_read(path).await?;
+        let skipped = tokio::io::copy(&mut (&mut r).take(offset), &mut tokio::io::sink())
+            .await
+            .map_err(|e| Error::io(path, e))?;
+        if skipped < offset {
+            return Err(Error::Invalid(format!(
+                "{path} is shorter than {offset} bytes"
+            )));
+        }
+        Ok(r)
+    }
+    /// Open an existing file for writing at `offset`, to finish a copy that
+    /// was cut off. Bytes past `offset` may be left until they are written over.
+    async fn open_write_at(&self, path: &str, _offset: u64) -> Result<Writer> {
+        Err(Error::Unsupported(format!("resuming a write: {path}")))
+    }
+    /// True if a file written with [`FileSystem::open_write`] only appears
+    /// once it is complete (an S3 upload), so a copy needs no temporary name.
+    fn atomic_writes(&self) -> bool {
+        false
+    }
+    /// How many files to copy to or from here at the same time. Remote
+    /// storage is faster with several, since each file waits on the network.
+    fn parallel_transfers(&self) -> usize {
+        1
+    }
     /// Move an item to the system Trash / Recycle Bin.
     async fn trash(&self, path: &str) -> Result<()> {
         Err(Error::Unsupported(format!(

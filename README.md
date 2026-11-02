@@ -86,13 +86,12 @@ Add servers with **+** next to *Servers* in the sidebar.
 - Press ★ while browsing a server to add that folder to the server's own favorites, shown under it in the sidebar.
 - Copy and move work between any two panes: local ↔ server, server ↔ server.
 - **Edit** (F4) or double-click opens a server file in an app; each save is uploaded back. Set the app with **Editor…** in the toolbar. The *Editing* bar shows the files being watched.
+- Copies to and from servers write each file under a hidden temporary name and rename it when it is complete, so a target never holds half a file. Up to four files copy at once, and a copy cut off by a dropped connection reconnects and carries on where it stopped.
 
-Integration tests against real servers (an SSH server, and MinIO or the moto emulator for S3) run when these are set; Linux CI starts both:
+Integration tests against real servers run when `DUALPAL_TEST_SFTP` and `DUALPAL_TEST_S3` are set. [docker/test-servers](docker/test-servers/README.md) has an SSH server and an S3 emulator to run them against, which Linux CI starts:
 
 ```sh
-DUALPAL_TEST_SFTP=user@127.0.0.1:2222 DUALPAL_TEST_SFTP_KEY=~/.ssh/test_key \
-  DUALPAL_TEST_S3="http://127.0.0.1:9000|bucket|access-key|secret-key" \
-  cargo test -p dualpal-core --test remote
+docker compose -f docker/test-servers/compose.yaml up -d --build
 ```
 
 ## Compare, sync and power tools
