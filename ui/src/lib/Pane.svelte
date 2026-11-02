@@ -93,9 +93,29 @@
   function pointerdown(e: PointerEvent, entry: Entry, i: number) {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
     e.preventDefault(); // no text selection while dragging
+    // That also keeps focus where it was, e.g. in the quick editor: move it
+    // to the list so that the keys work on the files again.
+    listEl?.focus({ preventScroll: true });
     press = { x: e.clientX, y: e.clientY, entry, index: i };
     window.addEventListener("pointermove", pointermove);
-    window.addEventListener("pointerup", pointerup, { once: true });
+    window.addEventListener("pointerup", pointerup);
+    window.addEventListener("pointercancel", cancelDrag);
+    window.addEventListener("blur", cancelDrag);
+  }
+
+  function stopListening() {
+    window.removeEventListener("pointermove", pointermove);
+    window.removeEventListener("pointerup", pointerup);
+    window.removeEventListener("pointercancel", cancelDrag);
+    window.removeEventListener("blur", cancelDrag);
+    press = null;
+  }
+
+  /** A press or drag that ends without a drop: Esc, focus lost, cancelled. */
+  function cancelDrag() {
+    const was = press !== null;
+    stopListening();
+    if (was && dragging() && drag.from === index) endDrag();
   }
 
   function pointermove(e: PointerEvent) {
@@ -119,8 +139,7 @@
   }
 
   function pointerup(e: PointerEvent) {
-    window.removeEventListener("pointermove", pointermove);
-    press = null;
+    stopListening();
     if (!dragging()) return;
     justDragged = true;
     setTimeout(() => (justDragged = false));
@@ -159,9 +178,7 @@
     if (e.key === "Escape" && dragging() && drag.from === index) {
       e.stopPropagation();
       e.preventDefault();
-      window.removeEventListener("pointermove", pointermove);
-      press = null;
-      endDrag();
+      cancelDrag();
     }
   }
 

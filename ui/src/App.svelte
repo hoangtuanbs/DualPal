@@ -739,9 +739,8 @@
   function openInNewTab(entry: Entry) {
     const loc = active.location;
     if (!loc) return;
-    const group = groups[activeIndex];
-    group.newTab();
-    group.current.open({ fs: loc.fs, path: entry.path });
+    // Only the chosen folder loads, so no slower listing can replace it.
+    groups[activeIndex].newTab(active.clone({ fs: loc.fs, path: entry.path }));
   }
 
   /** The keyboard's menu key, or Shift+F10: the menu for the cursor row. */
