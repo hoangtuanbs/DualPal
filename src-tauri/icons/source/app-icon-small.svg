@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3A3F4B"/><stop offset="1" stop-color="#16181E"/>
+    </linearGradient>
+    <linearGradient id="l" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFE08A"/><stop offset="0.55" stop-color="#FFB52E"/><stop offset="1" stop-color="#F08C00"/>
+    </linearGradient>
+    <linearGradient id="r" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF7F50"/><stop offset="0.55" stop-color="#F0441F"/><stop offset="1" stop-color="#B8260E"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.75"/><stop offset="1" stop-color="#fff" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.35"/><stop offset="0.5" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="lp"><rect x="140" y="140" width="330" height="744" rx="70"/></clipPath>
+    <clipPath id="rp"><rect x="554" y="140" width="330" height="744" rx="70"/></clipPath>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="170" fill="url(#tile)"/>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="url(#rim)" stroke-width="4"/>
+  <rect x="140" y="140" width="330" height="744" rx="70" fill="url(#l)"/>
+  <rect x="554" y="140" width="330" height="744" rx="70" fill="url(#r)"/>
+  <!-- glossy reflection: a curved highlight over the top of each pane -->
+  <g fill="none" stroke="#fff" stroke-width="96" stroke-linecap="round" stroke-linejoin="round" filter="url(#sh)">
+    <path d="M260 380 H740 M630 270 L740 380 L630 490"/>
+    <path d="M764 650 H284 M394 540 L284 650 L394 760"/>
+  </g>
+</svg>

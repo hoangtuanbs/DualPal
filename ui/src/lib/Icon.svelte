@@ -38,6 +38,9 @@
       '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
     clipboard:
       '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+    "arrow-right": '<path d="M4 12h16"/><path d="m14 6 6 6-6 6"/>',
+    "arrow-left": '<path d="M20 12H4"/><path d="m10 6-6 6 6 6"/>',
+    "arrow-left-right": '<path d="M3 8h18"/><path d="m17 4 4 4-4 4"/><path d="M21 16H3"/><path d="m7 12-4 4 4 4"/>',
     check: '<path d="M20 6 9 17l-5-5"/>',
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   };

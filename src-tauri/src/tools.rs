@@ -7,6 +7,7 @@ use std::sync::Arc;
 use dualpal_core::activity::{self, Insights};
 use dualpal_core::compare::CompareOptions;
 use dualpal_core::difftools::{self, DiffTool};
+use dualpal_core::livesync::{LiveDirection, LiveStatus};
 use dualpal_core::rename::{self, RenameInput, RenamePreset, RenamePreview, RenameRule};
 use dualpal_core::sync::{SyncAction, SyncFavorite, SyncMode, SyncPreview};
 use dualpal_core::vfs::LocalFs;
@@ -201,4 +202,29 @@ pub fn activity_insights(
         days,
         utc_offset_minutes,
     )
+}
+
+/// Start auto-sync of `from` and `to`, replacing one that is running.
+/// Updates are sent as `live-sync-updated` events (null once it stops).
+/// Async so that it runs on the Tokio runtime.
+#[tauri::command]
+pub async fn live_sync_start(
+    state: State<'_, AppState>,
+    from: Location,
+    to: Location,
+    direction: LiveDirection,
+) -> CmdResult<LiveStatus> {
+    state.live.start(from, to, direction).await
+}
+
+/// Returns once a copy in progress has stopped.
+#[tauri::command]
+pub async fn live_sync_stop(state: State<'_, AppState>) -> CmdResult<()> {
+    state.live.stop().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn live_sync_status(state: State<'_, AppState>) -> Option<LiveStatus> {
+    state.live.status()
 }

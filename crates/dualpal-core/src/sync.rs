@@ -490,6 +490,17 @@ impl SyncEngine {
         Ok(preview)
     }
 
+    /// Drop a plan that will not be run, saving what the comparison found
+    /// as the snapshot, so that a later two-way sync knows which items were
+    /// already in sync. Used when a plan has nothing to do.
+    pub fn settle(&self, plan: Uuid) -> Result<()> {
+        let Some(stored) = self.plans.lock().unwrap().remove(&plan) else {
+            return Ok(());
+        };
+        let next = next_snapshot(&stored.snapshot, &stored.comparison, &[]);
+        self.save_snapshot(&stored.comparison.left, &stored.comparison.right, next)
+    }
+
     /// Queue the planned steps, with the user's changes in `overrides`
     /// (relative path to action). Must be called within a Tokio runtime.
     pub fn run(

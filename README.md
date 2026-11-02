@@ -102,6 +102,15 @@ Integration tests against real servers run when `DUALPAL_TEST_SFTP` and `DUALPAL
 docker compose -f docker/test-servers/compose.yaml up -d --build
 ```
 
+## Auto-sync
+
+The three arrow buttons in the toolbar keep the two panes' folders in sync while they are on:
+
+- **→** copies new and changed files from the left pane to the right, and **←** from the right pane to the left. Neither deletes anything.
+- **⇄** copies changes in either pane to the other and passes on deletions made since the last sync. Items changed on both sides are left alone.
+
+Folders on this computer are watched, so a change is synced within a couple of seconds. Servers, buckets and Windows network or WSL folders send no change notifications, so they are checked every 10 seconds. While auto-sync runs, the panes are locked and a bar shows what it is doing; click the lit button again, or *Stop*, to end it. Each sync appears under *Operations*.
+
 ## Compare, sync and power tools
 
 - **Compare & Sync** compares the folders in the two panes (local or on any server) by size and date, size only, or content. Choose *Update →* (copy new and changed items to the right), *Mirror →* (make the right an exact copy) or *Two-way ⇄*. Every planned step can be changed before you press *Synchronize*, and deletions are confirmed first.

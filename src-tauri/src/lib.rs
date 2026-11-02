@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use dualpal_core::connections::Connections;
+use dualpal_core::livesync::LiveSync;
 use dualpal_core::places::Favorites;
 use dualpal_core::remote_edit::RemoteEditor;
 use dualpal_core::rename::RenamePresets;
@@ -37,6 +38,7 @@ pub struct AppState {
     /// Downloaded copies of remote files for previews and compare apps.
     pub preview_dir: PathBuf,
     pub sync: Arc<SyncEngine>,
+    pub live: Arc<LiveSync>,
     pub sync_favorites: SyncFavorites,
     pub rename_presets: RenamePresets,
     /// Stops the folder comparison that is running, if any.
@@ -108,6 +110,21 @@ pub fn run() {
             });
 
             let sync = SyncEngine::new(queue.clone(), Some(data_dir.join("sync-state")));
+            let live = LiveSync::new(sync.clone(), queue.clone());
+            let mut live_rx = live.subscribe();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    match live_rx.recv().await {
+                        Ok(s) => {
+                            let _ = handle.emit("live-sync-updated", s);
+                        }
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break,
+                    }
+                }
+            });
             let sync_favorites = SyncFavorites::open(data_dir.join("syncs.json"));
             let rename_presets = RenamePresets::open(data_dir.join("rename-presets.json"));
 
@@ -121,6 +138,7 @@ pub fn run() {
                 start_paths: Mutex::new(HashMap::new()),
                 preview_dir,
                 sync,
+                live,
                 sync_favorites,
                 rename_presets,
                 compare_cancel: Mutex::new(None),
@@ -129,6 +147,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::file_systems,
+            tools::live_sync_start,
+            tools::live_sync_stop,
+            tools::live_sync_status,
             commands::home_location,
             commands::list_dir,
             commands::parent_location,
