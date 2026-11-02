@@ -27,6 +27,15 @@
   let host = $state(sftp0?.host ?? "");
   let port = $state(sftp0?.port ?? 22);
   let user = $state(sftp0?.user ?? "");
+
+  /** "root@10.0.0.5" typed as the host: move the user to its own field. */
+  function splitUserHost() {
+    const at = host.lastIndexOf("@");
+    if (at < 0) return;
+    const u = host.slice(0, at).trim();
+    host = host.slice(at + 1).trim();
+    if (u && !user.trim()) user = u;
+  }
   let method = $state<"password" | "keyFile" | "agent">(sftp0?.auth.method ?? "password");
   let keyPath = $state(sftp0?.auth.method === "keyFile" ? sftp0.auth.path : "~/.ssh/id_ed25519");
   // S3
@@ -72,6 +81,7 @@
   }
 
   function build(): Connection {
+    if (type === "sftp") splitUserHost();
     return {
       id: start?.id ?? "",
       name: name.trim() || (type === "sftp" ? host.trim() : bucket.trim()),
@@ -157,13 +167,20 @@
       <div class="row">
         <span>Server</span>
         <div class="pair">
-          <input bind:value={host} placeholder="example.com" required autocapitalize="off" spellcheck="false" />
+          <input
+            bind:value={host}
+            onblur={splitUserHost}
+            placeholder="example.com"
+            required
+            autocapitalize="off"
+            spellcheck="false"
+          />
           <input class="port" type="number" min="1" max="65535" bind:value={port} aria-label="Port" />
         </div>
       </div>
       <label class="row">
         <span>User</span>
-        <input bind:value={user} required autocapitalize="off" spellcheck="false" />
+        <input bind:value={user} required={!host.includes("@")} autocapitalize="off" spellcheck="false" />
       </label>
       <label class="row">
         <span>Sign in with</span>

@@ -36,6 +36,62 @@ pub struct SftpParams {
     pub known_hosts: Option<PathBuf>,
 }
 
+impl SftpParams {
+    /// Accept `user@host` in the host field, like `ssh` does. The user part
+    /// fills an empty user field; the host is what follows the `@`.
+    pub fn normalized(mut self) -> Self {
+        let host = self.host.trim().to_string();
+        match host.rsplit_once('@') {
+            Some((user, rest)) if !rest.is_empty() => {
+                if self.user.trim().is_empty() {
+                    self.user = user.to_string();
+                }
+                self.host = rest.to_string();
+            }
+            _ => self.host = host,
+        }
+        self
+    }
+}
+
+/// Read a private key file saved as UTF-8 or UTF-16 (as PowerShell's `>`
+/// and Notepad's "Unicode" write it), with or without a BOM or CRLFs.
+pub fn load_key(
+    path: impl AsRef<std::path::Path>,
+    passphrase: Option<&str>,
+) -> std::result::Result<keys::PrivateKey, keys::Error> {
+    let bytes = std::fs::read(path)?;
+    keys::decode_secret_key(&key_text(&bytes), passphrase)
+}
+
+fn key_text(bytes: &[u8]) -> String {
+    let utf16 = |be: bool, b: &[u8]| {
+        let units: Vec<u16> = b
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| {
+                if be {
+                    u16::from_be_bytes(c)
+                } else {
+                    u16::from_le_bytes(c)
+                }
+            })
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    let text = match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(false, rest),
+        [0xFE, 0xFF, rest @ ..] => utf16(true, rest),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        // UTF-16 without a BOM: every other byte of "-----BEGIN" is zero.
+        [b'-', 0, b'-', 0, ..] => utf16(false, bytes),
+        [0, b'-', 0, b'-', ..] => utf16(true, bytes),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    };
+    text.replace("\r\n", "\n")
+}
+
 /// Outcome of the host key check, read after the handshake.
 #[derive(Clone, Debug)]
 enum HostCheck {
@@ -187,14 +243,12 @@ async fn authenticate(h: &mut Handle<Client>, p: &SftpParams) -> Result<()> {
             password(h, user, &pw).await?
         }
         SshAuth::KeyFile { path } => {
-            let key = keys::load_secret_key(expand_home(path), p.secret.as_deref()).map_err(
-                |e| match e {
-                    keys::Error::KeyIsEncrypted => {
-                        Error::AuthFailed("the key file needs its passphrase".into())
-                    }
-                    e => Error::AuthFailed(format!("could not read the key file {path}: {e}")),
-                },
-            )?;
+            let key = load_key(expand_home(path), p.secret.as_deref()).map_err(|e| match e {
+                keys::Error::KeyIsEncrypted => {
+                    Error::AuthFailed("the key file needs its passphrase".into())
+                }
+                e => Error::AuthFailed(format!("could not read the key file {path}: {e}")),
+            })?;
             with_key(h, user, key).await?
         }
         SshAuth::Agent => {
@@ -269,7 +323,7 @@ async fn default_keys(
         if !path.exists() {
             continue;
         }
-        if let Ok(key) = keys::load_secret_key(&path, passphrase) {
+        if let Ok(key) = load_key(&path, passphrase) {
             if with_key(h, user, key).await? {
                 return Ok(true);
             }
@@ -380,6 +434,7 @@ fn to_entry(
 
 impl SftpFs {
     pub async fn connect(id: String, name: String, params: SftpParams) -> Result<Self> {
+        let params = params.normalized();
         let live = open_live(&params).await?;
         let home = live
             .sftp
@@ -699,5 +754,47 @@ mod tests {
         assert_eq!(hosts[0].identity_file.as_deref(), Some("~/.ssh/id_web"));
         assert_eq!(hosts[2].host_name, "10.0.0.2");
         assert_eq!(hosts[2].user, None);
+    }
+
+    #[test]
+    fn host_field_accepts_user_at_host() {
+        let p = |host: &str, user: &str| {
+            SftpParams {
+                host: host.into(),
+                port: 22,
+                user: user.into(),
+                auth: SshAuth::Agent,
+                secret: None,
+                trust_fingerprint: None,
+                known_hosts: None,
+            }
+            .normalized()
+        };
+        let a = p("root@10.73.141.187", "root");
+        assert_eq!(
+            (a.host.as_str(), a.user.as_str()),
+            ("10.73.141.187", "root")
+        );
+        let b = p(" admin@nas.local ", "");
+        assert_eq!((b.host.as_str(), b.user.as_str()), ("nas.local", "admin"));
+        let c = p("example.com", "me");
+        assert_eq!((c.host.as_str(), c.user.as_str()), ("example.com", "me"));
+    }
+
+    #[test]
+    fn key_files_in_utf16_or_with_bom_are_read() {
+        let pem =
+            "-----BEGIN OPENSSH PRIVATE KEY-----\r\nabc\r\n-----END OPENSSH PRIVATE KEY-----\r\n";
+        let want = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n";
+        let le: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(pem.encode_utf16().flat_map(|u| u.to_le_bytes()))
+            .collect();
+        assert_eq!(key_text(&le), want);
+        let be: Vec<u8> = pem.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        assert_eq!(key_text(&be), want);
+        let bom: Vec<u8> = [0xEF, 0xBB, 0xBF].into_iter().chain(pem.bytes()).collect();
+        assert_eq!(key_text(&bom), want);
+        assert_eq!(key_text(pem.as_bytes()), want);
     }
 }
