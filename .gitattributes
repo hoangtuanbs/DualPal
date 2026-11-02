@@ -1,0 +1,2 @@
+# Scripts run inside Linux containers need LF endings, also on Windows.
+docker/** text eol=lf

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Cut every open SSH connection, as a network drop would. The server keeps
+# running and accepts new connections.
+#   docker exec dualpal-test-sftp drop-connections
+pids=$(pgrep -f 'sshd: .*@' || true)
+[ -n "$pids" ] && kill -9 $pids
+echo "dropped: ${pids:-none}"

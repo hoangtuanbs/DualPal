@@ -18,6 +18,7 @@ sysinfo.workspace = true
 dirs.workspace = true
 async_zip.workspace = true
 futures-lite.workspace = true
+futures-util.workspace = true
 chrono.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true

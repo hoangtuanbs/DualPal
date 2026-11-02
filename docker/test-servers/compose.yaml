@@ -1,0 +1,23 @@
+# Test servers for Dual Pal. Start them with:
+#   docker compose -f docker/test-servers/compose.yaml up -d --build
+# See docker/test-servers/README.md.
+name: dualpal-test
+
+services:
+  sftp:
+    build: ./sftp
+    image: dualpal-test-sftp
+    container_name: dualpal-test-sftp
+    ports:
+      - "127.0.0.1:2222:22"
+    environment:
+      SFTP_PASSWORD: dualpal
+    volumes:
+      - ./keys:/keys
+
+  s3:
+    build: ./s3
+    image: dualpal-test-s3
+    container_name: dualpal-test-s3
+    ports:
+      - "127.0.0.1:9000:9000"
