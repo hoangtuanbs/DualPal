@@ -4,7 +4,7 @@
   import { formatBytes, formatDate, formatShortDate } from "./format";
   import type { PaneGroup, SortKey } from "./pane-state.svelte";
   import { fsNames } from "./fs-names.svelte";
-  import { drag, dragging, type DropTarget } from "./drag.svelte";
+  import { drag, dragging, fromKeyboard, type DropTarget } from "./drag.svelte";
 
   let {
     group,
@@ -284,6 +284,7 @@
     aria-multiselectable="true"
     tabindex="-1"
     oncontextmenu={(e) => {
+      if (fromKeyboard(e)) return; // the app opens the menu for the cursor row
       e.preventDefault();
       onfocus();
       oncontext(e.clientX, e.clientY, null);

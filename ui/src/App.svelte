@@ -23,7 +23,8 @@
   import Pane from "./lib/Pane.svelte";
   import Inspector from "./lib/Inspector.svelte";
   import ContextMenu, { type MenuItem } from "./lib/ContextMenu.svelte";
-  import { drag, type DropTarget } from "./lib/drag.svelte";
+  import { drag, fromKeyboard, type DropTarget } from "./lib/drag.svelte";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { copyText } from "./lib/about";
   import Sidebar from "./lib/Sidebar.svelte";
   import ConnectionDialog from "./lib/ConnectionDialog.svelte";
@@ -752,6 +753,51 @@
     openMenu(r.left + 32, r.bottom, active.current);
   }
 
+  /** The folder under a point: a folder row in a pane, or the pane's folder. */
+  function folderAt(x: number, y: number): DropTarget | null {
+    const el = document.elementFromPoint(x, y);
+    const paneEl = el?.closest<HTMLElement>("[data-pane]");
+    const fs = paneEl?.dataset.fs;
+    const path = paneEl?.dataset.path;
+    if (!paneEl || !fs || path == null) return null;
+    const pane = Number(paneEl.dataset.pane);
+    const row = el?.closest<HTMLElement>("[data-dir]");
+    if (row?.dataset.dir) return { pane, folder: { fs, path: row.dataset.dir }, name: row.dataset.name ?? "", row: row.dataset.dir };
+    return { pane, folder: { fs, path }, name: paneEl.dataset.title || path, row: null };
+  }
+
+  // Files dragged in from Explorer or Finder: copy them where they land.
+  $effect(() => {
+    let unlisten: (() => void) | undefined;
+    let gone = false;
+    const at = (p: { x: number; y: number }) => folderAt(p.x / devicePixelRatio, p.y / devicePixelRatio);
+    getCurrentWebview()
+      .onDragDropEvent(({ payload }) => {
+        if (payload.type === "enter" || payload.type === "over") {
+          drag.target = at(payload.position);
+        } else if (payload.type === "drop") {
+          const target = at(payload.position);
+          drag.target = null;
+          if (target && payload.paths.length) {
+            enqueue({
+              type: "copy",
+              sources: payload.paths.map((path) => ({ fs: "local", path })),
+              destination: target.folder,
+              conflict: "fail",
+            });
+          }
+        } else {
+          drag.target = null;
+        }
+      })
+      .then((u) => (gone ? u() : (unlisten = u)))
+      .catch(() => {}); // not running inside the app (e.g. a plain browser)
+    return () => {
+      gone = true;
+      unlisten?.();
+    };
+  });
+
   /** Items dragged from a pane and let go over a folder. */
   function dropped(items: Entry[], from: Location, target: DropTarget, move: boolean) {
     if (!items.length) return;
@@ -932,7 +978,10 @@
   oncontextmenu={(e) => {
     // No browser menu (Reload, Inspect…) outside text fields.
     const t = e.target as HTMLElement | null;
-    if (!t?.closest("input, textarea, [contenteditable]")) e.preventDefault();
+    if (t?.closest("input, textarea, [contenteditable]")) return;
+    e.preventDefault();
+    // The Menu key, which WebView2 delivers only as this event.
+    if (fromKeyboard(e) && !menu && !dialog) menuFromKeyboard();
   }}
 />
 

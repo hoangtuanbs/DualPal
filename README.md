@@ -50,7 +50,7 @@ npm run check            # UI type-check
 
 - **Click** an item to put the cursor on it; **Ctrl/⌘-click** marks several, **Shift-click** marks a range. Operations act on all marked items, or on the item under the cursor when none are marked.
 - **Right-click** an item for its menu: open, edit, copy or move to the other pane, rename, compress, copy path, compare, trash or delete. With several items marked, the menu acts on all of them. Right-click empty space for new folder, refresh, select and more.
-- **Drag** items to the other pane, or onto a folder in either pane, to copy them there. Hold **Shift** when you let go to move instead; **Esc** cancels.
+- **Drag** items to the other pane, or onto a folder in either pane, to copy them there. Hold **Shift** when you let go to move instead; **Esc** cancels. Files dragged in from Explorer or Finder are copied to the folder they are dropped on.
 
 ## Keyboard
 
