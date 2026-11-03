@@ -508,14 +508,74 @@ impl AsyncRead for FtpReader {
     }
 }
 
-type Finish = Pin<Box<dyn std::future::Future<Output = std::result::Result<(), FtpError>> + Send>>;
+type Finish = Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send>>;
+
+/// How long to wait for the server to confirm an upload once the data has
+/// been sent. A server or relay that never answers fails the copy instead of
+/// hanging it.
+const FINISH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A file being uploaded, on its own connection. Shutting it down waits
 /// for the server to confirm that the whole file arrived.
 struct FtpWriter {
-    _conn: Stream,
+    conn: Option<Stream>,
     inner: Option<TransferStream<AsyncRustlsStream>>,
     finishing: Option<Finish>,
+    path: String,
+    /// Size the file should have once this upload ends: where it started
+    /// (for a resumed upload) plus everything written.
+    expected: u64,
+}
+
+impl FtpWriter {
+    fn new(
+        conn: Stream,
+        inner: TransferStream<AsyncRustlsStream>,
+        path: String,
+        offset: u64,
+    ) -> Self {
+        Self {
+            conn: Some(conn),
+            inner: Some(inner),
+            finishing: None,
+            path,
+            expected: offset,
+        }
+    }
+}
+
+/// Wait for the server's verdict on an upload, then check the size it
+/// reports. A plain FTP upload is ended by closing the connection, so bytes
+/// lost on the way (seen through Windows to WSL port forwarding) would
+/// otherwise go unnoticed: the server takes the short file as complete.
+async fn finish_upload(
+    w: TransferStream<AsyncRustlsStream>,
+    conn: Option<Stream>,
+    path: String,
+    expected: u64,
+) -> std::io::Result<()> {
+    let timed_out = || {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the server did not confirm the upload",
+        )
+    };
+    tokio::time::timeout(FINISH_TIMEOUT, w.finish())
+        .await
+        .map_err(|_| timed_out())?
+        .map_err(|e| std::io::Error::other(reply_text(&e)))?;
+    let Some(mut conn) = conn else {
+        return Ok(());
+    };
+    // Servers without SIZE are taken at their word.
+    if let Ok(Ok(got)) = tokio::time::timeout(FINISH_TIMEOUT, conn.size(&path)).await {
+        if got as u64 != expected {
+            return Err(std::io::Error::other(format!(
+                "the server received {got} of {expected} bytes"
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl AsyncWrite for FtpWriter {
@@ -524,10 +584,14 @@ impl AsyncWrite for FtpWriter {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        match self.inner.as_mut() {
+        let r = match self.inner.as_mut() {
             Some(w) => Pin::new(w).poll_write(cx, buf),
-            None => Poll::Ready(Err(std::io::Error::other("the upload has finished"))),
+            None => return Poll::Ready(Err(std::io::Error::other("the upload has finished"))),
+        };
+        if let Poll::Ready(Ok(n)) = r {
+            self.expected += n as u64;
         }
+        r
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
@@ -542,14 +606,17 @@ impl AsyncWrite for FtpWriter {
             let Some(w) = self.inner.take() else {
                 return Poll::Ready(Ok(()));
             };
-            self.finishing = Some(Box::pin(w.finish()));
+            let conn = self.conn.take();
+            let path = self.path.clone();
+            let expected = self.expected;
+            self.finishing = Some(Box::pin(finish_upload(w, conn, path, expected)));
         }
         let fut = self.finishing.as_mut().unwrap();
         match fut.as_mut().poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(r) => {
                 self.finishing = None;
-                Poll::Ready(r.map_err(|e| std::io::Error::other(reply_text(&e))))
+                Poll::Ready(r)
             }
         }
     }
@@ -700,11 +767,7 @@ impl FileSystem for FtpFs {
         let p = posix::normalize(path);
         let mut conn = self.open().await?;
         let inner = conn.put_with_stream(&p).await.map_err(|e| map_err(&p, e))?;
-        Ok(Box::new(FtpWriter {
-            _conn: conn,
-            inner: Some(inner),
-            finishing: None,
-        }))
+        Ok(Box::new(FtpWriter::new(conn, inner, p, 0)))
     }
 
     async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
@@ -715,11 +778,7 @@ impl FileSystem for FtpFs {
             .await
             .map_err(|e| map_err(&p, e))?;
         let inner = conn.put_with_stream(&p).await.map_err(|e| map_err(&p, e))?;
-        Ok(Box::new(FtpWriter {
-            _conn: conn,
-            inner: Some(inner),
-            finishing: None,
-        }))
+        Ok(Box::new(FtpWriter::new(conn, inner, p, offset)))
     }
 
     fn resumable_writes(&self) -> bool {
