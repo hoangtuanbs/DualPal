@@ -1,5 +1,5 @@
 import { SvelteSet } from "svelte/reactivity";
-import { api, errorMessage, type Entry, type Location } from "./api";
+import { api, errorKind, errorMessage, type Entry, type Location } from "./api";
 import { fsNames } from "./fs-names.svelte";
 
 export type SortKey = "name" | "size" | "modified";
@@ -54,10 +54,10 @@ export class PaneState {
     return this.current ? [this.current] : [];
   }
 
-  async open(loc: Location, opts: { record?: boolean; focusName?: string } = {}) {
+  async open(loc: Location, opts: { record?: boolean; focusName?: string; entries?: Entry[] } = {}) {
     this.loading = true;
     try {
-      const entries = await api.listDir(loc);
+      const entries = opts.entries ?? (await api.listDir(loc));
       const from = this.location;
       if (opts.record !== false && this.location) {
         this.history.push(this.location);
@@ -104,14 +104,21 @@ export class PaneState {
 
   /** Reload, keeping the cursor on the same item where possible. */
   async refresh() {
-    if (!this.location) return;
+    const here = this.location;
+    if (!here) return;
     const keep = this.current?.name;
     const marked = new Set(this.selected);
     try {
-      this.entries = await api.listDir(this.location);
+      const entries = await api.listDir(here);
+      if (this.location !== here) return; // the user went elsewhere meanwhile
+      this.entries = entries;
       this.error = null;
     } catch (e) {
-      this.error = errorMessage(e);
+      if (this.location !== here) return;
+      // The folder was deleted or renamed elsewhere: show the nearest
+      // folder above it that still exists instead of an error.
+      if (errorKind(e) === "notFound" && (await this.openNearestParent(here))) return;
+      if (this.location === here) this.error = errorMessage(e);
       return;
     }
     this.selected.clear();
@@ -119,6 +126,27 @@ export class PaneState {
     const idx = keep ? this.visible.findIndex((e) => e.name === keep) : -1;
     this.cursor = idx >= 0 ? idx : Math.min(this.cursor, Math.max(0, this.visible.length - 1));
     this.updateSpace();
+  }
+
+  /** Open the closest existing folder above `from`, unless the user moves
+   *  elsewhere in the meantime. */
+  private async openNearestParent(from: Location): Promise<boolean> {
+    let loc = from;
+    while (true) {
+      const parent = await api.parentLocation(loc).catch(() => null);
+      if (!parent || parent.path === loc.path) return false;
+      let entries: Entry[];
+      try {
+        entries = await api.listDir(parent);
+      } catch (e) {
+        if (errorKind(e) !== "notFound") return false;
+        loc = parent;
+        continue;
+      }
+      if (this.location !== from) return true;
+      await this.open(parent, { record: false, entries });
+      return this.error === null;
+    }
   }
 
   async up() {
