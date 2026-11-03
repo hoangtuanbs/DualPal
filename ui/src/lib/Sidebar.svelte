@@ -156,7 +156,7 @@
 
   <h3 class="with-action">
     Servers
-    <button class="add" title="Add an SFTP or S3 server" aria-label="Add server" onclick={onaddserver}>+</button>
+    <button class="add" title="Add a server: SFTP, FTP, WebDAV or S3" aria-label="Add server" onclick={onaddserver}>+</button>
   </h3>
   {#each connections as c (c.id)}
     <div

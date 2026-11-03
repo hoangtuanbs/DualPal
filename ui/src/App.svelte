@@ -286,8 +286,19 @@
           confirmLabel: "Connect",
           onconfirm: (secret, remember) => connectThen(c, after, { ...opts, secret, remember }),
         };
+      } else if (kind === "authFailed" && (c.endpoint.type === "ftp" || c.endpoint.type === "webDav") && !c.endpoint.user.trim()) {
+        // No user name: a password alone cannot sign in, so ask for both.
+        dialog = {
+          title: `Sign in to ${c.name}`,
+          message:
+            c.endpoint.type === "ftp"
+              ? "This server does not allow anonymous sign-in. Add your user name and password to the server."
+              : "This server needs a user name and password. Add them to the server.",
+          confirmLabel: "Edit Server",
+          onconfirm: () => (editing = c),
+        };
       } else if (kind === "authFailed" && (c.endpoint.type === "ftp" || c.endpoint.type === "webDav")) {
-        const who = c.endpoint.type === "ftp" ? `${c.endpoint.user || "anonymous"}@${c.endpoint.host}` : `${c.endpoint.user} at ${c.endpoint.url}`;
+        const who = c.endpoint.type === "ftp" ? `${c.endpoint.user}@${c.endpoint.host}` : `${c.endpoint.user} at ${c.endpoint.url}`;
         dialog = {
           title: `Sign in to ${c.name}`,
           message: `${opts.secret ? "That password did not work. " : ""}Enter the password for ${who}.`,

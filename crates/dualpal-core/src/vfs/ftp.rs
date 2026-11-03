@@ -28,7 +28,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use suppaftp::tokio::{
-    AsyncRustlsConnector, AsyncRustlsFtpStream, AsyncRustlsStream, TransferStream,
+    AsyncDataStream, AsyncRustlsConnector, AsyncRustlsFtpStream, AsyncRustlsStream, TransferStream,
 };
 use suppaftp::types::FileType;
 use suppaftp::{FtpError, Status};
@@ -508,6 +508,48 @@ impl AsyncRead for FtpReader {
     }
 }
 
+/// End an upload and wait for the server's verdict.
+///
+/// On a plain connection, first close our side and wait for the server to
+/// close its side, which it does only once it has read everything. Closing
+/// the socket straight away can lose the last bytes still on their way
+/// through a relay or NAT (seen with Windows → WSL port forwarding: about
+/// 50 KB missing at the end, and the server none the wiser). Encrypted
+/// connections already wait like this inside suppaftp.
+async fn finish_upload(
+    mut w: TransferStream<AsyncRustlsStream>,
+) -> std::result::Result<(), FtpError> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut drained = false;
+    if let AsyncDataStream::Tcp(sock) = w.get_mut() {
+        if sock.shutdown().await.is_ok() {
+            let mut buf = [0u8; 1024];
+            drained = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+                loop {
+                    match sock.read(&mut buf).await {
+                        Ok(0) => return true,
+                        Ok(_) => {}
+                        Err(_) => return false,
+                    }
+                }
+            })
+            .await
+            .unwrap_or(false);
+        }
+    }
+    match w.finish().await {
+        // `finish` closes our side again; once both sides are closed some
+        // systems answer that with "not connected". The server has already
+        // read the whole file by then: it only closes after our end of file.
+        Err(FtpError::ConnectionError(e))
+            if drained && e.kind() == std::io::ErrorKind::NotConnected =>
+        {
+            Ok(())
+        }
+        r => r,
+    }
+}
+
 type Finish = Pin<Box<dyn std::future::Future<Output = std::result::Result<(), FtpError>> + Send>>;
 
 /// A file being uploaded, on its own connection. Shutting it down waits
@@ -542,7 +584,7 @@ impl AsyncWrite for FtpWriter {
             let Some(w) = self.inner.take() else {
                 return Poll::Ready(Ok(()));
             };
-            self.finishing = Some(Box::pin(w.finish()));
+            self.finishing = Some(Box::pin(finish_upload(w)));
         }
         let fut = self.finishing.as_mut().unwrap();
         match fut.as_mut().poll(cx) {

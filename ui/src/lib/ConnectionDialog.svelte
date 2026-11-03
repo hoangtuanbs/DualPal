@@ -234,8 +234,8 @@
       <label class="row">
         <span>Encryption</span>
         <select bind:value={security} onchange={defaultPort}>
-          <option value="explicit">FTPS: TLS after connecting (port 21)</option>
-          <option value="implicit">FTPS: TLS from the start (port 990)</option>
+          <option value="explicit">FTPS: TLS after connecting (usually port 21)</option>
+          <option value="implicit">FTPS: TLS from the start (usually port 990)</option>
           <option value="none">None: plain FTP (not encrypted)</option>
         </select>
       </label>
@@ -323,11 +323,15 @@
       {:else if type !== "s3"}
         Passwords and passphrases are kept in the {navigator.userAgent.includes("Windows")
           ? "Windows Credential Manager"
-          : "macOS Keychain"}, never in Dual Pal's settings.
+          : navigator.userAgent.includes("Mac")
+            ? "macOS Keychain"
+            : "system keyring"}, never in Dual Pal's settings.
       {:else}
         The secret key is kept in the {navigator.userAgent.includes("Windows")
           ? "Windows Credential Manager"
-          : "macOS Keychain"}.
+          : navigator.userAgent.includes("Mac")
+            ? "macOS Keychain"
+            : "system keyring"}.
       {/if}
     </p>
 
