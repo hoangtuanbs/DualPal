@@ -173,7 +173,7 @@
       message:
         `${placeName(l)} ${arrow} ${placeName(r)}\n\n` +
         (kind === "both"
-          ? `Changes in either folder are copied to the other, and files deleted in one are deleted in the other. `
+          ? `Changes in ${l.path} and ${r.path} are copied to the other folder, and files deleted in one are deleted in the other. `
           : `New and changed files in ${from.path} are copied to ${to.path}, replacing older versions there. Nothing is deleted. `) +
         "The panes stay locked until you stop it.",
       confirmLabel: "Start",
