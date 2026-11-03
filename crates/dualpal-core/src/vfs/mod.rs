@@ -5,6 +5,8 @@
 //! [`Location`] is a pair of that id and a path inside it, so the UI, the
 //! operation queue and (later) the sync engine can treat all of them alike.
 
+mod davput;
+mod ftp;
 mod local;
 pub mod posix;
 mod s3;
@@ -12,8 +14,9 @@ mod sftp;
 mod text;
 pub mod wsl;
 
+pub use ftp::{FtpFs, FtpParams, FtpSecurity};
 pub use local::LocalFs;
-pub use s3::{S3Fs, S3Params};
+pub use s3::{S3Fs, S3Params, WebDavParams};
 pub use sftp::{parse_ssh_config, ssh_config_hosts, SftpFs, SftpParams, SshConfigHost};
 pub use text::{read_text, write_text, TextFile};
 
@@ -162,6 +165,11 @@ pub trait FileSystem: Send + Sync {
     /// was cut off. Bytes past `offset` may be left until they are written over.
     async fn open_write_at(&self, path: &str, _offset: u64) -> Result<Writer> {
         Err(Error::Unsupported(format!("resuming a write: {path}")))
+    }
+    /// True if [`FileSystem::open_write_at`] works here, so a copy cut off
+    /// midway can carry on instead of starting over.
+    fn resumable_writes(&self) -> bool {
+        false
     }
     /// True if a file written with [`FileSystem::open_write`] only appears
     /// once it is complete (an S3 upload), so a copy needs no temporary name.

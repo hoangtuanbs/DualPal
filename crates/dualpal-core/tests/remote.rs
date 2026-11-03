@@ -377,6 +377,7 @@ async fn sftp_backend_against_a_real_server() {
         secret: None,
         trust_fingerprint: trust,
         known_hosts: Some(known_hosts.clone()),
+        known_certs: None,
     };
 
     // First contact: the host is unknown and the fingerprint is reported.
@@ -697,4 +698,188 @@ fn server_names_cannot_escape_local_folders() {
     assert_eq!(safe_local_name("C:\\Users\\x.txt"), "C__Users_x.txt");
     assert_eq!(safe_local_name(".."), "file");
     assert_eq!(safe_local_name("a/../b"), "a_.._b");
+}
+
+/// `user:password@host:port` (an empty user signs in anonymously).
+fn ftp_spec(var: &str) -> Option<(String, String, String, u16)> {
+    let spec = std::env::var(var).ok()?;
+    let (cred, addr) = spec.rsplit_once('@').expect("user:password@host:port");
+    let (user, pass) = cred.split_once(':').unwrap_or((cred, ""));
+    let (host, port) = addr.rsplit_once(':').expect("host:port");
+    Some((user.into(), pass.into(), host.into(), port.parse().unwrap()))
+}
+
+async fn ftp_round_trip(var: &str, security: dualpal_core::vfs::FtpSecurity) {
+    let Some((user, pass, host, port)) = ftp_spec(var) else {
+        eprintln!("skipped: {var} is not set");
+        return;
+    };
+    let conn = Connection {
+        id: format!("ftp-{security:?}"),
+        name: "Test FTP".into(),
+        endpoint: Endpoint::Ftp {
+            host,
+            port,
+            user,
+            security,
+        },
+        initial_path: None,
+        favorites: vec![],
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let known = tmp.path().join("known_certificates.json");
+    let opts = |trust: Option<String>| ConnectOptions {
+        trust_fingerprint: trust,
+        known_certs: Some(known.clone()),
+        ..Default::default()
+    };
+
+    // A wrong password is a sign-in failure.
+    if !pass.is_empty() {
+        let wrong = connections::connect(&conn, Some("wrong".into()), opts(None)).await;
+        match wrong {
+            Err(Error::AuthFailed(_)) => {}
+            // Self-signed FTPS servers are asked about before the password.
+            Err(Error::UnknownHost { .. }) => {}
+            Err(e) => panic!("{e}"),
+            Ok(_) => panic!("a wrong password was accepted"),
+        }
+    }
+    let secret = Some(pass.clone());
+    let c = match connections::connect(&conn, secret.clone(), opts(None)).await {
+        Ok(c) => c,
+        // A self-signed certificate: confirm it, then it is remembered.
+        Err(Error::UnknownHost { fingerprint, .. }) => {
+            assert!(fingerprint.starts_with("SHA256:"), "{fingerprint}");
+            assert!(matches!(
+                connections::connect(&conn, secret.clone(), opts(Some("SHA256:00".into()))).await,
+                Err(Error::UnknownHost { .. })
+            ));
+            connections::connect(&conn, secret.clone(), opts(Some(fingerprint)))
+                .await
+                .unwrap();
+            connections::connect(&conn, secret.clone(), opts(None))
+                .await
+                .unwrap()
+        }
+        Err(e) => panic!("{e}"),
+    };
+    let base = c.fs.join(
+        &c.start_path,
+        &format!("dualpal-test-{}", uuid::Uuid::new_v4()),
+    );
+    c.fs.create_dir(&base).await.unwrap();
+    // A file large enough to take many reads, and reading from an offset.
+    let big = c.fs.join(&base, "big.bin");
+    let data: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    {
+        let mut w = c.fs.open_write(&big).await.unwrap();
+        w.write_all(&data).await.unwrap();
+        w.shutdown().await.unwrap();
+    }
+    assert_eq!(c.fs.stat(&big).await.unwrap().size, data.len() as u64);
+    let mut r = c.fs.open_read_at(&big, 1_000_000).await.unwrap();
+    let mut back = Vec::new();
+    r.read_to_end(&mut back).await.unwrap();
+    assert_eq!(back, data[1_000_000..]);
+    drop(r);
+    // Finish a cut-off upload from where it stopped.
+    let cut = c.fs.join(&base, "cut.bin");
+    {
+        let mut w = c.fs.open_write(&cut).await.unwrap();
+        w.write_all(&data[..1_200_000]).await.unwrap();
+        w.shutdown().await.unwrap();
+        assert!(c.fs.resumable_writes());
+        let mut w = c.fs.open_write_at(&cut, 1_000_000).await.unwrap();
+        w.write_all(&data[1_000_000..]).await.unwrap();
+        w.shutdown().await.unwrap();
+    }
+    let mut whole = Vec::new();
+    c.fs.open_read(&cut)
+        .await
+        .unwrap()
+        .read_to_end(&mut whole)
+        .await
+        .unwrap();
+    assert!(whole == data, "the resumed upload differs");
+    c.fs.remove_file(&cut).await.unwrap();
+    c.fs.remove_file(&big).await.unwrap();
+
+    sync_round_trip(c.fs.clone(), &base).await;
+    exercise(c.fs.clone(), &base).await;
+    c.fs.remove_dir(&base).await.unwrap();
+    assert!(matches!(c.fs.stat(&base).await, Err(Error::NotFound(_))));
+}
+
+#[tokio::test]
+async fn ftp_backend_against_a_real_server() {
+    ftp_round_trip("DUALPAL_TEST_FTP", dualpal_core::vfs::FtpSecurity::None).await;
+}
+
+#[tokio::test]
+async fn ftps_backend_against_a_real_server() {
+    ftp_round_trip(
+        "DUALPAL_TEST_FTPS",
+        dualpal_core::vfs::FtpSecurity::Explicit,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ftps_implicit_backend_against_a_real_server() {
+    ftp_round_trip(
+        "DUALPAL_TEST_FTPS_IMPLICIT",
+        dualpal_core::vfs::FtpSecurity::Implicit,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn webdav_backend_against_a_real_server() {
+    // `user:password@http://host:port/path`
+    let Ok(spec) = std::env::var("DUALPAL_TEST_WEBDAV") else {
+        eprintln!("skipped: DUALPAL_TEST_WEBDAV is not set");
+        return;
+    };
+    let (cred, url) = spec.split_once('@').expect("user:password@url");
+    let (user, pass) = cred.split_once(':').unwrap_or((cred, ""));
+    let conn = Connection {
+        id: "dav".into(),
+        name: "Test WebDAV".into(),
+        endpoint: Endpoint::WebDav {
+            url: url.into(),
+            user: user.into(),
+        },
+        initial_path: None,
+        favorites: vec![],
+    };
+    if !pass.is_empty() {
+        match connections::connect(&conn, Some("wrong".into()), ConnectOptions::default()).await {
+            Err(Error::AuthFailed(_)) => {}
+            Err(e) => panic!("expected a sign-in failure, got {e}"),
+            Ok(_) => panic!("a wrong password was accepted"),
+        }
+    }
+    let c = connections::connect(&conn, Some(pass.into()), ConnectOptions::default())
+        .await
+        .unwrap();
+    let base = format!("/dualpal-test-{}", uuid::Uuid::new_v4());
+    c.fs.create_dir(&base).await.unwrap();
+    // Uploads stream, so a large file and odd names work.
+    let big = c.fs.join(&base, "big file #1 (ä).bin");
+    {
+        let mut w = c.fs.open_write(&big).await.unwrap();
+        let chunk = vec![42u8; 1 << 20];
+        for _ in 0..20 {
+            w.write_all(&chunk).await.unwrap();
+        }
+        w.shutdown().await.unwrap();
+    }
+    assert_eq!(c.fs.stat(&big).await.unwrap().size, 20 << 20);
+    assert_eq!(names(&*c.fs, &base).await, ["big file #1 (ä).bin"]);
+    c.fs.remove_file(&big).await.unwrap();
+    sync_round_trip(c.fs.clone(), &base).await;
+    exercise(c.fs.clone(), &base).await;
+    c.fs.remove_dir(&base).await.unwrap();
+    assert!(matches!(c.fs.stat(&base).await, Err(Error::NotFound(_))));
 }

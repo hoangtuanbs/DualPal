@@ -25,6 +25,13 @@ russh-sftp.workspace = true
 opendal.workspace = true
 regex.workspace = true
 notify.workspace = true
+suppaftp.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-native-certs.workspace = true
+sha2.workspace = true
+reqwest.workspace = true
+bytes.workspace = true
 
 [dev-dependencies]
 opendal.workspace = true

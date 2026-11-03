@@ -288,7 +288,10 @@
       if (kind === "unknownHost" && fp) {
         dialog = {
           title: `Trust ${c.name}?`,
-          message: `Dual Pal has not connected to this server before. Check that its key fingerprint is ${fp} before you continue. It will be added to ~/.ssh/known_hosts.`,
+          message:
+            c.endpoint.type === "ftp"
+              ? `This server's certificate is not signed by an authority your computer trusts, which is normal for routers and NAS boxes. Check that its fingerprint is\n\n${fp}\n\nbefore you continue. Dual Pal will remember it for this server.`
+              : `Dual Pal has not connected to this server before. Check that its key fingerprint is ${fp} before you continue. It will be added to ~/.ssh/known_hosts.`,
           confirmLabel: "Trust and connect",
           onconfirm: () => connectThen(c, after, { ...opts, trust: fp }),
         };
@@ -297,6 +300,28 @@
         dialog = {
           title: `Sign in to ${c.name}`,
           message: `${opts.secret ? `That ${what} did not work. ` : ""}Enter the ${what} for ${c.endpoint.user}@${c.endpoint.host}.`,
+          input: "",
+          password: true,
+          checkbox: navigator.userAgent.includes("Windows") ? "Remember in Credential Manager" : "Remember in Keychain",
+          confirmLabel: "Connect",
+          onconfirm: (secret, remember) => connectThen(c, after, { ...opts, secret, remember }),
+        };
+      } else if (kind === "authFailed" && (c.endpoint.type === "ftp" || c.endpoint.type === "webDav") && !c.endpoint.user.trim()) {
+        // No user name: a password alone cannot sign in, so ask for both.
+        dialog = {
+          title: `Sign in to ${c.name}`,
+          message:
+            c.endpoint.type === "ftp"
+              ? "This server does not allow anonymous sign-in. Add your user name and password to the server."
+              : "This server needs a user name and password. Add them to the server.",
+          confirmLabel: "Edit Server",
+          onconfirm: () => (editing = c),
+        };
+      } else if (kind === "authFailed" && (c.endpoint.type === "ftp" || c.endpoint.type === "webDav")) {
+        const who = c.endpoint.type === "ftp" ? `${c.endpoint.user}@${c.endpoint.host}` : `${c.endpoint.user} at ${c.endpoint.url}`;
+        dialog = {
+          title: `Sign in to ${c.name}`,
+          message: `${opts.secret ? "That password did not work. " : ""}Enter the password for ${who}.`,
           input: "",
           password: true,
           checkbox: navigator.userAgent.includes("Windows") ? "Remember in Credential Manager" : "Remember in Keychain",

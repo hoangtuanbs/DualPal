@@ -717,7 +717,7 @@ fn is_transient(e: &Error, moved: bool) -> bool {
 /// its end, or 0 to start over when the target cannot be written midway.
 async fn resume_offset(dst_fs: &Fs, part: &str, size: u64) -> u64 {
     match dst_fs.stat(part).await {
-        Ok(e) if !dst_fs.atomic_writes() && e.size <= size => {
+        Ok(e) if dst_fs.resumable_writes() && !dst_fs.atomic_writes() && e.size <= size => {
             let keep = e.size.saturating_sub(RESUME_MARGIN);
             keep - keep % CHUNK as u64
         }

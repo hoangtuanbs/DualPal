@@ -1,5 +1,6 @@
 //! Amazon S3 and S3-compatible storage (MinIO, Cloudflare R2, Wasabi,
-//! Backblaze B2…), built on Apache OpenDAL.
+//! Backblaze B2…), and WebDAV servers (Nextcloud, ownCloud, NAS boxes),
+//! built on Apache OpenDAL.
 //!
 //! S3 has no real folders: a "folder" is a key prefix, plus an optional empty
 //! `name/` marker object so that empty folders survive. Paths here look like
@@ -27,10 +28,40 @@ pub struct S3Params {
     pub path_style: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct WebDavParams {
+    /// e.g. `https://cloud.example.com/remote.php/dav/files/me`
+    pub url: String,
+    pub user: String,
+    pub password: Option<String>,
+}
+
 pub struct S3Fs {
     id: String,
     name: String,
     op: Operator,
+    /// Set for WebDAV, which has real folders and renames, and takes
+    /// uploads as a stream.
+    dav: Option<super::davput::DavTarget>,
+}
+
+/// `https://host:8080/dav/files` → (`https://host:8080`, `/dav/files`).
+fn split_url(url: &str) -> Result<(String, String)> {
+    let url = url.trim();
+    let (scheme, rest) = url
+        .split_once("://")
+        .filter(|(s, _)| s.eq_ignore_ascii_case("http") || s.eq_ignore_ascii_case("https"))
+        .ok_or_else(|| Error::Invalid("a WebDAV address starts with https:// or http://".into()))?;
+    let (host, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    if host.is_empty() {
+        return Err(Error::Invalid(
+            "the WebDAV address has no server name".into(),
+        ));
+    }
+    Ok((format!("{scheme}://{host}"), posix::normalize(path)))
 }
 
 /// `/a/b` → `a/b`; the root becomes `/`.
@@ -128,15 +159,64 @@ impl S3Fs {
         }
     }
 
+    pub async fn connect_webdav(id: String, name: String, p: WebDavParams) -> Result<Self> {
+        let (endpoint, root) = split_url(&p.url)?;
+        let mut b = services::Webdav::default().endpoint(&endpoint).root(&root);
+        if !p.user.trim().is_empty() {
+            b = b
+                .username(p.user.trim())
+                .password(p.password.as_deref().unwrap_or(""));
+        }
+        let op = Operator::new(b)
+            .map_err(|e| Error::Invalid(e.to_string()))?
+            .finish();
+        let mut fs = Self::from_operator(id, name, op);
+        fs.dav = Some(super::davput::DavTarget {
+            client: super::davput::client()?,
+            base: format!("{endpoint}{}", root.trim_end_matches('/')),
+            user: p.user.trim().to_string(),
+            password: p.password.clone().unwrap_or_default(),
+        });
+        match fs.op.list("/").await {
+            Ok(_) => Ok(fs),
+            // OpenDAL reports a 401 as an unexpected error, with the status in its text.
+            Err(e)
+                if e.kind() == ErrorKind::PermissionDenied
+                    || e.to_string().contains("status: 401") =>
+            {
+                Err(Error::AuthFailed(format!(
+                    "{endpoint} refused the user name or password"
+                )))
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => Err(Error::Connection(format!(
+                "{} was not found on the server",
+                p.url.trim()
+            ))),
+            Err(e) => Err(Error::Connection(e.to_string())),
+        }
+    }
+
     /// Wrap an existing operator (tests use the in-memory service).
     pub fn from_operator(id: String, name: String, op: Operator) -> Self {
-        Self { id, name, op }
+        Self {
+            id,
+            name,
+            op,
+            dav: None,
+        }
     }
 
     async fn is_dir(&self, path: &str) -> Result<bool> {
         let dk = dir_key(path);
         if dk == "/" {
             return Ok(true);
+        }
+        if self.dav.is_some() {
+            return match self.op.stat(&dk).await {
+                Ok(m) => Ok(m.mode() == EntryMode::DIR),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
+                Err(e) => Err(map_err(path, e)),
+            };
         }
         match self.op.list_with(&dk).limit(2).await {
             Ok(items) => Ok(!items.is_empty()),
@@ -305,7 +385,9 @@ impl FileSystem for S3Fs {
     }
 
     fn atomic_writes(&self) -> bool {
-        true // a multipart upload only shows up once it is complete
+        // A multipart upload only shows up once it is complete. A WebDAV
+        // upload shows up as it arrives.
+        self.dav.is_none()
     }
 
     fn parallel_transfers(&self) -> usize {
@@ -321,6 +403,15 @@ impl FileSystem for S3Fs {
             }
             Ok(_) | Err(Error::NotFound(_)) => {}
             Err(e) => return Err(e),
+        }
+        if self.dav.is_some() && !entry.is_dir() {
+            // A server-side MOVE. OpenDAL only moves files, so folders are
+            // copied item by item below.
+            return self
+                .op
+                .rename(&key(from), &key(to))
+                .await
+                .map_err(|e| map_err(from, e));
         }
         if !entry.is_dir() {
             self.copy_key(&key(from), &key(to)).await?;
@@ -384,6 +475,9 @@ impl FileSystem for S3Fs {
     }
 
     async fn open_write(&self, path: &str) -> Result<Writer> {
+        if let Some(dav) = &self.dav {
+            return Ok(Box::new(dav.put(&key(path))));
+        }
         let w = self
             .op
             .writer_with(&key(path))

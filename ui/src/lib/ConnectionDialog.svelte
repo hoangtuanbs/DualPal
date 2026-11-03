@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
-  import { api, errorMessage, type Connection, type SshConfigHost } from "./api";
+  import { api, errorMessage, type Connection, type FtpSecurity, type SshConfigHost } from "./api";
 
-  /** Add or edit an SFTP or S3 connection. */
+  /** Add or edit an SFTP, FTP/FTPS, WebDAV or S3 connection. */
   let {
     connection,
     onsave,
@@ -19,14 +19,33 @@
   const start = connection;
   const sftp0 = start?.endpoint.type === "sftp" ? start.endpoint : null;
   const s30 = start?.endpoint.type === "s3" ? start.endpoint : null;
+  const ftp0 = start?.endpoint.type === "ftp" ? start.endpoint : null;
+  const dav0 = start?.endpoint.type === "webDav" ? start.endpoint : null;
 
-  let type = $state<"sftp" | "s3">(start?.endpoint.type ?? "sftp");
+  type Kind = "sftp" | "ftp" | "webDav" | "s3";
+  let type = $state<Kind>(start?.endpoint.type ?? "sftp");
   let name = $state(start?.name ?? "");
   let initialPath = $state(start?.initialPath ?? "");
   // SFTP
-  let host = $state(sftp0?.host ?? "");
-  let port = $state(sftp0?.port ?? 22);
-  let user = $state(sftp0?.user ?? "");
+  // SFTP and FTP
+  let host = $state(sftp0?.host ?? ftp0?.host ?? "");
+  let port = $state(sftp0?.port ?? ftp0?.port ?? 22);
+  let user = $state(sftp0?.user ?? ftp0?.user ?? dav0?.user ?? "");
+  // FTP
+  let security = $state<FtpSecurity>(ftp0?.security ?? "explicit");
+  // WebDAV
+  let url = $state(dav0?.url ?? "");
+
+  const DEFAULT_PORTS = [22, 21, 990];
+  /** The usual port for the kind of server, unless the user typed another. */
+  function defaultPort() {
+    const want = type === "sftp" ? 22 : security === "implicit" ? 990 : 21;
+    if (DEFAULT_PORTS.includes(Number(port))) port = want;
+  }
+  function choose(k: Kind) {
+    type = k;
+    defaultPort();
+  }
 
   /** "root@10.0.0.5" typed as the host: move the user to its own field. */
   function splitUserHost() {
@@ -61,7 +80,15 @@
   });
 
   const secretLabel = $derived(
-    type === "s3" ? "Secret access key" : method === "keyFile" ? "Key passphrase" : method === "password" ? "Password" : null,
+    type === "s3"
+      ? "Secret access key"
+      : type === "ftp" || type === "webDav"
+        ? "Password"
+        : method === "keyFile"
+          ? "Key passphrase"
+          : method === "password"
+            ? "Password"
+            : null,
   );
 
   function importHost(alias: string) {
@@ -81,10 +108,12 @@
   }
 
   function build(): Connection {
-    if (type === "sftp") splitUserHost();
+    if (type === "sftp" || type === "ftp") splitUserHost();
+    const fallbackName =
+      type === "s3" ? bucket.trim() : type === "webDav" ? url.trim().replace(/^https?:\/\//i, "").split("/")[0] : host.trim();
     return {
       id: start?.id ?? "",
-      name: name.trim() || (type === "sftp" ? host.trim() : bucket.trim()),
+      name: name.trim() || fallbackName,
       initialPath: initialPath.trim() || null,
       favorites: start?.favorites ?? [],
       endpoint:
@@ -96,6 +125,16 @@
               user: user.trim(),
               auth: method === "keyFile" ? { method, path: keyPath.trim() } : { method },
             }
+          : type === "ftp"
+            ? {
+                type: "ftp",
+                host: host.trim(),
+                port: Number(port) || (security === "implicit" ? 990 : 21),
+                user: user.trim(),
+                security,
+              }
+          : type === "webDav"
+            ? { type: "webDav", url: url.trim(), user: user.trim() }
           : {
               type: "s3",
               bucket: bucket.trim(),
@@ -142,8 +181,10 @@
     <h2>{start ? "Edit server" : "Add server"}</h2>
 
     <div class="kind" role="radiogroup" aria-label="Kind">
-      <button type="button" role="radio" aria-checked={type === "sftp"} onclick={() => (type = "sftp")}>SFTP / SSH</button>
-      <button type="button" role="radio" aria-checked={type === "s3"} onclick={() => (type = "s3")}>Amazon S3 / compatible</button>
+      <button type="button" role="radio" aria-checked={type === "sftp"} onclick={() => choose("sftp")}>SFTP / SSH</button>
+      <button type="button" role="radio" aria-checked={type === "ftp"} onclick={() => choose("ftp")}>FTP / FTPS</button>
+      <button type="button" role="radio" aria-checked={type === "webDav"} onclick={() => choose("webDav")}>WebDAV</button>
+      <button type="button" role="radio" aria-checked={type === "s3"} onclick={() => choose("s3")}>S3</button>
     </div>
 
     {#if type === "sftp" && sshHosts.length > 0 && !start}
@@ -160,10 +201,10 @@
 
     <label class="row">
       <span>Name</span>
-      <input bind:this={first} bind:value={name} placeholder={type === "sftp" ? "My server" : "My bucket"} />
+      <input bind:this={first} bind:value={name} placeholder={type === "s3" ? "My bucket" : "My server"} />
     </label>
 
-    {#if type === "sftp"}
+    {#if type === "sftp" || type === "ftp"}
       <div class="row">
         <span>Server</span>
         <div class="pair">
@@ -180,8 +221,41 @@
       </div>
       <label class="row">
         <span>User</span>
-        <input bind:value={user} required={!host.includes("@")} autocapitalize="off" spellcheck="false" />
+        <input
+          bind:value={user}
+          required={type === "sftp" && !host.includes("@")}
+          placeholder={type === "ftp" ? "Empty for anonymous" : ""}
+          autocapitalize="off"
+          spellcheck="false"
+        />
       </label>
+    {/if}
+    {#if type === "ftp"}
+      <label class="row">
+        <span>Encryption</span>
+        <select bind:value={security} onchange={defaultPort}>
+          <option value="explicit">FTPS: TLS after connecting (usually port 21)</option>
+          <option value="implicit">FTPS: TLS from the start (usually port 990)</option>
+          <option value="none">None: plain FTP (not encrypted)</option>
+        </select>
+      </label>
+    {:else if type === "webDav"}
+      <label class="row">
+        <span>Address</span>
+        <input
+          bind:value={url}
+          required
+          type="url"
+          placeholder="https://cloud.example.com/remote.php/dav/files/me"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+      </label>
+      <label class="row">
+        <span>User</span>
+        <input bind:value={user} autocapitalize="off" spellcheck="false" />
+      </label>
+    {:else if type === "sftp"}
       <label class="row">
         <span>Sign in with</span>
         <select bind:value={method}>
@@ -196,7 +270,7 @@
           <input bind:value={keyPath} required spellcheck="false" />
         </label>
       {/if}
-    {:else}
+    {:else if type === "s3"}
       <label class="row">
         <span>Bucket</span>
         <input bind:value={bucket} required autocapitalize="off" spellcheck="false" />
@@ -236,18 +310,28 @@
 
     <label class="row">
       <span>Open folder</span>
-      <input bind:value={initialPath} placeholder={type === "sftp" ? "Home folder" : "/"} spellcheck="false" />
+      <input
+        bind:value={initialPath}
+        placeholder={type === "sftp" || type === "ftp" ? "Home folder" : "/"}
+        spellcheck="false"
+      />
     </label>
 
     <p class="hint">
-      {#if type === "sftp"}
+      {#if type === "ftp" && security === "none"}
+        Plain FTP sends the password and files unencrypted. Use it only on a network you trust.
+      {:else if type !== "s3"}
         Passwords and passphrases are kept in the {navigator.userAgent.includes("Windows")
           ? "Windows Credential Manager"
-          : "macOS Keychain"}, never in Dual Pal's settings.
+          : navigator.userAgent.includes("Mac")
+            ? "macOS Keychain"
+            : "system keyring"}, never in Dual Pal's settings.
       {:else}
         The secret key is kept in the {navigator.userAgent.includes("Windows")
           ? "Windows Credential Manager"
-          : "macOS Keychain"}.
+          : navigator.userAgent.includes("Mac")
+            ? "macOS Keychain"
+            : "system keyring"}.
       {/if}
     </p>
 
@@ -290,6 +374,7 @@
   }
   .kind {
     display: flex;
+    flex-wrap: wrap;
     gap: 1px;
     background: var(--border);
     border-radius: 7px;

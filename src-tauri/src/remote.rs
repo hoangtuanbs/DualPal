@@ -150,6 +150,7 @@ pub async fn connect(
             secret: secret.clone(),
             trust_fingerprint: trust,
             known_hosts: None,
+            known_certs: None,
         },
     )
     .await?;

@@ -47,12 +47,24 @@
   let collapsed = $state<Record<string, boolean>>({});
 
   function serverIcon(c: ConnectionView) {
-    return c.endpoint.type === "s3" ? "🪣" : "🖧";
+    return c.endpoint.type === "s3" ? "🪣" : c.endpoint.type === "webDav" ? "☁️" : "🖧";
   }
 
   function serverTitle(c: ConnectionView) {
     const e = c.endpoint;
-    return e.type === "sftp" ? `${e.user}@${e.host}${e.port !== 22 ? `:${e.port}` : ""}` : `s3://${e.bucket}`;
+    switch (e.type) {
+      case "sftp":
+        return `${e.user}@${e.host}${e.port !== 22 ? `:${e.port}` : ""}`;
+      case "ftp": {
+        const scheme = e.security === "none" ? "ftp" : "ftps";
+        const port = e.port !== (e.security === "implicit" ? 990 : 21) ? `:${e.port}` : "";
+        return `${scheme}://${e.user ? `${e.user}@` : ""}${e.host}${port}`;
+      }
+      case "webDav":
+        return e.user ? `${e.user} at ${e.url}` : e.url;
+      case "s3":
+        return `s3://${e.bucket}`;
+    }
   }
 
   const ICONS: Record<string, string> = {
@@ -144,7 +156,7 @@
 
   <h3 class="with-action">
     Servers
-    <button class="add" title="Add an SFTP or S3 server" aria-label="Add server" onclick={onaddserver}>+</button>
+    <button class="add" title="Add a server: SFTP, FTP, WebDAV or S3" aria-label="Add server" onclick={onaddserver}>+</button>
   </h3>
   {#each connections as c (c.id)}
     <div
@@ -227,7 +239,7 @@
     {/if}
   {/each}
   {#if connections.length === 0}
-    <p class="hint">Connect to SFTP servers and S3 buckets with +.</p>
+    <p class="hint">Connect to servers (SFTP, FTP, WebDAV) and S3 buckets with +.</p>
   {/if}
 
   {#if syncs.length > 0}

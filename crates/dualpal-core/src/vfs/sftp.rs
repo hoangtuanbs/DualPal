@@ -633,6 +633,10 @@ impl FileSystem for SftpFs {
         Ok(Box::new(f))
     }
 
+    fn resumable_writes(&self) -> bool {
+        true
+    }
+
     async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
         use tokio::io::AsyncSeekExt;
         let live = self.sftp().await?;
