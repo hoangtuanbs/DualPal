@@ -80,6 +80,8 @@ pub struct FtpFs {
     home: String,
     mlsd: bool,
     mfmt: bool,
+    /// The server announced `REST STREAM`, so uploads can carry on midway.
+    rest: bool,
 }
 
 /// SHA-256 fingerprint of a certificate, as `SHA256:` and hex pairs.
@@ -304,6 +306,7 @@ impl FtpFs {
             home: "/".into(),
             mlsd: false,
             mfmt: false,
+            rest: false,
         };
         let mut s = match fs.open().await {
             Ok(s) => s,
@@ -337,6 +340,11 @@ impl FtpFs {
             let has = |k: &str| feat.keys().any(|f| f.eq_ignore_ascii_case(k));
             fs.mlsd = has("MLST");
             fs.mfmt = has("MFMT");
+            fs.rest = feat.iter().any(|(k, v)| {
+                k.eq_ignore_ascii_case("REST")
+                    && v.as_deref()
+                        .is_some_and(|v| v.to_ascii_uppercase().contains("STREAM"))
+            });
         }
         if let Ok(pwd) = s.pwd().await {
             if pwd.starts_with('/') {
@@ -632,8 +640,37 @@ impl FileSystem for FtpFs {
                 return Err(Error::AlreadyExists(to.to_string()))
             }
             Ok(_) => {
-                // Not every server replaces the target on rename.
-                self.remove_file(to).await?;
+                // Not every server replaces the target on rename, so move
+                // it aside first, and back if the rename fails.
+                let t = posix::normalize(to);
+                let dir = posix::parent(&t).unwrap_or_else(|| "/".into());
+                let aside = posix::join(
+                    &dir,
+                    &format!(
+                        ".dualpal-old-{}",
+                        &uuid::Uuid::new_v4().simple().to_string()[..12]
+                    ),
+                );
+                let f = posix::normalize(from);
+                {
+                    let (t, aside) = (t.clone(), aside.clone());
+                    self.command(&t, |s| Box::pin(s.rename(t.clone(), aside.clone())))
+                        .await?;
+                }
+                let moved = {
+                    let (f, t) = (f.clone(), t.clone());
+                    self.command(&f, |s| Box::pin(s.rename(f.clone(), t.clone())))
+                        .await
+                };
+                if let Err(e) = moved {
+                    let (t, aside) = (t.clone(), aside.clone());
+                    let _ = self
+                        .command(&aside, |s| Box::pin(s.rename(aside.clone(), t.clone())))
+                        .await;
+                    return Err(e);
+                }
+                let _ = self.remove_file(&aside).await;
+                return Ok(());
             }
             Err(Error::NotFound(_)) => {}
             Err(e) => return Err(e),
@@ -686,7 +723,7 @@ impl FileSystem for FtpFs {
     }
 
     fn resumable_writes(&self) -> bool {
-        true
+        self.rest
     }
 
     fn parallel_transfers(&self) -> usize {
