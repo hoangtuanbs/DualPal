@@ -165,6 +165,26 @@
     }
     const sides = liveSides(kind);
     if (!sides) return;
+    const { from, to } = sides;
+    const arrow = kind === "both" ? "⇄" : kind === "left" ? "←" : "→";
+    const [l, r] = kind === "left" ? [to, from] : [from, to];
+    const full = (loc: Location) => (loc.fs === "local" ? loc.path : `${loc.path} on ${nameOf(loc.fs)}`);
+    dialog = {
+      title: `Start auto-sync ${arrow}?`,
+      message:
+        `${placeName(l)} ${arrow} ${placeName(r)}\n\n` +
+        (kind === "both"
+          ? `Changes in ${full(l)} and ${full(r)} are copied to the other folder, and files deleted in one are deleted in the other. `
+          : `New and changed files in ${full(from)} are copied to ${full(to)}, replacing older versions there. Nothing is deleted. `) +
+        "The panes stay locked until you stop it.",
+      confirmLabel: "Start",
+      danger: kind === "both",
+      onconfirm: () => startLive(kind, from, to),
+    };
+  }
+
+  async function startLive(kind: LiveKind, from: Location, to: Location) {
+    const sides = { from, to };
     try {
       notice = null;
       const status = await api.liveSyncStart(sides.from, sides.to, kind === "both" ? "both" : "oneWay");

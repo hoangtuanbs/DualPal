@@ -104,7 +104,7 @@ docker compose -f docker/test-servers/compose.yaml up -d --build
 
 ## Auto-sync
 
-The three arrow buttons in the toolbar keep the two panes' folders in sync while they are on:
+The three arrow buttons in the toolbar keep the two panes' folders in sync while they are on. Each asks for confirmation, naming both folders, before it starts:
 
 - **→** copies new and changed files from the left pane to the right, and **←** from the right pane to the left. Neither deletes anything.
 - **⇄** copies changes in either pane to the other and passes on deletions made since the last sync. Items changed on both sides are left alone.

@@ -113,6 +113,7 @@
     margin: 0 0 12px;
     color: var(--muted);
     overflow-wrap: anywhere;
+    white-space: pre-line;
   }
   input {
     width: 100%;
