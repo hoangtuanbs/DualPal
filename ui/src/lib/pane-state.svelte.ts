@@ -1,5 +1,5 @@
 import { SvelteSet } from "svelte/reactivity";
-import { api, errorMessage, type Entry, type Location } from "./api";
+import { api, errorKind, errorMessage, type Entry, type Location } from "./api";
 import { fsNames } from "./fs-names.svelte";
 
 export type SortKey = "name" | "size" | "modified";
@@ -111,6 +111,9 @@ export class PaneState {
       this.entries = await api.listDir(this.location);
       this.error = null;
     } catch (e) {
+      // The folder was deleted or renamed elsewhere: show the nearest
+      // folder above it that still exists instead of an error.
+      if (errorKind(e) === "notFound" && (await this.openNearestParent())) return;
       this.error = errorMessage(e);
       return;
     }
@@ -119,6 +122,25 @@ export class PaneState {
     const idx = keep ? this.visible.findIndex((e) => e.name === keep) : -1;
     this.cursor = idx >= 0 ? idx : Math.min(this.cursor, Math.max(0, this.visible.length - 1));
     this.updateSpace();
+  }
+
+  /** Open the closest existing folder above the current one. */
+  private async openNearestParent(): Promise<boolean> {
+    let loc = this.location;
+    for (let i = 0; loc && i < 64; i++) {
+      const parent = await api.parentLocation(loc).catch(() => null);
+      if (!parent || parent.path === loc.path) return false;
+      try {
+        await api.listDir(parent);
+      } catch (e) {
+        if (errorKind(e) !== "notFound") return false;
+        loc = parent;
+        continue;
+      }
+      await this.open(parent, { record: false });
+      return this.error === null;
+    }
+    return false;
   }
 
   async up() {
