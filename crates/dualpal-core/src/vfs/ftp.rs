@@ -362,58 +362,14 @@ impl FtpFs {
 
     /// A new signed-in connection.
     async fn open(&self) -> Result<Stream> {
-        let addr = format!("{}:{}", self.p.host, self.p.port);
-        let connector = || {
-            AsyncRustlsConnector::from(tokio_rustls::TlsConnector::from(
-                self.tls.clone().expect("TLS settings for FTPS"),
-            ))
-        };
-        let conn_err = |e: FtpError| Error::Connection(format!("{addr}: {e}"));
-        let fut = async {
-            match self.p.security {
-                FtpSecurity::None => Stream::connect(&addr).await.map_err(conn_err),
-                FtpSecurity::Explicit => {
-                    let s = Stream::connect(&addr).await.map_err(conn_err)?;
-                    s.into_secure(connector(), &self.p.host)
-                        .await
-                        .map_err(conn_err)
-                }
-                FtpSecurity::Implicit => {
-                    let mut s = Stream::connect_secure_implicit(&addr, connector(), &self.p.host)
-                        .await
-                        .map_err(conn_err)?;
-                    // Ask for encrypted transfers too, as explicit FTPS does;
-                    // some servers insist, others encrypt them anyway.
-                    let _ = s.custom_command("PBSZ 0", &[Status::CommandOk]).await;
-                    let _ = s.custom_command("PROT P", &[Status::CommandOk]).await;
-                    Ok(s)
-                }
-            }
-        };
-        let mut s = tokio::time::timeout(CONNECT_TIMEOUT, fut)
-            .await
-            .map_err(|_| Error::Connection(format!("{addr} did not answer")))??;
-        // Servers behind NAT often announce a private address for passive
-        // transfers; use the address we reached them at instead.
-        s.set_passive_nat_workaround(true);
-        let (user, pass) = if self.p.user.trim().is_empty() {
-            ("anonymous".to_string(), "dualpal@".to_string())
-        } else {
-            (
-                self.p.user.clone(),
-                self.p.password.clone().unwrap_or_default(),
-            )
-        };
-        s.login(user.as_str(), pass.as_str())
-            .await
-            .map_err(|e| match status(&e) {
-                Some(530) | Some(331) | Some(332) => {
-                    Error::AuthFailed(format!("{} refused the user name or password", self.p.host))
-                }
-                _ => conn_err(e),
-            })?;
-        s.transfer_type(FileType::Binary).await.map_err(conn_err)?;
-        Ok(s)
+        self.dialer().open().await
+    }
+
+    fn dialer(&self) -> Dialer {
+        Dialer {
+            p: self.p.clone(),
+            tls: self.tls.clone(),
+        }
     }
 
     /// A pooled connection that still answers, or a new one.
@@ -492,6 +448,70 @@ impl FtpFs {
     }
 }
 
+/// What it takes to open a new signed-in connection to the server.
+#[derive(Clone)]
+struct Dialer {
+    p: FtpParams,
+    tls: Option<Arc<rustls::ClientConfig>>,
+}
+
+impl Dialer {
+    async fn open(&self) -> Result<Stream> {
+        let addr = format!("{}:{}", self.p.host, self.p.port);
+        let connector = || {
+            AsyncRustlsConnector::from(tokio_rustls::TlsConnector::from(
+                self.tls.clone().expect("TLS settings for FTPS"),
+            ))
+        };
+        let conn_err = |e: FtpError| Error::Connection(format!("{addr}: {e}"));
+        let fut = async {
+            match self.p.security {
+                FtpSecurity::None => Stream::connect(&addr).await.map_err(conn_err),
+                FtpSecurity::Explicit => {
+                    let s = Stream::connect(&addr).await.map_err(conn_err)?;
+                    s.into_secure(connector(), &self.p.host)
+                        .await
+                        .map_err(conn_err)
+                }
+                FtpSecurity::Implicit => {
+                    let mut s = Stream::connect_secure_implicit(&addr, connector(), &self.p.host)
+                        .await
+                        .map_err(conn_err)?;
+                    // Ask for encrypted transfers too, as explicit FTPS does;
+                    // some servers insist, others encrypt them anyway.
+                    let _ = s.custom_command("PBSZ 0", &[Status::CommandOk]).await;
+                    let _ = s.custom_command("PROT P", &[Status::CommandOk]).await;
+                    Ok(s)
+                }
+            }
+        };
+        let mut s = tokio::time::timeout(CONNECT_TIMEOUT, fut)
+            .await
+            .map_err(|_| Error::Connection(format!("{addr} did not answer")))??;
+        // Servers behind NAT often announce a private address for passive
+        // transfers; use the address we reached them at instead.
+        s.set_passive_nat_workaround(true);
+        let (user, pass) = if self.p.user.trim().is_empty() {
+            ("anonymous".to_string(), "dualpal@".to_string())
+        } else {
+            (
+                self.p.user.clone(),
+                self.p.password.clone().unwrap_or_default(),
+            )
+        };
+        s.login(user.as_str(), pass.as_str())
+            .await
+            .map_err(|e| match status(&e) {
+                Some(530) | Some(331) | Some(332) => {
+                    Error::AuthFailed(format!("{} refused the user name or password", self.p.host))
+                }
+                _ => conn_err(e),
+            })?;
+        s.transfer_type(FileType::Binary).await.map_err(conn_err)?;
+        Ok(s)
+    }
+}
+
 /// A file being downloaded, on its own connection.
 struct FtpReader {
     _conn: Stream,
@@ -511,14 +531,14 @@ impl AsyncRead for FtpReader {
 type Finish = Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send>>;
 
 /// How long to wait for the server to confirm an upload once the data has
-/// been sent. A server or relay that never answers fails the copy instead of
-/// hanging it.
-const FINISH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// been sent, and then for the size check on a new connection.
+const FINISH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// A file being uploaded, on its own connection. Shutting it down waits
 /// for the server to confirm that the whole file arrived.
 struct FtpWriter {
     conn: Option<Stream>,
+    dialer: Dialer,
     inner: Option<TransferStream<AsyncRustlsStream>>,
     finishing: Option<Finish>,
     path: String,
@@ -530,12 +550,14 @@ struct FtpWriter {
 impl FtpWriter {
     fn new(
         conn: Stream,
+        dialer: Dialer,
         inner: TransferStream<AsyncRustlsStream>,
         path: String,
         offset: u64,
     ) -> Self {
         Self {
             conn: Some(conn),
+            dialer,
             inner: Some(inner),
             finishing: None,
             path,
@@ -551,31 +573,52 @@ impl FtpWriter {
 async fn finish_upload(
     w: TransferStream<AsyncRustlsStream>,
     conn: Option<Stream>,
+    dialer: Dialer,
     path: String,
     expected: u64,
 ) -> std::io::Result<()> {
-    let timed_out = || {
-        std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "the server did not confirm the upload",
-        )
+    let short = |got: usize| {
+        std::io::Error::other(format!("the server received {got} of {expected} bytes"))
     };
-    tokio::time::timeout(FINISH_TIMEOUT, w.finish())
-        .await
-        .map_err(|_| timed_out())?
-        .map_err(|e| std::io::Error::other(reply_text(&e)))?;
-    let Some(mut conn) = conn else {
-        return Ok(());
-    };
-    // Servers without SIZE are taken at their word.
-    if let Ok(Ok(got)) = tokio::time::timeout(FINISH_TIMEOUT, conn.size(&path)).await {
-        if got as u64 != expected {
-            return Err(std::io::Error::other(format!(
-                "the server received {got} of {expected} bytes"
-            )));
+    match tokio::time::timeout(FINISH_TIMEOUT, w.finish()).await {
+        Ok(r) => {
+            r.map_err(|e| std::io::Error::other(reply_text(&e)))?;
+            let Some(mut conn) = conn else {
+                return Ok(());
+            };
+            // Servers without SIZE are taken at their word.
+            if let Ok(Ok(got)) = tokio::time::timeout(FINISH_TIMEOUT, conn.size(&path)).await {
+                if got as u64 != expected {
+                    return Err(short(got));
+                }
+            }
+            Ok(())
+        }
+        Err(_) => {
+            // No word from the server. Some servers or relays lose the
+            // final reply after the data connection closes (seen with FTPS
+            // through Windows to WSL port forwarding), although the file
+            // arrived. Ask on a new connection how big the file is now.
+            drop(conn);
+            let unconfirmed = || {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the server did not confirm the upload",
+                )
+            };
+            let check = async {
+                let mut c = dialer.open().await.ok()?;
+                let got = c.size(&path).await.ok();
+                let _ = c.quit().await;
+                got
+            };
+            match tokio::time::timeout(FINISH_TIMEOUT, check).await {
+                Ok(Some(got)) if got as u64 == expected => Ok(()),
+                Ok(Some(got)) => Err(short(got)),
+                _ => Err(unconfirmed()),
+            }
         }
     }
-    Ok(())
 }
 
 impl AsyncWrite for FtpWriter {
@@ -607,9 +650,10 @@ impl AsyncWrite for FtpWriter {
                 return Poll::Ready(Ok(()));
             };
             let conn = self.conn.take();
+            let dialer = self.dialer.clone();
             let path = self.path.clone();
             let expected = self.expected;
-            self.finishing = Some(Box::pin(finish_upload(w, conn, path, expected)));
+            self.finishing = Some(Box::pin(finish_upload(w, conn, dialer, path, expected)));
         }
         let fut = self.finishing.as_mut().unwrap();
         match fut.as_mut().poll(cx) {
@@ -767,7 +811,7 @@ impl FileSystem for FtpFs {
         let p = posix::normalize(path);
         let mut conn = self.open().await?;
         let inner = conn.put_with_stream(&p).await.map_err(|e| map_err(&p, e))?;
-        Ok(Box::new(FtpWriter::new(conn, inner, p, 0)))
+        Ok(Box::new(FtpWriter::new(conn, self.dialer(), inner, p, 0)))
     }
 
     async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
@@ -778,7 +822,13 @@ impl FileSystem for FtpFs {
             .await
             .map_err(|e| map_err(&p, e))?;
         let inner = conn.put_with_stream(&p).await.map_err(|e| map_err(&p, e))?;
-        Ok(Box::new(FtpWriter::new(conn, inner, p, offset)))
+        Ok(Box::new(FtpWriter::new(
+            conn,
+            self.dialer(),
+            inner,
+            p,
+            offset,
+        )))
     }
 
     fn resumable_writes(&self) -> bool {
