@@ -54,10 +54,10 @@ export class PaneState {
     return this.current ? [this.current] : [];
   }
 
-  async open(loc: Location, opts: { record?: boolean; focusName?: string } = {}) {
+  async open(loc: Location, opts: { record?: boolean; focusName?: string; entries?: Entry[] } = {}) {
     this.loading = true;
     try {
-      const entries = await api.listDir(loc);
+      const entries = opts.entries ?? (await api.listDir(loc));
       const from = this.location;
       if (opts.record !== false && this.location) {
         this.history.push(this.location);
@@ -104,17 +104,21 @@ export class PaneState {
 
   /** Reload, keeping the cursor on the same item where possible. */
   async refresh() {
-    if (!this.location) return;
+    const here = this.location;
+    if (!here) return;
     const keep = this.current?.name;
     const marked = new Set(this.selected);
     try {
-      this.entries = await api.listDir(this.location);
+      const entries = await api.listDir(here);
+      if (this.location !== here) return; // the user went elsewhere meanwhile
+      this.entries = entries;
       this.error = null;
     } catch (e) {
+      if (this.location !== here) return;
       // The folder was deleted or renamed elsewhere: show the nearest
       // folder above it that still exists instead of an error.
-      if (errorKind(e) === "notFound" && (await this.openNearestParent())) return;
-      this.error = errorMessage(e);
+      if (errorKind(e) === "notFound" && (await this.openNearestParent(here))) return;
+      if (this.location === here) this.error = errorMessage(e);
       return;
     }
     this.selected.clear();
@@ -124,23 +128,25 @@ export class PaneState {
     this.updateSpace();
   }
 
-  /** Open the closest existing folder above the current one. */
-  private async openNearestParent(): Promise<boolean> {
-    let loc = this.location;
-    for (let i = 0; loc && i < 64; i++) {
+  /** Open the closest existing folder above `from`, unless the user moves
+   *  elsewhere in the meantime. */
+  private async openNearestParent(from: Location): Promise<boolean> {
+    let loc = from;
+    while (true) {
       const parent = await api.parentLocation(loc).catch(() => null);
       if (!parent || parent.path === loc.path) return false;
+      let entries: Entry[];
       try {
-        await api.listDir(parent);
+        entries = await api.listDir(parent);
       } catch (e) {
         if (errorKind(e) !== "notFound") return false;
         loc = parent;
         continue;
       }
-      await this.open(parent, { record: false });
+      if (this.location !== from) return true;
+      await this.open(parent, { record: false, entries });
       return this.error === null;
     }
-    return false;
   }
 
   async up() {
