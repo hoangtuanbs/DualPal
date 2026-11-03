@@ -147,6 +147,9 @@ impl FileSystem for Remote {
         self.resumed_at.lock().unwrap().push(offset);
         Ok(self.wrap(self.local.open_write_at(path, offset).await?))
     }
+    fn resumable_writes(&self) -> bool {
+        true
+    }
     fn parallel_transfers(&self) -> usize {
         4
     }

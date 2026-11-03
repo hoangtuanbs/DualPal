@@ -1,6 +1,6 @@
 # Test servers
 
-Two throwaway servers for trying Dual Pal and running its integration tests
+Throwaway servers for trying Dual Pal and running its integration tests
 without touching a real server. Both listen on 127.0.0.1 only and are not
 meant for anything else.
 
@@ -8,6 +8,10 @@ meant for anything else.
 |---|---|---|
 | SSH / SFTP (OpenSSH on Alpine) | `127.0.0.1:2222` | user `tester`, password `dualpal`, or the key in `keys/id_ed25519` |
 | S3 (moto emulator) | `http://127.0.0.1:9000` | bucket `dualpal-test`, access key `test`, secret `test-secret`, path-style |
+| FTP (pyftpdlib) | `127.0.0.1:2121` | user `tester`, password `dualpal` |
+| FTPS, explicit | `127.0.0.1:2990` | the same; self-signed certificate |
+| FTPS, implicit | `127.0.0.1:2991` | the same; self-signed certificate |
+| WebDAV (WsgiDAV) | `http://127.0.0.1:8088/dav` | user `tester`, password `dualpal` |
 
 ## Start and stop
 
@@ -43,6 +47,10 @@ DUALPAL_TEST_SFTP_KEY=/tmp/dualpal_test_key \
 DUALPAL_TEST_SFTP_PASSWORD=dualpal \
 DUALPAL_TEST_SFTP_DROP="docker exec dualpal-test-sftp drop-connections" \
 DUALPAL_TEST_S3="http://127.0.0.1:9000|dualpal-test|test|test-secret" \
+DUALPAL_TEST_FTP=tester:dualpal@127.0.0.1:2121 \
+DUALPAL_TEST_FTPS=tester:dualpal@127.0.0.1:2990 \
+DUALPAL_TEST_FTPS_IMPLICIT=tester:dualpal@127.0.0.1:2991 \
+DUALPAL_TEST_WEBDAV=tester:dualpal@http://127.0.0.1:8088/dav \
   cargo test -p dualpal-core --test remote
 ```
 

@@ -246,6 +246,10 @@ impl FileSystem for LocalFs {
         Ok(Box::new(f))
     }
 
+    fn resumable_writes(&self) -> bool {
+        true
+    }
+
     async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
         use tokio::io::AsyncSeekExt;
         let mut f = tokio::fs::OpenOptions::new()

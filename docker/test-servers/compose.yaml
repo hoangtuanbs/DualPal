@@ -21,3 +21,20 @@ services:
     container_name: dualpal-test-s3
     ports:
       - "127.0.0.1:9000:9000"
+
+  ftp:
+    build: ./ftp
+    image: dualpal-test-ftp
+    container_name: dualpal-test-ftp
+    ports:
+      - "127.0.0.1:2121:2121"
+      - "127.0.0.1:2990:2990"
+      - "127.0.0.1:2991:2991"
+      - "127.0.0.1:30000-30029:30000-30029"
+
+  webdav:
+    build: ./webdav
+    image: dualpal-test-webdav
+    container_name: dualpal-test-webdav
+    ports:
+      - "127.0.0.1:8088:8088"

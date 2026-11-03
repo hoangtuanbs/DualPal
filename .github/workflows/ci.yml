@@ -69,6 +69,11 @@ jobs:
           echo "DUALPAL_TEST_SFTP_PASSWORD=dualpal" >> "$GITHUB_ENV"
           echo "DUALPAL_TEST_SFTP_DROP=docker exec dualpal-test-sftp drop-connections" >> "$GITHUB_ENV"
           echo "DUALPAL_TEST_S3=http://127.0.0.1:9000|dualpal-test|test|test-secret" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do docker logs dualpal-test-ftp 2>&1 | grep -q 'ftp ready' && break; sleep 1; done
+          echo "DUALPAL_TEST_FTP=tester:dualpal@127.0.0.1:2121" >> "$GITHUB_ENV"
+          echo "DUALPAL_TEST_FTPS=tester:dualpal@127.0.0.1:2990" >> "$GITHUB_ENV"
+          echo "DUALPAL_TEST_FTPS_IMPLICIT=tester:dualpal@127.0.0.1:2991" >> "$GITHUB_ENV"
+          echo "DUALPAL_TEST_WEBDAV=tester:dualpal@http://127.0.0.1:8088/dav" >> "$GITHUB_ENV"
 
       - name: Core tests
         run: cargo test --workspace

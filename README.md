@@ -2,7 +2,7 @@
 
 A fast, cross-platform dual-pane file manager for **macOS and Windows** (Linux works too), built with [Tauri 2](https://tauri.app): a Rust core and a Svelte web UI.
 
-> Status: early development. All four roadmap steps are in place: two-pane browsing with background operations, SFTP and S3 servers, and folder compare and sync with the power tools below.
+> Status: early development. All four roadmap steps are in place: two-pane browsing with background operations, SFTP, FTP/FTPS, WebDAV and S3 servers, and folder compare and sync with the power tools below.
 
 ![Dual Pal with a folder list on the left, photo thumbnails on the right and an image preview in the Info panel](docs/images/main-window.png)
 
@@ -30,7 +30,7 @@ ui/                   Svelte 5 + TypeScript front end (built with Vite)
 
 ### Core concepts
 
-- **`FileSystem`** — every browsable place (local disk, SFTP servers, S3 buckets) implements this async trait. A **`Location`** is `{ fs, path }`, so the UI, the operation queue and the compare/sync engine work the same across local and remote storage. Copies between different file systems stream through the core.
+- **`FileSystem`** — every browsable place (local disk, SFTP, FTP and WebDAV servers, S3 buckets) implements this async trait. A **`Location`** is `{ fs, path }`, so the UI, the operation queue and the compare/sync engine work the same across local and remote storage. Copies between different file systems stream through the core.
 - **`OperationQueue`** — operations run in the background (two at a time by default), report progress (items, bytes, current file) as events, can be cancelled, and clean up partial files. Conflicts are handled per operation: `fail` (default), `skip` or `overwrite`.
 - **`ActivityLog`** — every finished operation is recorded and kept across restarts (`activity.jsonl` in the app data folder).
 
@@ -84,19 +84,21 @@ npm run check            # UI type-check
 | Ctrl/⌘ Shift D | Compare two files in your compare app |
 | Ctrl/⌘ Shift L | Synchronized browsing on / off |
 
-## Servers (SFTP and S3)
+## Servers (SFTP, FTP, WebDAV and S3)
 
 Add servers with **+** next to *Servers* in the sidebar.
 
 - **SFTP / SSH** signs in with a password, a private key file (with or without a passphrase), or the running SSH agent plus your default keys in `~/.ssh`. Hosts from `~/.ssh/config` can be picked in the dialog. Host keys are checked against `~/.ssh/known_hosts` like the `ssh` command; a new server asks you to confirm its key fingerprint first, and a changed key is refused.
+- **FTP / FTPS** connects with FTPS over TLS by default, either *explicit* (port 21, the usual kind) or *implicit* (port 990); plain unencrypted FTP is there for old devices on a trusted network. Leave the user empty to sign in anonymously. Certificates signed by an authority your computer trusts are accepted as they are; a self-signed one (common on routers and NAS boxes) asks you to confirm its fingerprint once, and Dual Pal remembers it for that server.
+- **WebDAV** works with Nextcloud, ownCloud, NAS boxes and other WebDAV servers. Give the full address of the folder, e.g. `https://cloud.example.com/remote.php/dav/files/me` for Nextcloud, and your user name and password (or an app password).
 - **S3** works with Amazon S3 and S3-compatible services (MinIO, Cloudflare R2, Wasabi, Backblaze B2…). Give the bucket, region, access key and, for non-Amazon services, the endpoint URL; most self-hosted services also need *path-style addresses*.
 - Passwords, passphrases and secret keys are stored in the macOS Keychain or the Windows Credential Manager, never in Dual Pal's own files.
 - Press ★ while browsing a server to add that folder to the server's own favorites, shown under it in the sidebar.
 - Copy and move work between any two panes: local ↔ server, server ↔ server.
 - **Edit** (F4) or double-click opens a server file in an app; each save is uploaded back. Set the app with **Editor…** in the toolbar. The *Editing* bar shows the files being watched.
-- Copies to and from servers write each file under a hidden temporary name and rename it when it is complete, so a target never holds half a file. Up to four files copy at once, and a copy cut off by a dropped connection reconnects and carries on where it stopped.
+- Copies to and from servers write each file under a hidden temporary name and rename it when it is complete, so a target never holds half a file. Several files copy at once (two on FTP servers, which often limit connections), and a copy cut off by a dropped connection reconnects and carries on where it stopped (on WebDAV and S3 it starts that file again).
 
-Integration tests against real servers run when `DUALPAL_TEST_SFTP` and `DUALPAL_TEST_S3` are set. [docker/test-servers](docker/test-servers/README.md) has an SSH server and an S3 emulator to run them against, which Linux CI starts:
+Integration tests against real servers run when `DUALPAL_TEST_SFTP`, `DUALPAL_TEST_FTP`, `DUALPAL_TEST_FTPS`, `DUALPAL_TEST_WEBDAV` or `DUALPAL_TEST_S3` are set. [docker/test-servers](docker/test-servers/README.md) has an SSH server, FTP/FTPS and WebDAV servers and an S3 emulator to run them against, which Linux CI starts:
 
 ```sh
 docker compose -f docker/test-servers/compose.yaml up -d --build
@@ -125,7 +127,7 @@ Folders on this computer are watched, so a change is synced within a couple of s
 
 1. **Foundation** — Tauri app, VFS layer, operation queue, activity log. ✅
 2. **Dual-pane browser** — tabs, list/icon views, sidebar (devices, favorites), select by pattern or tag, compress, preview panel (audio/video, images, PDF, quick text edit), Move to Trash. ✅
-3. **Remote connections** — SFTP over SSH and S3, each with nested favorites; edit remote files in your preferred editor with automatic upload on save. ✅
+3. **Remote connections** — SFTP over SSH, FTP/FTPS, WebDAV and S3, each with nested favorites; edit remote files in your preferred editor with automatic upload on save. ✅
 4. **Compare & power tools** — folder compare and one/two-way sync (saved as favorites), synchronized browsing, external file compare tools, multi-rename presets, command palette, activity insights. ✅
 
 ## Installing

@@ -47,7 +47,7 @@ export type OperationStatus = "queued" | "running" | "completed" | "failed" | "c
 export interface ErrorInfo {
   kind: string;
   message: string;
-  /** SSH host key fingerprint, for `unknownHost` and `hostKeyChanged`. */
+  /** SSH host key or FTPS certificate fingerprint, for `unknownHost` and `hostKeyChanged`. */
   fingerprint?: string;
 }
 
@@ -116,8 +116,12 @@ export interface Favorite {
 
 export type SshAuth = { method: "password" } | { method: "keyFile"; path: string } | { method: "agent" };
 
+export type FtpSecurity = "none" | "explicit" | "implicit";
+
 export type Endpoint =
   | { type: "sftp"; host: string; port: number; user: string; auth: SshAuth }
+  | { type: "ftp"; host: string; port: number; user: string; security: FtpSecurity }
+  | { type: "webDav"; url: string; user: string }
   | {
       type: "s3";
       bucket: string;

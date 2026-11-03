@@ -1,4 +1,5 @@
-//! Saved remote connections (SFTP and S3) and the favorites inside them.
+//! Saved remote connections (SFTP, FTP/FTPS, WebDAV and S3) and the
+//! favorites inside them.
 //!
 //! A connection is itself a favorite in the sidebar, and each one keeps its
 //! own list of favorite paths on that server: favorites within favorites.
@@ -13,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::vfs::{posix, FileSystem, S3Fs, SftpFs};
+use crate::vfs::{posix, FileSystem, FtpFs, FtpSecurity, S3Fs, SftpFs};
 
 /// How to sign in to an SSH server.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +45,21 @@ pub enum Endpoint {
         port: u16,
         user: String,
         auth: SshAuth,
+    },
+    Ftp {
+        host: String,
+        port: u16,
+        /// Empty signs in anonymously.
+        #[serde(default)]
+        user: String,
+        #[serde(default)]
+        security: FtpSecurity,
+    },
+    WebDav {
+        /// e.g. `https://cloud.example.com/remote.php/dav/files/me`
+        url: String,
+        #[serde(default)]
+        user: String,
     },
     S3 {
         bucket: String,
@@ -93,6 +109,7 @@ impl Connection {
     pub fn uses_secret(&self) -> bool {
         match &self.endpoint {
             Endpoint::Sftp { auth, .. } => !matches!(auth, SshAuth::Agent),
+            Endpoint::Ftp { user, .. } | Endpoint::WebDav { user, .. } => !user.trim().is_empty(),
             Endpoint::S3 { .. } => true,
         }
     }
@@ -108,6 +125,19 @@ impl Connection {
                 if host.trim().is_empty() || user.trim().is_empty() || *port == 0 {
                     return Err(Error::Invalid(
                         "SFTP needs a server, a port and a user name".into(),
+                    ));
+                }
+            }
+            Endpoint::Ftp { host, port, .. } => {
+                if host.trim().is_empty() || *port == 0 {
+                    return Err(Error::Invalid("FTP needs a server and a port".into()));
+                }
+            }
+            Endpoint::WebDav { url, .. } => {
+                let u = url.trim().to_ascii_lowercase();
+                if !(u.starts_with("https://") || u.starts_with("http://")) || u.len() < 10 {
+                    return Err(Error::Invalid(
+                        "WebDAV needs an address starting with https:// or http://".into(),
                     ));
                 }
             }
@@ -292,6 +322,8 @@ pub struct ConnectOptions {
     pub trust_fingerprint: Option<String>,
     /// known_hosts file to use instead of ~/.ssh/known_hosts (tests).
     pub known_hosts: Option<PathBuf>,
+    /// File of confirmed FTPS certificates to use instead of the default (tests).
+    pub known_certs: Option<PathBuf>,
 }
 
 /// A live connection: the registered file system and the folder to open.
@@ -336,6 +368,56 @@ pub async fn connect(
                 Some(p) => posix::normalize(p),
                 None => fs.home().to_string(),
             };
+            Ok(Connected {
+                fs: Arc::new(fs),
+                start_path: start,
+            })
+        }
+        Endpoint::Ftp {
+            host,
+            port,
+            user,
+            security,
+        } => {
+            let fs = FtpFs::connect(
+                conn.fs_id(),
+                conn.name.clone(),
+                crate::vfs::FtpParams {
+                    host: host.trim().to_string(),
+                    port: *port,
+                    user: user.trim().to_string(),
+                    password: secret,
+                    security: *security,
+                    trust_fingerprint: opts.trust_fingerprint,
+                    known_certs: opts.known_certs,
+                },
+            )
+            .await?;
+            let start = match conn
+                .initial_path
+                .as_deref()
+                .filter(|p| !p.trim().is_empty())
+            {
+                Some(p) => posix::normalize(p),
+                None => fs.home().to_string(),
+            };
+            Ok(Connected {
+                fs: Arc::new(fs),
+                start_path: start,
+            })
+        }
+        Endpoint::WebDav { url, user } => {
+            let fs = S3Fs::connect_webdav(
+                conn.fs_id(),
+                conn.name.clone(),
+                crate::vfs::WebDavParams {
+                    url: url.clone(),
+                    user: user.clone(),
+                    password: secret,
+                },
+            )
+            .await?;
+            let start = posix::normalize(conn.initial_path.as_deref().unwrap_or("/"));
             Ok(Connected {
                 fs: Arc::new(fs),
                 start_path: start,
