@@ -300,8 +300,8 @@ crates/dualpal-testkit/src/
 
 Use the existing `docker/test-servers/compose.yaml`. Add:
 
-1. **Healthchecks** on every service so `docker compose up --wait` replaces the log-grepping loops in `ci.yml` (sftp: `nc -z localhost 22`; ftp: python socket check on 2121; webdav: `wget -q --spider http://localhost:8088/dav` with auth; s3: `curl -sf localhost:9000/dualpal-test`).
-2. **Toxiproxy** service (`ghcr.io/shopify/toxiproxy:2.9.0`, API on `127.0.0.1:8474`) with proxies: `ftp-proxy 127.0.0.1:3121 → ftp:2121`, `webdav-proxy 127.0.0.1:9088 → webdav:8088`, `s3-proxy 127.0.0.1:9900 → s3:9000`. The test kit gets `toxi::reset_peer(proxy, after_bytes)`, `toxi::latency(proxy, ms)`, `toxi::bandwidth(proxy, kbps)`, `toxi::clear()` (plain HTTP calls with `reqwest`). Env: `DUALPAL_TEST_TOXIPROXY=http://127.0.0.1:8474`. (FTP passive data ports cannot all be proxied cleanly — only test control-channel faults on FTP, and data-channel faults via `FaultyFs`.)
+1. **Healthchecks** on every service so `docker compose up --wait` replaces the log-grepping loops in `ci.yml` Use only tools already in each image (all are Alpine-based; `curl` is not installed): sftp `nc -z 127.0.0.1 22` (busybox); ftp and webdav a `python -c` socket connect to 2121 / 8088; s3 `wget -q -O /dev/null http://127.0.0.1:9000/dualpal-test` (busybox wget; succeeds only once the bucket exists, so it also replaces the `bucket dualpal-test ready` log wait).
+2. **Toxiproxy** service (`ghcr.io/shopify/toxiproxy:2.9.0`, API on `127.0.0.1:8474`) with proxies: `ftp-proxy 127.0.0.1:3121 → ftp:2121`, `webdav-proxy 127.0.0.1:9088 → webdav:8088`, `s3-proxy 127.0.0.1:9900 → s3:9000`. The test kit gets `toxi::reset_peer(proxy, after_bytes)`, `toxi::latency(proxy, ms)`, `toxi::bandwidth(proxy, kbps)`, `toxi::clear()` (plain HTTP calls with `reqwest`). Env: `DUALPAL_TEST_TOXIPROXY=http://127.0.0.1:8474`. Any test that drops SFTP sessions or adds a toxic affects every client of that server, so its function name must start with `fault_` and it must remove its toxics in a drop guard; CI runs `fault_*` tests on their own with one thread (§9.2). The existing `upload_survives_a_dropped_connection` path inside `sftp_backend_against_a_real_server` should move into its own `fault_sftp_upload_survives_a_dropped_connection` test in Phase 2. (FTP passive data ports cannot all be proxied cleanly — only test control-channel faults on FTP, and data-channel faults via `FaultyFs`.)
 3. A second SFTP user `keyonly` (no password, key with passphrase `dualpal-pass`) and a key file saved as UTF-16 LE with BOM in `keys/` to cover passphrase and UTF-16 key flows (`DUALPAL_TEST_SFTP_PASSPHRASE_KEY`).
 4. A WebDAV path with a space and Unicode (`/dav/Shared Folder/ünï`) pre-created.
 5. A second S3 bucket `dualpal-test-virtual` for virtual-host-style addressing tests (moto supports both).
@@ -432,7 +432,7 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | OPS-COPY-011 | symlink copied as link, not followed into loop | P1 | NEW | `link-to-docs` + a link to its own parent: copy terminates |
 | OPS-COPY-012 | empty file and empty folder copied | P0 | NEW | |
 | OPS-COPY-013 | cancel mid-copy cleans partial file | P0 | EXISTS: cancels_a_running_copy_and_cleans_up | (×remote) |
-| OPS-COPY-014 | remote target uses temp name then renames | P0 | EXISTS: copies_several_files_at_once_without_leftovers | assert no `.dualpal-*`/temp names visible during copy (FaultyFs snapshots listing while writing) |
+| OPS-COPY-014 | remote target uses temp name then renames | P0 | EXISTS: copies_several_files_at_once_without_leftovers | on a backend without `atomic_writes`, the **final** name never appears until its bytes are complete (FaultyFs snapshots the listing while writing: the final path is either absent or has the full size and sha), and no temporary file remains after completion, failure or cancellation. Temporary names *during* the write are expected and must not fail the test. On `atomic_writes` backends (S3) no temporary name is used at all |
 | OPS-COPY-015 | parallel transfers respect `parallel_transfers()` | P0 | EXTEND: copies_several_files_at_once_without_leftovers | max concurrent writers == limit (2 for FTP-like fake, N for SFTP-like) |
 | OPS-COPY-016 | resume after drop | P0 | EXISTS: carries_on_after_a_dropped_connection | resumed offset recorded; final sha equal (×sftp via drop-connections, ×ftp via toxiproxy reset) |
 | OPS-COPY-017 | non-resumable backend restarts the file | P0 | NEW | Faulty wrapper with `resumable_writes=false`, `atomic_writes=false`: retried from 0, final sha equal (×webdav, ×s3 via toxiproxy) |
@@ -523,7 +523,7 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | CON-019 | FTPS implicit on 990-style port | L3 | P1 | EXISTS: ftps_implicit_backend_against_a_real_server | |
 | CON-020 | FTP anonymous (empty user) | L3 | P2 | NEW | enable anonymous read-only folder in pyftpdlib |
 | CON-021 | WebDAV wrong password → `authFailed` | L3 | P0 | NEW | |
-| CON-022 | S3 wrong secret → `authFailed`; wrong bucket → `notFound` | L3 | P0 | NEW | |
+| CON-022 | S3 wrong secret → `authFailed`; wrong bucket → `notFound` | L3 | P0 | NEW | moto accepts any secret (see the note in `remote.rs` s3_backend_against_a_real_server), so the wrong-bucket half runs against moto, and the wrong-secret half needs a server that checks signatures: add a `minio` service (`minio/minio`, `127.0.0.1:9100`, `DUALPAL_TEST_S3_AUTH=http://127.0.0.1:9100\|dualpal-auth\|minio\|minio-secret`) used only by this case. Without that variable the wrong-secret half is skipped with a note, not passed |
 | CON-023 | S3 path-style vs virtual-host style | L3 | P1 | NEW | |
 | CON-024 | connect timeout via toxiproxy latency 30 s → error, not hang | L3 | P1 | NEW | |
 | CON-025 | disconnect unregisters FS and stops edit sessions on it | L4 | P0 | NEW | `registry.ids()` no longer contains it; editor sessions on that fs stopped |
@@ -732,7 +732,7 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 
 ### 8.14 UI E2E with mocked backend — `UI-E2E`, `UI-KEY`, `UI-MOUSE` (L6)
 
-Setup: `playwright.config.ts` at repo root; `webServer: { command: "npm run build && npx vite preview --port 4173 --strictPort", url: "http://localhost:4173" }`; projects `chromium` and `webkit`; `use: { trace: "retain-on-failure", screenshot: "only-on-failure" }`. Each test: `await page.addInitScript(installMockBackendScript, scenario)` then `page.goto("/")`, then `await page.evaluate(() => window.__DUALPAL_TEST__.ready)`. Helper page object `ui/tests/e2e/pom/app.ts` with `pane(side)`, `row(side, name)`, `press(keys)`, `toolbar(label)`, `dialog()`, `ops()`. On macOS-style shortcuts, tests use `ControlOrMeta`.
+Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite build --mode test && npx vite preview --port 4173 --strictPort", url: "http://localhost:4173" }` (`--mode test` is what turns on the PREP-06 ready signal; a plain `npm run build` is production mode and `window.__DUALPAL_TEST__` would never exist); projects `chromium` and `webkit`; `use: { trace: "retain-on-failure", screenshot: "only-on-failure" }`. Each test: `await page.addInitScript(installMockBackendScript, scenario)` (which also sets `localStorage.dualpalTest = "1"` as a second switch, so a production build can be tested too) then `page.goto("/")`, then `await page.evaluate(() => window.__DUALPAL_TEST__.ready)`. Helper page object `ui/tests/e2e/pom/app.ts` with `pane(side)`, `row(side, name)`, `press(keys)`, `toolbar(label)`, `dialog()`, `ops()`. On macOS-style shortcuts, tests use `ControlOrMeta`.
 
 **Keyboard map (one test per README row)** — each asserts the UI result *and* the mock call.
 
@@ -983,7 +983,10 @@ nightly.yml (schedule "0 2 * * *", workflow_dispatch)
         run: docker compose -f docker/test-servers/compose.yaml up -d --build --wait --wait-timeout 180
       - name: Export server settings
         run: scripts/ci/remote-env.sh >> "$GITHUB_ENV"   # the same exports as today, plus DUALPAL_REQUIRE_REMOTE=1, TOXIPROXY
-      - run: cargo nextest run -p dualpal-core --profile ci -E 'binary(remote) | binary(contract_remote) | binary(transfers)'
+      - name: Remote tests (shared servers, in parallel)
+        run: cargo nextest run -p dualpal-core --profile ci -E '(binary(remote) | binary(contract_remote) | binary(transfers)) - test(/fault_/)'
+      - name: Fault tests (cut or slow down every connection, so one at a time)
+        run: cargo nextest run -p dualpal-core --profile ci -E '(binary(remote) | binary(contract_remote)) & test(/fault_/)' --test-threads 1
       - if: failure()
         run: docker compose -f docker/test-servers/compose.yaml logs > servers.log
       - if: always()
@@ -1008,6 +1011,10 @@ retries = 2
 fail-fast = false
 
 # Remote tests share servers: limit their parallelism.
+# Tests that run DUALPAL_TEST_SFTP_DROP or add a Toxiproxy toxic affect every
+# connection to that server, so they must be named `fault_*` and run in a
+# separate, single-threaded invocation (see the rust-remote job). Running them
+# alongside other remote tests makes those tests fail at random.
 [[profile.default.overrides]]
 filter = "binary(remote) | binary(contract_remote)"
 threads-required = 2
