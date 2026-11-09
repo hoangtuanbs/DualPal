@@ -633,6 +633,19 @@ impl FileSystem for SftpFs {
         use tokio::io::AsyncSeekExt;
         let live = self.sftp().await?;
         let mut f = live.sftp.open(path).await.map_err(|e| map_err(path, e))?;
+        // Reading past the end is an invalid request, as on the local disk
+        // (VFS-CON-020).
+        let len = f
+            .metadata()
+            .await
+            .map_err(|e| map_err(path, e))?
+            .size
+            .unwrap_or(0);
+        if offset > len {
+            return Err(Error::Invalid(format!(
+                "reading {path} from byte {offset}, but it is {len} bytes"
+            )));
+        }
         f.seek(std::io::SeekFrom::Start(offset))
             .await
             .map_err(|e| Error::io(path, e))?;

@@ -31,7 +31,7 @@ fn caps_sftp() -> Caps {
 
 fn caps_ftp() -> Caps {
     Caps {
-        modes: false,
+        modes: true,     // SITE CHMOD; pyftpdlib grants it with the "M" permission
         set_mtime: true, // pyftpdlib supports MFMT
         symlinks: false,
         trash: false,

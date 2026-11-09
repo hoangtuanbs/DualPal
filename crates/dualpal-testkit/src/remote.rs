@@ -226,6 +226,8 @@ pub async fn unique_base(fs: &Arc<dyn FileSystem>, root: &str) -> UniqueBase {
     for dir in [&parent, &path] {
         match fs.create_dir(dir).await {
             Ok(()) | Err(Error::AlreadyExists(_)) => {}
+            // Parallel cases share `parent`: another one may have just made it.
+            Err(_) if fs.exists(dir).await.unwrap_or(false) => {}
             Err(e) => panic!("creating {dir}: {e}"),
         }
     }

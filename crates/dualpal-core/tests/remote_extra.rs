@@ -184,10 +184,11 @@ async fn s3_wrong_bucket() {
         initial_path: None,
         favorites: vec![],
     };
-    assert!(matches!(
-        connections::connect(&conn, Some(parts[3].into()), ConnectOptions::default()).await,
-        Err(Error::NotFound(_))
-    ));
+    match connections::connect(&conn, Some(parts[3].into()), ConnectOptions::default()).await {
+        Err(Error::NotFound(_)) => {}
+        Err(e) => panic!("connecting to a missing bucket: {e:?}"),
+        Ok(_) => panic!("connecting to a missing bucket must fail"),
+    }
 }
 
 /// SYNC-016 — mirroring local → remote and comparing back shows all `same`.
