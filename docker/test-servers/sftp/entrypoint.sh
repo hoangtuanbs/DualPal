@@ -25,8 +25,11 @@ if [ ! -f /keys/keyonly_ed25519 ]; then
     ssh-keygen -q -t ed25519 -N 'dualpal-pass' -C dualpal-keyonly -f /keys/keyonly_ed25519
 fi
 if [ ! -f /keys/keyonly_ed25519_utf16 ]; then
-    printf '\377\376' > /keys/keyonly_ed25519_utf16
-    iconv -f UTF-8 -t UTF-16LE /keys/keyonly_ed25519 >> /keys/keyonly_ed25519_utf16
+    # The key is ASCII, so UTF-16 LE is each byte followed by a zero byte.
+    # (Alpine has no plain iconv package; coreutils' printf does this.)
+    /usr/bin/printf "\\xff\\xfe$(od -An -v -tx1 /keys/keyonly_ed25519 \
+        | tr -s ' \n' '  ' | sed 's/ \([0-9a-f][0-9a-f]\)/\\x\1\\x00/g; s/ //g')" \
+        > /keys/keyonly_ed25519_utf16
 fi
 chmod 644 /keys/keyonly_ed25519 /keys/keyonly_ed25519.pub /keys/keyonly_ed25519_utf16
 

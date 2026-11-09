@@ -2,7 +2,7 @@
 # Start it with compose.yaml in the folder above; see README.md there.
 FROM alpine:3.22
 
-RUN apk add --no-cache openssh-server openssh-sftp-server openssh-keygen rsync coreutils procps libiconv \
+RUN apk add --no-cache openssh-server openssh-sftp-server openssh-keygen rsync coreutils procps \
  && ssh-keygen -A
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
