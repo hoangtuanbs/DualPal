@@ -17,6 +17,8 @@ permissions:
 jobs:
   version-consistency:
     name: Version consistency (INS-001)
+    # Only verify builds that succeeded (or a run picked by hand).
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -37,15 +39,24 @@ jobs:
         distro: [ubuntu:24.04, debian:12, fedora:41, opensuse/tumbleweed, ubuntu:22.04]
     runs-on: ubuntu-24.04
     container: ${{ matrix.distro }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Download installers
         uses: actions/download-artifact@v4
         with:
-          name: installers
+          name: DualPal-Linux
           path: installers
+          # The installers come from the "Build installers" run, not this one.
+          run-id: ${{ github.event.workflow_run.id || inputs.run-id }}
+          github-token: ${{ github.token }}
+      - name: Flatten bundle folders
+        shell: bash
+        run: find installers -mindepth 2 -type f -exec mv {} installers/ \;
       - name: Install and smoke-test
-        run: sh scripts/installer-tests/linux.sh installers
+        run: bash scripts/installer-tests/linux.sh installers
 
   windows:
     name: Windows (${{ matrix.os }} / ${{ matrix.kind }})
@@ -61,8 +72,14 @@ jobs:
       - name: Download installers
         uses: actions/download-artifact@v4
         with:
-          name: installers
+          name: DualPal-Windows
           path: installers
+          # The installers come from the "Build installers" run, not this one.
+          run-id: ${{ github.event.workflow_run.id || inputs.run-id }}
+          github-token: ${{ github.token }}
+      - name: Flatten bundle folders
+        shell: bash
+        run: find installers -mindepth 2 -type f -exec mv {} installers/ \;
       - name: Install and smoke-test
         run: powershell -File scripts/installer-tests/windows.ps1 -ArtifactDir installers
 
@@ -75,7 +92,13 @@ jobs:
       - name: Download installers
         uses: actions/download-artifact@v4
         with:
-          name: installers
+          name: DualPal-macOS
           path: installers
+          # The installers come from the "Build installers" run, not this one.
+          run-id: ${{ github.event.workflow_run.id || inputs.run-id }}
+          github-token: ${{ github.token }}
+      - name: Flatten bundle folders
+        shell: bash
+        run: find installers -mindepth 2 -type f -exec mv {} installers/ \;
       - name: Mount and verify the dmg
-        run: sh scripts/installer-tests/macos.sh installers
+        run: bash scripts/installer-tests/macos.sh installers

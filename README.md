@@ -51,7 +51,7 @@ The automated test suite is documented in `docs/testing/AUTOMATION_TEST_PLAN.md`
 
 ```sh
 cargo nextest run --workspace -E 'not (binary(remote) | binary(contract_remote) | binary(remote_extra))'   # L1 + L2 (+ L4)
-eval "$(scripts/ci/remote-env.sh)"   # then: cargo nextest run -p dualpal-core -E 'binary(remote) | binary(contract_remote) | binary(remote_extra)'   # L3 (needs docker test servers)
+eval "$(scripts/ci/remote-env.sh --export)"   # then: cargo nextest run -p dualpal-core -E 'binary(remote) | binary(contract_remote) | binary(remote_extra)'   # L3 (needs docker test servers)
 cargo nextest run -p dualpal         # L4 command tests (needs WebView2 on Windows)
 npm run test:unit                    # L5 UI unit/component tests
 ```

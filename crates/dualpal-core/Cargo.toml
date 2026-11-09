@@ -49,5 +49,10 @@ rstest = "0.25"
 criterion = "0.5"
 dualpal-testkit = { path = "../dualpal-testkit" }
 
+# Criterion provides its own main (PERF benches).
+[[bench]]
+name = "compare"
+harness = false
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }

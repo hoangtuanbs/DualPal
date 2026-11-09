@@ -12,8 +12,7 @@
 use std::sync::Arc;
 
 use dualpal_core::vfs::FtpSecurity;
-use dualpal_core::FileSystem;
-use dualpal_testkit::remote::{ftp_from_env, s3_from_env, sftp_from_env, webdav_from_env};
+use dualpal_testkit::remote::{ftp_from_env, s3_from_env, sftp_from_env, webdav_from_env, TestFs};
 use dualpal_testkit::{run_contract, unique_base, Caps};
 use rstest::rstest;
 
@@ -69,9 +68,9 @@ fn caps_s3() -> Caps {
     }
 }
 
-async fn run(fs: Arc<dyn FileSystem>, caps: Caps) {
-    let base = unique_base(&fs).await;
-    run_contract(fs, base.path(), caps).await;
+async fn run(t: TestFs, caps: Caps) {
+    let base = unique_base(&t.fs, &t.start_path).await;
+    run_contract(t.fs.clone(), base.path(), caps).await;
 }
 
 #[rstest]
@@ -88,36 +87,36 @@ async fn contract_suite(#[case] backend: &str) {
             let Some(t) = sftp_from_env().await else {
                 return;
             };
-            run(t.fs.clone(), caps_sftp()).await;
+            run(t, caps_sftp()).await;
         }
         "ftp" => {
             let Some(t) = ftp_from_env("DUALPAL_TEST_FTP", FtpSecurity::None).await else {
                 return;
             };
-            run(t.fs.clone(), caps_ftp()).await;
+            run(t, caps_ftp()).await;
         }
         "ftps" => {
             let Some(t) = ftp_from_env("DUALPAL_TEST_FTPS", FtpSecurity::Explicit).await else {
                 return;
             };
-            run(t.fs.clone(), caps_ftp()).await;
+            run(t, caps_ftp()).await;
         }
         "ftps-implicit" => {
             let Some(t) = ftp_from_env("DUALPAL_TEST_FTPS_IMPLICIT", FtpSecurity::Implicit).await
             else {
                 return;
             };
-            run(t.fs.clone(), caps_ftp()).await;
+            run(t, caps_ftp()).await;
         }
         "webdav" => {
             let Some(t) = webdav_from_env().await else {
                 return;
             };
-            run(t.fs.clone(), caps_webdav()).await;
+            run(t, caps_webdav()).await;
         }
         "s3" => {
             let Some(t) = s3_from_env().await else { return };
-            run(t.fs.clone(), caps_s3()).await;
+            run(t, caps_s3()).await;
         }
         other => panic!("unknown backend {other}"),
     }
@@ -131,21 +130,22 @@ async fn contract_suite(#[case] backend: &str) {
 #[case("s3")]
 #[tokio::test]
 async fn compare_identical_trees(#[case] backend: &str) {
-    let fs = match backend_fs(backend).await {
-        Some(fs) => fs,
-        None => return,
+    let Some(t) = backend_fs(backend).await else {
+        return;
     };
-    let base = unique_base(&fs).await;
+    let fs = t.fs.clone();
+    let base = unique_base(&fs, &t.start_path).await;
     // Two identical folders: the contract just proved create/write/stat work.
     let l = fs.join(base.path(), "left");
     let r = fs.join(base.path(), "right");
+    fs.create_dir(&l).await.unwrap();
+    fs.create_dir(&r).await.unwrap();
     for (dir, name, content) in [
         (&l, "a.txt", "alpha"),
         (&l, "b.txt", "bravo"),
         (&r, "a.txt", "alpha"),
         (&r, "b.txt", "bravo"),
     ] {
-        fs.create_dir(dir).await.unwrap();
         let mut w = fs.open_write(&fs.join(dir, name)).await.unwrap();
         tokio::io::AsyncWriteExt::write_all(&mut w, content.as_bytes())
             .await
@@ -173,14 +173,12 @@ async fn compare_identical_trees(#[case] backend: &str) {
     );
 }
 
-async fn backend_fs(backend: &str) -> Option<Arc<dyn FileSystem>> {
+async fn backend_fs(backend: &str) -> Option<TestFs> {
     match backend {
-        "sftp" => sftp_from_env().await.map(|t| t.fs),
-        "ftp" => ftp_from_env("DUALPAL_TEST_FTP", FtpSecurity::None)
-            .await
-            .map(|t| t.fs),
-        "webdav" => webdav_from_env().await.map(|t| t.fs),
-        "s3" => s3_from_env().await.map(|t| t.fs),
+        "sftp" => sftp_from_env().await,
+        "ftp" => ftp_from_env("DUALPAL_TEST_FTP", FtpSecurity::None).await,
+        "webdav" => webdav_from_env().await,
+        "s3" => s3_from_env().await,
         _ => None,
     }
 }

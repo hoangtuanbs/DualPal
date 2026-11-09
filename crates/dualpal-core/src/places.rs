@@ -229,31 +229,34 @@ fn standard_dir(
 /// Standard folders that exist on this machine, used as the default favorites.
 pub fn standard_folders() -> Vec<Favorite> {
     let home = home_dir();
+    // Only a test override replaces the platform lookups: those know about
+    // redirected and localized folders, fixed names do not.
+    let over = std::env::var_os("DUALPAL_HOME").map(PathBuf::from);
     let mut v: Vec<(String, Option<PathBuf>, &str)> = vec![
         ("Home".into(), home.clone(), "home"),
         (
             "Desktop".into(),
-            standard_dir(home.as_ref(), "Desktop", dirs::desktop_dir),
+            standard_dir(over.as_ref(), "Desktop", dirs::desktop_dir),
             "desktop",
         ),
         (
             "Documents".into(),
-            standard_dir(home.as_ref(), "Documents", dirs::document_dir),
+            standard_dir(over.as_ref(), "Documents", dirs::document_dir),
             "documents",
         ),
         (
             "Downloads".into(),
-            standard_dir(home.as_ref(), "Downloads", dirs::download_dir),
+            standard_dir(over.as_ref(), "Downloads", dirs::download_dir),
             "downloads",
         ),
         (
             "Pictures".into(),
-            standard_dir(home.as_ref(), "Pictures", dirs::picture_dir),
+            standard_dir(over.as_ref(), "Pictures", dirs::picture_dir),
             "pictures",
         ),
         (
             "Music".into(),
-            standard_dir(home.as_ref(), "Music", dirs::audio_dir),
+            standard_dir(over.as_ref(), "Music", dirs::audio_dir),
             "music",
         ),
         (
@@ -263,7 +266,15 @@ pub fn standard_folders() -> Vec<Favorite> {
                 "Videos"
             }
             .into(),
-            standard_dir(home.as_ref(), "Videos", dirs::video_dir),
+            standard_dir(
+                over.as_ref(),
+                if cfg!(target_os = "macos") {
+                    "Movies"
+                } else {
+                    "Videos"
+                },
+                dirs::video_dir,
+            ),
             "movies",
         ),
     ];

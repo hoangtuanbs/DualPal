@@ -28,19 +28,24 @@ export function installBrowserMock(scenario: BrowserScenario) {
 
   // Ensure parent folders exist.
   const tree = new Map<string, string>([["/", ""]]);
+  // Folders are tracked on their own: an empty folder and an empty file both
+  // have "" as content and no children.
+  const dirs = new Set<string>(["/"]);
   for (const p of paths) {
     const parts = clean(p).split("/").filter(Boolean);
     let acc = "/";
     for (let i = 0; i < parts.length - 1; i++) {
       acc = join(acc, parts[i]);
       if (!tree.has(acc)) tree.set(acc, "");
+      dirs.add(acc);
     }
     tree.set(clean(p), files[p]);
+    if (isDir(p)) dirs.add(clean(p));
   }
 
   const entry = (p: string): Entry => {
     const content = tree.get(p);
-    const dir = content === "" && isDir(p) || (content !== undefined && (p === "/" || [...tree.keys()].some((k) => parent(k) === p)));
+    const dir = dirs.has(p);
     return {
       name: p === "/" ? "/" : base(p),
       path: p,

@@ -5,7 +5,9 @@
 set -euo pipefail
 
 dir="${1:?artifact dir}"
-version="$(node -p "require('./package.json').version")"
+# The app version, read without Node (bare distro containers have none).
+version="$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' package.json | head -n 1)"
+test -n "$version"
 
 # INS-000: artifact names match the README patterns.
 test -f "$dir/Dual.Pal_${version}_amd64.deb"

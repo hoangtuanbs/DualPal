@@ -94,16 +94,23 @@ pub async fn ftp_from_env(var: &str, security: FtpSecurity) -> Option<TestFs> {
         initial_path: None,
         favorites: vec![],
     };
-    let connected = connections::connect(
-        &conn,
-        Some(password.to_string()),
-        ConnectOptions {
-            known_certs: Some(temp.path().join("known_certificates.json")),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap_or_else(|e| panic!("connecting to {spec}: {e}"));
+    let opts = |trust: Option<String>| ConnectOptions {
+        trust_fingerprint: trust,
+        known_certs: Some(temp.path().join("known_certificates.json")),
+        ..Default::default()
+    };
+    // FTPS servers in the test setup use a self-signed certificate: trust the
+    // fingerprint the first attempt reports, as the app's dialog would.
+    let connected = match connections::connect(&conn, Some(password.to_string()), opts(None)).await
+    {
+        Ok(c) => c,
+        Err(Error::UnknownHost { fingerprint, .. }) => {
+            connections::connect(&conn, Some(password.to_string()), opts(Some(fingerprint)))
+                .await
+                .unwrap_or_else(|e| panic!("connecting to {spec} after trusting it: {e}"))
+        }
+        Err(e) => panic!("connecting to {spec}: {e}"),
+    };
     Some(TestFs {
         fs: connected.fs,
         start_path: connected.start_path,
@@ -211,18 +218,13 @@ impl Drop for UniqueBase {
     }
 }
 
-/// Create a fresh `/dualpal-test/<uuid>` folder on `fs`.
-pub async fn unique_base(fs: &Arc<dyn FileSystem>) -> UniqueBase {
-    let path = fs.join("/dualpal-test", &uuid::Uuid::new_v4().to_string());
-    let mut parent = fs.parent(&path).unwrap_or_else(|| "/".into());
-    // Make the parent chain, ignoring the already-existing ones.
-    let mut chain = vec![path.clone()];
-    while parent != "/" && parent != "." && !parent.is_empty() {
-        chain.push(parent.clone());
-        parent = fs.parent(&parent).unwrap_or_else(|| "/".into());
-    }
-    for dir in chain.into_iter().rev() {
-        match fs.create_dir(&dir).await {
+/// Create a fresh `<root>/dualpal-test/<uuid>` folder on `fs`. `root` is a
+/// folder the test user can write to, such as the connection's start path.
+pub async fn unique_base(fs: &Arc<dyn FileSystem>, root: &str) -> UniqueBase {
+    let parent = fs.join(root, "dualpal-test");
+    let path = fs.join(&parent, &uuid::Uuid::new_v4().to_string());
+    for dir in [&parent, &path] {
+        match fs.create_dir(dir).await {
             Ok(()) | Err(Error::AlreadyExists(_)) => {}
             Err(e) => panic!("creating {dir}: {e}"),
         }

@@ -1161,7 +1161,7 @@
         title="Linked browsing: going into or out of a folder in one pane does the same in the other ({MOD}Shift L)"><Icon name="link" /></button
       >
     </div>
-    <div class="group live" role="group" aria-label="Auto-sync" data-testid="live-bar">
+    <div class="group live" role="group" aria-label="Auto-sync" data-testid="live-controls">
       <button aria-pressed={liveKind === "right"} onclick={() => toggleLive("right")} aria-label="Auto-sync left to right"
         title="Auto-sync → : copy changes from left to right"><Icon name="arrow-right" /></button
       >

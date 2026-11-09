@@ -545,6 +545,12 @@ pub async fn symlink_reported(fs: &Arc<dyn FileSystem>, base: &str, caps: Caps) 
         eprintln!("skipped: backend has no symlinks");
         return;
     }
+    // Links are made with the local OS call, so only the local disk can be
+    // checked here; a remote backend would need its own way to create one.
+    if fs.id() != "local" {
+        eprintln!("skipped: no way to create a link on {}", fs.id());
+        return;
+    }
     #[cfg(unix)]
     {
         let d = case_dir(fs, base, "027-symlink").await;

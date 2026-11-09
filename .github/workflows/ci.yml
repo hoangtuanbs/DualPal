@@ -121,8 +121,8 @@ jobs:
 
       - name: Export server settings
         run: |
-          cp docker/test-servers/keys/id_ed25519 "$RUNNER_TEMP/sftp_key"
-          chmod 600 "$RUNNER_TEMP/sftp_key"
+          cp docker/test-servers/keys/id_ed25519 "$RUNNER_TEMP/dualpal_sftp_key"
+          chmod 600 "$RUNNER_TEMP/dualpal_sftp_key"
           scripts/ci/remote-env.sh >> "$GITHUB_ENV"
 
       - name: Remote tests (shared servers, in parallel)
