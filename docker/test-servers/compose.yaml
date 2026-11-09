@@ -83,7 +83,8 @@ services:
       - webdav
       - s3
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8474/proxies"]
+      # The image has no shell or wget, only the server and its CLI.
+      test: ["CMD", "/toxiproxy-cli", "-h", "http://127.0.0.1:8474", "list"]
       interval: 2s
       timeout: 3s
       retries: 30
