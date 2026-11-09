@@ -180,7 +180,7 @@
   }
 </script>
 
-<aside class="inspector" aria-label="Info">
+<aside class="inspector" aria-label="Info" data-testid="inspector">
   {#if !entry}
     <p class="empty">Select an item to see its preview and details.</p>
   {:else}

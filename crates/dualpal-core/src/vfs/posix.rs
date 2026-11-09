@@ -59,6 +59,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// VFS-PATH-003
     fn helpers() {
         assert_eq!(normalize("a/./b/../c/"), "/a/c");
         assert_eq!(normalize("/"), "/");

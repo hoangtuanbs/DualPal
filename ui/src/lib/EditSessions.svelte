@@ -28,7 +28,7 @@
 </script>
 
 {#if sessions.length > 0}
-  <div class="edits" aria-label="Files being edited">
+  <div class="edits" aria-label="Files being edited" data-testid="edit-sessions">
     <span class="label">Editing</span>
     {#each sessions as s (s.id)}
       <span class="chip" class:failed={s.status === "failed"} title="{s.remote.path}\nLocal copy: {s.localPath}">

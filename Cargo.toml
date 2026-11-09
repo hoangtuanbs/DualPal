@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/dualpal-core", "src-tauri"]
+members = ["crates/dualpal-core", "crates/dualpal-testkit", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

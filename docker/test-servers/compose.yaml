@@ -1,5 +1,5 @@
 # Test servers for Dual Pal. Start them with:
-#   docker compose -f docker/test-servers/compose.yaml up -d --build
+#   docker compose -f docker/test-servers/compose.yaml up -d --build --wait
 # See docker/test-servers/README.md.
 name: dualpal-test
 
@@ -14,6 +14,12 @@ services:
       SFTP_PASSWORD: dualpal
     volumes:
       - ./keys:/keys
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "22"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
 
   s3:
     build: ./s3
@@ -21,6 +27,14 @@ services:
     container_name: dualpal-test-s3
     ports:
       - "127.0.0.1:9000:9000"
+    healthcheck:
+      # Succeeds only once the bucket exists, so it also replaces the
+      # "bucket dualpal-test ready" log wait.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/dualpal-test"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
 
   ftp:
     build: ./ftp
@@ -31,6 +45,12 @@ services:
       - "127.0.0.1:2990:2990"
       - "127.0.0.1:2991:2991"
       - "127.0.0.1:30000-30029:30000-30029"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 2121), 2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
 
   webdav:
     build: ./webdav
@@ -38,3 +58,33 @@ services:
     container_name: dualpal-test-webdav
     ports:
       - "127.0.0.1:8088:8088"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8088), 2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  # Toxiproxy sits in front of FTP, WebDAV and S3 so tests can inject latency,
+  # bandwidth limits and connection resets. SFTP already has `drop-connections`.
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    container_name: dualpal-test-toxiproxy
+    ports:
+      - "127.0.0.1:8474:8474"
+      - "127.0.0.1:3121:3121"
+      - "127.0.0.1:9088:9088"
+      - "127.0.0.1:9900:9900"
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes:
+      - ./toxiproxy.json:/config/toxiproxy.json
+    depends_on:
+      - ftp
+      - webdav
+      - s3
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8474/proxies"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s

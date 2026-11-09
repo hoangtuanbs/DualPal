@@ -44,6 +44,16 @@ npm run tauri dev        # run the app with hot reload
 npm run tauri build      # build an installer (.dmg/.app on macOS, .msi/.exe on Windows)
 cargo test --workspace   # core tests
 npm run check            # UI type-check
+npm run test:unit        # UI unit + component tests (Vitest, with coverage)
+```
+
+The automated test suite is documented in `docs/testing/AUTOMATION_TEST_PLAN.md`. Key commands:
+
+```sh
+cargo nextest run --workspace -E 'not (binary(remote) | binary(contract_remote) | binary(remote_extra))'   # L1 + L2 (+ L4)
+eval "$(scripts/ci/remote-env.sh)"   # then: cargo nextest run -p dualpal-core -E 'binary(remote) | binary(contract_remote) | binary(remote_extra)'   # L3 (needs docker test servers)
+cargo nextest run -p dualpal         # L4 command tests (needs WebView2 on Windows)
+npm run test:unit                    # L5 UI unit/component tests
 ```
 
 ## Mouse

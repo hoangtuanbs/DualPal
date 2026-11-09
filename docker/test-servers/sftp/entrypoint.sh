@@ -19,6 +19,17 @@ if [ ! -f /keys/ssh_host_ed25519_key ]; then
     cp /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub /keys/
 fi
 
+# A second key with a passphrase, for the "key with passphrase" flow, plus a
+# copy re-encoded as UTF-16 LE with a BOM, for the UTF-16 key flow.
+if [ ! -f /keys/keyonly_ed25519 ]; then
+    ssh-keygen -q -t ed25519 -N 'dualpal-pass' -C dualpal-keyonly -f /keys/keyonly_ed25519
+fi
+if [ ! -f /keys/keyonly_ed25519_utf16 ]; then
+    printf '\377\376' > /keys/keyonly_ed25519_utf16
+    iconv -f UTF-8 -t UTF-16LE /keys/keyonly_ed25519 >> /keys/keyonly_ed25519_utf16
+fi
+chmod 644 /keys/keyonly_ed25519 /keys/keyonly_ed25519.pub /keys/keyonly_ed25519_utf16
+
 if ! id "$user" >/dev/null 2>&1; then
     adduser -D -s /bin/sh "$user"
 fi
@@ -33,6 +44,18 @@ fi
 chown -R "$user:$user" "$home/.ssh"
 chmod 700 "$home/.ssh"
 chmod 600 "$home/.ssh/authorized_keys"
+
+# A second user that signs in only with the passphrase key (no password).
+if ! id keyonly >/dev/null 2>&1; then
+    adduser -D -s /bin/sh keyonly
+fi
+passwd -d keyonly
+keyonly_home="$(getent passwd keyonly | cut -d: -f6)"
+mkdir -p "$keyonly_home/.ssh"
+cat /keys/keyonly_ed25519.pub > "$keyonly_home/.ssh/authorized_keys"
+chown -R keyonly:keyonly "$keyonly_home/.ssh"
+chmod 700 "$keyonly_home/.ssh"
+chmod 600 "$keyonly_home/.ssh/authorized_keys"
 
 cat > /etc/ssh/sshd_config <<CONF
 Port 22

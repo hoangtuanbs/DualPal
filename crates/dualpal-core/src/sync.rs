@@ -589,6 +589,7 @@ mod tests {
     }
 
     #[test]
+    /// SYNC-002
     fn first_sync_uses_dates_and_never_deletes() {
         let c = cmp(vec![
             item("a.txt", f(1, 10_000), None, DiffState::LeftOnly),
@@ -632,6 +633,7 @@ mod tests {
     }
 
     #[test]
+    /// SYNC-003
     fn snapshot_tells_deleted_from_new_and_who_changed() {
         let synced = |l, r| SnapPair {
             l: f(1, l).unwrap(),
@@ -710,6 +712,7 @@ mod tests {
     }
 
     #[test]
+    /// CMP-009
     fn folders_on_one_side_are_one_step_with_totals() {
         let c = cmp(vec![
             item("new", D, None, DiffState::LeftOnly),
@@ -733,6 +736,7 @@ mod tests {
     }
 
     #[test]
+    /// SYNC-009
     fn next_snapshot_records_matches_and_results() {
         let mut old = Snapshot::default();
         let p = SnapPair {

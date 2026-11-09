@@ -98,6 +98,12 @@
     let unlisten: (() => void) | undefined;
     let unlistenEdits: (() => void) | undefined;
     let unlistenLive: (() => void) | undefined;
+    // PREP-06: a deterministic "app ready" signal for E2E tests, after both
+    // panes finish their first listing.
+    let resolveReady: (() => void) | undefined;
+    if (import.meta.env.MODE === "test" || (typeof localStorage !== "undefined" && localStorage.getItem("dualpalTest") === "1")) {
+      window.__DUALPAL_TEST__ = { ready: new Promise<void>((r) => (resolveReady = r)) };
+    }
     (async () => {
       unlisten = await api.onOperationUpdated(onOperationUpdated);
       unlistenLive = await api.onLiveSyncUpdated(onLiveSyncUpdated);
@@ -122,7 +128,7 @@
       syncs = await api.syncFavorites();
       diffTools = await api.diffTools();
       if (running) onLiveSyncUpdated(await api.liveSyncStatus());
-    })().catch((e) => (notice = errorMessage(e)));
+    })().catch((e) => (notice = errorMessage(e))).finally(() => resolveReady?.());
     PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
     const timer = setInterval(() => api.volumes().then((v) => (volumes = v)), 15000);
@@ -1124,7 +1130,7 @@
 />
 
 <div class="app">
-  <div class="toolbar">
+  <div class="toolbar" data-testid="toolbar">
     <div class="group" inert={frozen}>
       <button onclick={() => transfer("copy")} aria-label="Copy" title="Copy to the other pane (F5)"><Icon name="copy" /></button>
       <button onclick={() => transfer("move")} aria-label="Move" title="Move to the other pane (F6)"><Icon name="move" /></button>
@@ -1155,7 +1161,7 @@
         title="Linked browsing: going into or out of a folder in one pane does the same in the other ({MOD}Shift L)"><Icon name="link" /></button
       >
     </div>
-    <div class="group live" role="group" aria-label="Auto-sync">
+    <div class="group live" role="group" aria-label="Auto-sync" data-testid="live-bar">
       <button aria-pressed={liveKind === "right"} onclick={() => toggleLive("right")} aria-label="Auto-sync left to right"
         title="Auto-sync → : copy changes from left to right"><Icon name="arrow-right" /></button
       >
@@ -1213,7 +1219,7 @@
     </div>
   </div>
 
-  <div class="live-bar" class:on={live} class:failed={live?.state === "failed"} role="status">
+  <div class="live-bar" class:on={live} class:failed={live?.state === "failed"} role="status" data-testid="live-bar">
     {#if live && liveLeft && liveRight}
       <strong>Auto-sync</strong>
       <span class="live-places" title="{liveLeft.path} {liveArrow} {liveRight.path}"
@@ -1221,7 +1227,7 @@
       >
       <span class="live-state">{liveText}</span>
       <span class="live-note">Panes are locked while this runs.</span>
-      <button onclick={() => liveKind && toggleLive(liveKind)}>Stop</button>
+      <button data-testid="live-stop" onclick={() => liveKind && toggleLive(liveKind)}>Stop</button>
     {/if}
   </div>
 

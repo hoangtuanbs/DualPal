@@ -461,6 +461,7 @@ mod tests {
     use super::glob_match;
 
     #[test]
+    /// CMP-006
     fn globs() {
         assert!(glob_match("*.tmp", "a.TMP"));
         assert!(glob_match(".DS_Store", ".ds_store"));

@@ -30,8 +30,8 @@ struct CompareProgress {
 /// Compare two folders and plan a sync in `mode`. Progress is sent as
 /// `compare-progress` events; [`cancel_compare`] stops it.
 #[tauri::command]
-pub async fn sync_plan(
-    app: AppHandle,
+pub async fn sync_plan<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     left: Location,
     right: Location,

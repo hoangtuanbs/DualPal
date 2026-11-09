@@ -1,0 +1,81 @@
+name: Installers verify
+
+on:
+  workflow_run:
+    workflows: ["Build installers"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: Run id of the "Build installers" workflow
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  version-consistency:
+    name: Version consistency (INS-001)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the three versions agree
+        run: |
+          set -euo pipefail
+          cargo_v="$(cargo metadata --no-deps --format-version 1 | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).packages[0].version))")"
+          node_v="$(node -p "require('./package.json').version")"
+          tauri_v="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          [ "$cargo_v" = "$node_v" ] && [ "$node_v" = "$tauri_v" ] || { echo "versions differ: cargo=$cargo_v node=$node_v tauri=$tauri_v"; exit 1; }
+
+  linux:
+    name: Linux (${{ matrix.distro }})
+    needs: version-consistency
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [ubuntu:24.04, debian:12, fedora:41, opensuse/tumbleweed, ubuntu:22.04]
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.distro }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          name: installers
+          path: installers
+      - name: Install and smoke-test
+        run: sh scripts/installer-tests/linux.sh installers
+
+  windows:
+    name: Windows (${{ matrix.os }} / ${{ matrix.kind }})
+    needs: version-consistency
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2022]
+        kind: [nsis, msi]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          name: installers
+          path: installers
+      - name: Install and smoke-test
+        run: powershell -File scripts/installer-tests/windows.ps1 -ArtifactDir installers
+
+  macos:
+    name: macOS (dmg smoke)
+    needs: version-consistency
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          name: installers
+          path: installers
+      - name: Mount and verify the dmg
+        run: sh scripts/installer-tests/macos.sh installers

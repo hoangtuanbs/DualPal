@@ -77,7 +77,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={onclose}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="palette" role="dialog" tabindex="-1" aria-modal="true" aria-label="Command palette" onclick={(e) => e.stopPropagation()}>
+  <div class="palette" role="dialog" tabindex="-1" aria-modal="true" aria-label="Command palette" data-testid="palette" onclick={(e) => e.stopPropagation()}>
     <input
       bind:this={field}
       bind:value={query}

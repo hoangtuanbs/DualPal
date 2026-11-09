@@ -596,6 +596,7 @@ mod tests {
     }
 
     #[test]
+    /// REN-001
     fn replace_plain_and_regex() {
         let plain = RenameRule::Replace {
             find: "IMG".into(),
@@ -619,6 +620,7 @@ mod tests {
     }
 
     #[test]
+    /// REN-002
     fn case_numbering_insert_remove_and_extension() {
         let rules = vec![
             RenameRule::Case {
@@ -669,6 +671,7 @@ mod tests {
     }
 
     #[test]
+    /// REN-003
     fn tokens_and_folders() {
         let rules = vec![RenameRule::Insert {
             text: "{n:2}-{name}-{ext}-{x}".into(),
@@ -684,6 +687,7 @@ mod tests {
     }
 
     #[test]
+    /// REN-004
     fn issues_are_reported() {
         let rules = vec![RenameRule::Replace {
             find: r"\d".into(),
@@ -717,6 +721,7 @@ mod tests {
     }
 
     #[test]
+    /// REN-005
     fn presets_round_trip() {
         let dir = std::env::temp_dir().join(format!("dp-presets-{}", uuid::Uuid::new_v4()));
         let path = dir.join("p.json");

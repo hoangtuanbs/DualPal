@@ -202,15 +202,60 @@ pub struct Favorite {
     pub icon: String,
 }
 
+/// The user's home folder. `DUALPAL_HOME` overrides it so tests and packaged
+/// smoke runs never touch the real profile (PREP-02).
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("DUALPAL_HOME")
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+}
+
+/// A standard folder: under `DUALPAL_HOME` when it is set, otherwise the
+/// platform's own location.
+fn standard_dir(
+    home: Option<&PathBuf>,
+    name: &str,
+    fallback: fn() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    match home {
+        Some(home) => {
+            let path = home.join(name);
+            path.is_dir().then_some(path)
+        }
+        None => fallback(),
+    }
+}
+
 /// Standard folders that exist on this machine, used as the default favorites.
 pub fn standard_folders() -> Vec<Favorite> {
+    let home = home_dir();
     let mut v: Vec<(String, Option<PathBuf>, &str)> = vec![
-        ("Home".into(), dirs::home_dir(), "home"),
-        ("Desktop".into(), dirs::desktop_dir(), "desktop"),
-        ("Documents".into(), dirs::document_dir(), "documents"),
-        ("Downloads".into(), dirs::download_dir(), "downloads"),
-        ("Pictures".into(), dirs::picture_dir(), "pictures"),
-        ("Music".into(), dirs::audio_dir(), "music"),
+        ("Home".into(), home.clone(), "home"),
+        (
+            "Desktop".into(),
+            standard_dir(home.as_ref(), "Desktop", dirs::desktop_dir),
+            "desktop",
+        ),
+        (
+            "Documents".into(),
+            standard_dir(home.as_ref(), "Documents", dirs::document_dir),
+            "documents",
+        ),
+        (
+            "Downloads".into(),
+            standard_dir(home.as_ref(), "Downloads", dirs::download_dir),
+            "downloads",
+        ),
+        (
+            "Pictures".into(),
+            standard_dir(home.as_ref(), "Pictures", dirs::picture_dir),
+            "pictures",
+        ),
+        (
+            "Music".into(),
+            standard_dir(home.as_ref(), "Music", dirs::audio_dir),
+            "music",
+        ),
         (
             if cfg!(target_os = "macos") {
                 "Movies"
@@ -218,11 +263,11 @@ pub fn standard_folders() -> Vec<Favorite> {
                 "Videos"
             }
             .into(),
-            dirs::video_dir(),
+            standard_dir(home.as_ref(), "Videos", dirs::video_dir),
             "movies",
         ),
     ];
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = &home {
         if let Some(name) = home.file_name() {
             v[0].0 = name.to_string_lossy().into_owned();
         }

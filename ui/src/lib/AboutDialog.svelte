@@ -48,7 +48,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={(e) => e.target === e.currentTarget && onclose()}>
-  <div class="sheet" role="dialog" aria-modal="true" aria-label={page === "about" ? "About Dual Pal" : "Donate"}>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label={page === "about" ? "About Dual Pal" : "Donate"} data-testid="about-dialog">
     <!-- svelte-ignore a11y_autofocus -->
     <button class="close" onclick={onclose} aria-label="Close" autofocus>×</button>
 
