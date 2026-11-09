@@ -185,6 +185,7 @@ async fn s3_backend_works_like_a_disk() {
 }
 
 #[test]
+/// CON-001
 fn connections_keep_secrets_out_of_the_file() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("connections.json");
@@ -350,12 +351,12 @@ async fn sync_round_trip(fs: Arc<dyn FileSystem>, base: &str) {
 
 /// `DUALPAL_TEST_SFTP=user@host:port`, `DUALPAL_TEST_SFTP_KEY=/path/to/key`.
 #[tokio::test]
+/// CON-009
 async fn sftp_backend_against_a_real_server() {
-    let Ok(target) = std::env::var("DUALPAL_TEST_SFTP") else {
-        eprintln!("skipped: DUALPAL_TEST_SFTP is not set");
+    let Some(target) = dualpal_testkit::remote_env("DUALPAL_TEST_SFTP") else {
         return;
     };
-    let key = std::env::var("DUALPAL_TEST_SFTP_KEY").expect("DUALPAL_TEST_SFTP_KEY");
+    let key = dualpal_testkit::remote_env("DUALPAL_TEST_SFTP_KEY").expect("DUALPAL_TEST_SFTP_KEY");
     let (user, rest) = target.split_once('@').unwrap();
     let (host, port) = rest.rsplit_once(':').unwrap();
     let tmp = tempfile::tempdir().unwrap();
@@ -417,7 +418,7 @@ async fn sftp_backend_against_a_real_server() {
     ));
 
     // With DUALPAL_TEST_SFTP_PASSWORD, the right password signs in too.
-    if let Ok(good) = std::env::var("DUALPAL_TEST_SFTP_PASSWORD") {
+    if let Some(good) = dualpal_testkit::remote_env("DUALPAL_TEST_SFTP_PASSWORD") {
         connections::connect(&pw, Some(good), opts(None))
             .await
             .unwrap();
@@ -444,7 +445,7 @@ async fn sftp_backend_against_a_real_server() {
     // With DUALPAL_TEST_SFTP_DROP (a command that cuts open SSH sessions,
     // e.g. `docker exec dualpal-test-sftp drop-connections`), an upload that
     // loses its connection midway carries on and arrives intact.
-    if let Ok(drop_cmd) = std::env::var("DUALPAL_TEST_SFTP_DROP") {
+    if let Some(drop_cmd) = dualpal_testkit::remote_env("DUALPAL_TEST_SFTP_DROP") {
         upload_survives_a_dropped_connection(c.fs.clone(), &base, &drop_cmd).await;
     }
 
@@ -504,6 +505,7 @@ async fn upload_survives_a_dropped_connection(fs: Arc<dyn FileSystem>, base: &st
 }
 
 #[tokio::test]
+/// EDIT-001
 async fn remote_edits_upload_on_save() {
     use dualpal_core::remote_edit::{EditStatus, RemoteEditor};
     let op = opendal::Operator::new(opendal::services::Memory::default())
@@ -559,8 +561,7 @@ async fn remote_edits_upload_on_save() {
 /// The bucket must exist; the test works in a fresh folder inside it.
 #[tokio::test]
 async fn s3_backend_against_a_real_server() {
-    let Ok(spec) = std::env::var("DUALPAL_TEST_S3") else {
-        eprintln!("skipped: DUALPAL_TEST_S3 is not set");
+    let Some(spec) = dualpal_testkit::remote_env("DUALPAL_TEST_S3") else {
         return;
     };
     let parts: Vec<&str> = spec.split('|').collect();
@@ -632,6 +633,7 @@ async fn s3_backend_against_a_real_server() {
 }
 
 #[tokio::test]
+/// EDIT-002
 async fn unsent_edits_survive_failures_and_restarts() {
     use dualpal_core::remote_edit::{EditStatus, RemoteEditor};
     let op = opendal::Operator::new(opendal::services::Memory::default())
@@ -684,6 +686,7 @@ async fn unsent_edits_survive_failures_and_restarts() {
 }
 
 #[test]
+/// VFS-PATH-001
 fn server_names_cannot_escape_local_folders() {
     use dualpal_core::vfs::{is_safe_local_name, safe_local_name};
     assert!(is_safe_local_name("notes.txt"));
@@ -702,7 +705,7 @@ fn server_names_cannot_escape_local_folders() {
 
 /// `user:password@host:port` (an empty user signs in anonymously).
 fn ftp_spec(var: &str) -> Option<(String, String, String, u16)> {
-    let spec = std::env::var(var).ok()?;
+    let spec = dualpal_testkit::remote_env(var)?;
     let (cred, addr) = spec.rsplit_once('@').expect("user:password@host:port");
     let (user, pass) = cred.split_once(':').unwrap_or((cred, ""));
     let (host, port) = addr.rsplit_once(':').expect("host:port");
@@ -826,6 +829,7 @@ async fn ftps_backend_against_a_real_server() {
 }
 
 #[tokio::test]
+/// CON-019
 async fn ftps_implicit_backend_against_a_real_server() {
     ftp_round_trip(
         "DUALPAL_TEST_FTPS_IMPLICIT",
@@ -837,8 +841,7 @@ async fn ftps_implicit_backend_against_a_real_server() {
 #[tokio::test]
 async fn webdav_backend_against_a_real_server() {
     // `user:password@http://host:port/path`
-    let Ok(spec) = std::env::var("DUALPAL_TEST_WEBDAV") else {
-        eprintln!("skipped: DUALPAL_TEST_WEBDAV is not set");
+    let Some(spec) = dualpal_testkit::remote_env("DUALPAL_TEST_WEBDAV") else {
         return;
     };
     let (cred, url) = spec.split_once('@').expect("user:password@url");

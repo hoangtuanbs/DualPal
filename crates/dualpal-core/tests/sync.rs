@@ -42,6 +42,7 @@ fn setup() -> (OperationQueue, Arc<Registry>) {
 }
 
 #[tokio::test]
+/// CMP-001
 async fn compare_classifies_every_item() {
     let (_, registry) = setup();
     let l = tempfile::tempdir().unwrap();
@@ -128,6 +129,7 @@ async fn compare_classifies_every_item() {
 }
 
 #[tokio::test]
+/// SYNC-004
 async fn two_way_sync_remembers_what_it_did() {
     let (q, _) = setup();
     let state = tempfile::tempdir().unwrap();
@@ -281,6 +283,7 @@ async fn two_way_sync_remembers_what_it_did() {
 }
 
 #[tokio::test]
+/// SYNC-007
 async fn mirror_to_a_bucket_and_replace_a_file_with_a_folder() {
     let (q, registry) = setup();
     let op = opendal::Operator::new(opendal::services::Memory::default())
@@ -371,6 +374,7 @@ async fn mirror_to_a_bucket_and_replace_a_file_with_a_folder() {
 }
 
 #[tokio::test]
+/// OPS-BREN-001
 async fn batch_rename_handles_swaps_and_refuses_clashes() {
     let (q, _) = setup();
     let d = tempfile::tempdir().unwrap();

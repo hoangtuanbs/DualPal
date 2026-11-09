@@ -1,0 +1,5 @@
+[
+  { "name": "ftp-proxy", "listen": "0.0.0.0:3121", "upstream": "ftp:2121", "enabled": true },
+  { "name": "webdav-proxy", "listen": "0.0.0.0:9088", "upstream": "webdav:8088", "enabled": true },
+  { "name": "s3-proxy", "listen": "0.0.0.0:9900", "upstream": "s3:9000", "enabled": true }
+]

@@ -76,13 +76,15 @@
     onclose();
   }}
 >
-  <div class="menu" role="menu" tabindex="-1" bind:this={menu} style:left="{left}px" style:top="{top}px" onkeydown={keydown}>
+  <div class="menu" role="menu" tabindex="-1" data-testid="context-menu" bind:this={menu} style:left="{left}px" style:top="{top}px" onkeydown={keydown}>
     {#each items as it, i}
       {#if it === "separator"}
         <div class="sep" role="separator"></div>
       {:else}
         <button
           role="menuitem"
+          data-testid="context-menu-item"
+          data-action={it.label}
           class:danger={it.danger}
           class:focused={focused === i}
           disabled={it.disabled}

@@ -17,6 +17,7 @@ fn rec(n: u64) -> ActivityRecord {
 }
 
 #[test]
+/// ACT-001
 fn persists_newest_first_and_respects_capacity() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("logs/activity.jsonl");
@@ -39,6 +40,7 @@ fn persists_newest_first_and_respects_capacity() {
 }
 
 #[test]
+/// ACT-002
 fn insights_bucket_by_local_day() {
     use dualpal_core::activity::insights;
     const H: i64 = 3_600_000;

@@ -298,7 +298,7 @@
 <svelte:window onkeydown={keydown} />
 
 <div class="backdrop">
-  <div class="sheet" role="dialog" aria-modal="true" aria-label="Compare and sync folders">
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Compare and sync folders" data-testid="compare-view">
     <header>
       <h2>{fav ? fav.name : "Compare & Sync"}</h2>
       <div class="pair">

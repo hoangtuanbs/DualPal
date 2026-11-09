@@ -33,6 +33,7 @@ async fn eventually(what: &str, cond: impl Fn() -> bool) {
 }
 
 #[tokio::test]
+/// LIVE-001
 async fn one_way_copies_changes_as_they_happen() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
@@ -81,6 +82,7 @@ async fn one_way_copies_changes_as_they_happen() {
 }
 
 #[tokio::test]
+/// LIVE-002
 async fn both_ways_copies_each_way_and_passes_on_deletions() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
@@ -122,6 +124,7 @@ async fn both_ways_copies_each_way_and_passes_on_deletions() {
 }
 
 #[tokio::test]
+/// LIVE-003
 async fn the_same_folder_twice_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
     let live = setup();
@@ -132,6 +135,7 @@ async fn the_same_folder_twice_is_refused() {
 }
 
 #[tokio::test]
+/// LIVE-004
 async fn a_deletion_in_folders_that_started_equal_is_passed_on() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
@@ -167,6 +171,7 @@ async fn a_deletion_in_folders_that_started_equal_is_passed_on() {
 }
 
 #[tokio::test]
+/// LIVE-005
 async fn switching_waits_for_the_old_sync_to_stop() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));

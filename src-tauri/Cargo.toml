@@ -21,3 +21,10 @@ uuid.workspace = true
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 keyring.workspace = true
+
+[dev-dependencies]
+dualpal-testkit = { path = "../crates/dualpal-testkit" }
+tempfile.workspace = true
+insta = { version = "1", features = ["json"] }
+tauri = { version = "2", features = ["protocol-asset", "test"] }
+serde_json.workspace = true

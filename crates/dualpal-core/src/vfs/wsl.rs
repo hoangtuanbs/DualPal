@@ -112,6 +112,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// VFS-WSL-001
     fn splits_wsl_paths() {
         let p = split(r"\\wsl.localhost\Ubuntu-22.04\usr\lib").unwrap();
         assert_eq!(p.share, r"\\wsl.localhost\Ubuntu-22.04");
@@ -125,6 +126,7 @@ mod tests {
     }
 
     #[test]
+    /// VFS-WSL-001
     fn maps_linux_paths_back() {
         assert_eq!(
             to_windows(r"\\wsl.localhost\Ubuntu", "/usr/bin"),

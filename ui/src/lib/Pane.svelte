@@ -25,6 +25,7 @@
     ondrop: (items: Entry[], from: Location, target: DropTarget, move: boolean) => void;
   } = $props();
   const pane = $derived(group.current);
+  const side = $derived(index === 0 ? "left" : "right");
 
   /** Icon grid cell width incl. gap, in px. */
   const CELL = 112;
@@ -231,6 +232,7 @@
   class:active
   class:drop-target={drag.target?.pane === index && !drag.target.row}
   data-pane={index}
+  data-testid={`pane-${side}`}
   data-fs={pane.location?.fs}
   data-path={pane.location?.path}
   data-title={pane.title}
@@ -240,13 +242,14 @@
     <div class="tabs" role="tablist">
       {#each group.tabs as tab, i}
         <div class="tab" class:selected={i === group.index} role="tab" aria-selected={i === group.index} tabindex="-1"
+          data-testid={`pane-${side}-tab`}
           onclick={() => (group.index = i)} onkeydown={() => {}} onauxclick={(e) => e.button === 1 && group.closeTab(i)}
           title={tab.location?.path}>
           <span class="tab-title">{tab.title || "/"}</span>
           <button class="tab-close" aria-label="Close tab" onclick={(e) => { e.stopPropagation(); group.closeTab(i); }}>×</button>
         </div>
       {/each}
-      <button class="tab-add" title="New tab (Ctrl/⌘ T)" aria-label="New tab" onclick={() => group.newTab()}>+</button>
+      <button class="tab-add" title="New tab (Ctrl/⌘ T)" aria-label="New tab" data-testid={`pane-${side}-tab-add`} onclick={() => group.newTab()}>+</button>
     </div>
   {/if}
   <header>
@@ -255,7 +258,7 @@
       <button title="Forward" disabled={!pane.canForward} onclick={() => pane.forward()}>›</button>
       <button title="Enclosing folder (Backspace)" onclick={() => pane.up()}>↑</button>
     </div>
-    <nav class="crumbs" aria-label="Path" bind:this={crumbsEl}>
+    <nav class="crumbs" aria-label="Path" data-testid={`pane-${side}-crumbs`} bind:this={crumbsEl}>
       {#each crumbs as c, i (c.path)}
         {#if i > 0}<span class="sep">›</span>{/if}
         <button
@@ -281,6 +284,7 @@
     bind:this={listEl}
     bind:clientWidth={listWidth}
     role="listbox"
+    data-testid={`pane-${side}-list`}
     aria-multiselectable="true"
     tabindex="-1"
     oncontextmenu={(e) => {
@@ -291,7 +295,7 @@
     }}
   >
     {#if pane.error}
-      <p class="message error">{pane.error}</p>
+      <p class="message error" data-testid={`pane-${side}-error`}>{pane.error}</p>
     {:else if pane.visible.length === 0 && !pane.loading}
       <p class="message">This folder is empty.</p>
     {/if}
@@ -306,6 +310,7 @@
           data-index={i}
           data-dir={entry.kind === "dir" ? entry.path : undefined}
           data-name={entry.name}
+          data-testid={`pane-${side}-row`}
           role="option"
           aria-selected={pane.selected.has(entry.path)}
           tabindex="-1"
@@ -356,7 +361,7 @@
     {/each}
   </div>
 
-  <footer>{summary}</footer>
+  <footer data-testid={`pane-${side}-status`}>{summary}</footer>
 </section>
 
 <style>

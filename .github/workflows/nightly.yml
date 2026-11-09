@@ -1,0 +1,91 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  flake-hunt:
+    name: Flake hunt (REL-001)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-nextest }
+      - name: Rust tests with retries
+        run: cargo nextest run --workspace --profile nightly -E 'not (binary(remote) | binary(contract_remote) | binary(remote_extra))'
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Playwright repeat-each
+        run: npx playwright test --repeat-each 3 --project=chromium
+
+  remote-chaos:
+    name: Remote under latency (REL-002)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-nextest }
+      - run: docker compose -f docker/test-servers/compose.yaml up -d --build --wait --wait-timeout 180
+      - name: Export server settings, routed through Toxiproxy
+        run: |
+          cp docker/test-servers/keys/id_ed25519 "$RUNNER_TEMP/dualpal_sftp_key"
+          chmod 600 "$RUNNER_TEMP/dualpal_sftp_key"
+          scripts/ci/remote-env.sh >> "$GITHUB_ENV"
+          # Later lines win in GITHUB_ENV: point FTP, WebDAV and S3 at their
+          # proxies. (FTP data connections stay direct; see plan §7.3.)
+          {
+            echo "DUALPAL_TEST_FTP=tester:dualpal@127.0.0.1:3121"
+            echo "DUALPAL_TEST_WEBDAV=tester:dualpal@http://127.0.0.1:9088/dav"
+            echo "DUALPAL_TEST_S3=http://127.0.0.1:9900|dualpal-test|test|test-secret"
+          } >> "$GITHUB_ENV"
+      - name: Add 200 ms latency to every proxy
+        run: |
+          for p in ftp-proxy webdav-proxy s3-proxy; do
+            curl -fsS -X POST "http://127.0.0.1:8474/proxies/$p/toxics" \
+              -H 'Content-Type: application/json' \
+              -d '{"name":"latency","type":"latency","stream":"downstream","attributes":{"latency":200}}'
+          done
+      - run: cargo nextest run -p dualpal-core --profile nightly -E 'binary(contract_remote)'
+
+  perf:
+    name: Performance baseline (PERF)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Criterion benches
+        run: cargo bench -p dualpal-core
+
+  upgrade:
+    name: Upgrade from the last release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the latest release installers
+        run: |
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir prev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install previous, then the new build
+        run: |
+          sudo apt-get install -y ./prev/*.deb
+          # The new .deb is produced by the Build installers workflow and
+          # downloaded here in a real pipeline.
+          echo "upgrade check placeholder"
