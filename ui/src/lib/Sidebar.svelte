@@ -92,7 +92,7 @@
   }
 </script>
 
-<aside class="sidebar">
+<aside class="sidebar" data-testid="sidebar">
   <h3>Devices</h3>
   {#each volumes.filter((v) => !v.wsl) as v (v.location.path)}
     <button class="item" class:current={isCurrent(v.location)} onclick={() => onopen(v.location)} title={v.location.path}>

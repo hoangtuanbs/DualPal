@@ -29,14 +29,14 @@ pub fn file_systems(state: State<'_, AppState>) -> Vec<FileSystemInfo> {
         .collect()
 }
 
-/// The user's home folder on the local disk.
+/// The user's home folder on the local disk. `DUALPAL_HOME` overrides it for
+/// tests and packaged smoke runs (PREP-02).
 #[tauri::command]
-pub fn home_location(app: tauri::AppHandle) -> CmdResult<Location> {
+pub fn home_location<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> CmdResult<Location> {
     use tauri::Manager;
-    let home = app
-        .path()
-        .home_dir()
-        .map_err(|e| Error::NotFound(e.to_string()))?;
+    let home = dualpal_core::places::home_dir()
+        .or_else(|| app.path().home_dir().ok())
+        .ok_or_else(|| Error::NotFound("no home folder".into()))?;
     Ok(Location::new(
         dualpal_core::vfs::LocalFs::ID,
         home.to_string_lossy(),
@@ -156,10 +156,13 @@ pub fn reorder_favorites(
 
 /// Open a file with its default application.
 #[tauri::command]
-pub fn open_path(app: tauri::AppHandle, location: Location) -> CmdResult<()> {
+pub fn open_path<R: tauri::Runtime>(app: tauri::AppHandle<R>, location: Location) -> CmdResult<()> {
     use tauri_plugin_opener::OpenerExt;
     if location.fs != dualpal_core::vfs::LocalFs::ID {
         return Err(Error::Unsupported("opening remote files".into()));
+    }
+    if dualpal_core::launch_log::record("DUALPAL_OPENER_LOG", &location.path) {
+        return Ok(());
     }
     app.opener()
         .open_path(&location.path, None::<&str>)
@@ -213,7 +216,7 @@ pub struct AboutInfo {
 
 /// Version and platform for the About window and support emails.
 #[tauri::command]
-pub fn about_info(app: tauri::AppHandle) -> AboutInfo {
+pub fn about_info<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> AboutInfo {
     AboutInfo {
         version: app.package_info().version.to_string(),
         os: std::env::consts::OS.to_string(),
@@ -224,10 +227,13 @@ pub fn about_info(app: tauri::AppHandle) -> AboutInfo {
 /// Open a web or email link in the default browser or mail app.
 /// Only https: and mailto: links are allowed.
 #[tauri::command]
-pub fn open_url(app: tauri::AppHandle, url: String) -> CmdResult<()> {
+pub fn open_url<R: tauri::Runtime>(app: tauri::AppHandle<R>, url: String) -> CmdResult<()> {
     use tauri_plugin_opener::OpenerExt;
     if !(url.starts_with("https://") || url.starts_with("mailto:")) {
         return Err(Error::Unsupported(format!("opening {url}")));
+    }
+    if dualpal_core::launch_log::record("DUALPAL_OPENER_LOG", &url) {
+        return Ok(());
     }
     app.opener()
         .open_url(&url, None::<&str>)

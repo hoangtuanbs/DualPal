@@ -173,18 +173,24 @@ pub struct SftpFs {
 
 fn expand_home(p: &str) -> PathBuf {
     match p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
-        Some(rest) => dirs::home_dir().unwrap_or_default().join(rest),
+        Some(rest) => crate::places::home_dir().unwrap_or_default().join(rest),
         None => PathBuf::from(p),
     }
 }
 
 async fn open_live(p: &SftpParams) -> Result<Live> {
     let outcome = Arc::new(StdMutex::new(None));
+    // Follow `DUALPAL_HOME` for the default known_hosts file too, so a test
+    // or smoke run never learns keys into the real profile (PREP-02).
+    let known_hosts = p
+        .known_hosts
+        .clone()
+        .or_else(|| crate::places::home_dir().map(|h| h.join(".ssh").join("known_hosts")));
     let handler = Client {
         host: p.host.clone(),
         port: p.port,
         trust: p.trust_fingerprint.clone(),
-        known_hosts: p.known_hosts.clone(),
+        known_hosts,
         outcome: outcome.clone(),
     };
     let config = Arc::new(client::Config {
@@ -323,7 +329,7 @@ async fn default_keys(
     user: &str,
     passphrase: Option<&str>,
 ) -> Result<bool> {
-    let Some(ssh) = dirs::home_dir().map(|d| d.join(".ssh")) else {
+    let Some(ssh) = crate::places::home_dir().map(|d| d.join(".ssh")) else {
         return Ok(false);
     };
     for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
@@ -627,6 +633,19 @@ impl FileSystem for SftpFs {
         use tokio::io::AsyncSeekExt;
         let live = self.sftp().await?;
         let mut f = live.sftp.open(path).await.map_err(|e| map_err(path, e))?;
+        // Reading past the end is an invalid request, as on the local disk
+        // (VFS-CON-020).
+        let len = f
+            .metadata()
+            .await
+            .map_err(|e| map_err(path, e))?
+            .size
+            .unwrap_or(0);
+        if offset > len {
+            return Err(Error::Invalid(format!(
+                "reading {path} from byte {offset}, but it is {len} bytes"
+            )));
+        }
         f.seek(std::io::SeekFrom::Start(offset))
             .await
             .map_err(|e| Error::io(path, e))?;
@@ -714,7 +733,7 @@ pub struct SshConfigHost {
 pub fn ssh_config_hosts(path: Option<&Path>) -> Vec<SshConfigHost> {
     let path = match path {
         Some(p) => p.to_path_buf(),
-        None => match dirs::home_dir() {
+        None => match crate::places::home_dir() {
             Some(h) => h.join(".ssh").join("config"),
             None => return Vec::new(),
         },
@@ -783,6 +802,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// CON-016
     fn parses_ssh_config() {
         let hosts = parse_ssh_config(
             "Host *\n  ServerAliveInterval 30\n\nHost web prod\n  HostName example.com\n  User deploy\n  Port 2222\n  IdentityFile ~/.ssh/id_web\n\nHost=box\nHostName=10.0.0.2\n",
@@ -798,6 +818,7 @@ mod tests {
     }
 
     #[test]
+    /// CON-016
     fn host_field_accepts_user_at_host() {
         let p = |host: &str, user: &str| {
             SftpParams {
@@ -823,6 +844,7 @@ mod tests {
     }
 
     #[test]
+    /// CON-014
     fn key_files_in_utf16_or_with_bom_are_read() {
         let pem =
             "-----BEGIN OPENSSH PRIVATE KEY-----\r\nabc\r\n-----END OPENSSH PRIVATE KEY-----\r\n";

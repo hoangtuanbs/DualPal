@@ -79,6 +79,9 @@ pub struct FtpFs {
     pool: Mutex<Vec<Stream>>,
     home: String,
     mlsd: bool,
+    /// MLSD listings carry `unix.mode` (asked for with OPTS MLST on every
+    /// connection), so entries have their permission bits.
+    unix_mode: bool,
     mfmt: bool,
     /// The server announced `REST STREAM`, so uploads can carry on midway.
     rest: bool,
@@ -286,6 +289,26 @@ fn to_entry(dir: &str, f: &suppaftp::list::File) -> Option<Entry> {
     })
 }
 
+/// Ask for the MLSD facts we read, plus `unix.mode` for permission bits.
+async fn request_unix_mode(s: &mut Stream) -> std::result::Result<(), FtpError> {
+    s.opts("MLST", Some("type;size;modify;perm;unix.mode;"))
+        .await
+}
+
+/// Permission bits from a listing entry (owner, group, others).
+fn posix_mode(f: &suppaftp::list::File) -> u32 {
+    use suppaftp::list::PosixPexQuery as Q;
+    [(Q::Owner, 6), (Q::Group, 3), (Q::Others, 0)]
+        .into_iter()
+        .map(|(who, shift)| {
+            let bits = (f.can_read(who) as u32) << 2
+                | (f.can_write(who) as u32) << 1
+                | f.can_execute(who) as u32;
+            bits << shift
+        })
+        .sum()
+}
+
 impl FtpFs {
     pub async fn connect(id: String, name: String, p: FtpParams) -> Result<Self> {
         let known_path = known_certs_path(&p);
@@ -305,6 +328,7 @@ impl FtpFs {
             pool: Mutex::new(Vec::new()),
             home: "/".into(),
             mlsd: false,
+            unix_mode: false,
             mfmt: false,
             rest: false,
         };
@@ -339,6 +363,15 @@ impl FtpFs {
         if let Ok(feat) = s.feat().await {
             let has = |k: &str| feat.keys().any(|f| f.eq_ignore_ascii_case(k));
             fs.mlsd = has("MLST");
+            fs.unix_mode = fs.mlsd
+                && feat.iter().any(|(k, v)| {
+                    k.eq_ignore_ascii_case("MLST")
+                        && v.as_deref()
+                            .is_some_and(|v| v.to_ascii_lowercase().contains("unix.mode"))
+                });
+            if fs.unix_mode && request_unix_mode(&mut s).await.is_err() {
+                fs.unix_mode = false;
+            }
             fs.mfmt = has("MFMT");
             fs.rest = feat.iter().any(|(k, v)| {
                 k.eq_ignore_ascii_case("REST")
@@ -362,7 +395,11 @@ impl FtpFs {
 
     /// A new signed-in connection.
     async fn open(&self) -> Result<Stream> {
-        self.dialer().open().await
+        let mut s = self.dialer().open().await?;
+        if self.unix_mode {
+            let _ = request_unix_mode(&mut s).await;
+        }
+        Ok(s)
     }
 
     fn dialer(&self) -> Dialer {
@@ -414,16 +451,26 @@ impl FtpFs {
             }
         };
         self.give(s, &r);
-        let lines = r.map_err(|e| map_err(&dir, e))?;
+        let lines = r.map_err(|e| match status(&e) {
+            // RFC 3659: MLSD answers 501 when the path is not a folder, which
+            // some servers (pyftpdlib) also send for a missing one.
+            Some(501) if self.mlsd => Error::NotFound(format!("{dir} ({})", reply_text(&e))),
+            _ => map_err(&dir, e),
+        })?;
         let mut out = Vec::new();
         for line in &lines {
             let parsed = if self.mlsd {
-                suppaftp::list::ListParser::parse_mlsd(line)
+                // pyftpdlib writes the mode Python-style ("unix.mode=0o755").
+                let line = line.replace("unix.mode=0o", "unix.mode=0");
+                suppaftp::list::ListParser::parse_mlsd(&line)
             } else {
                 suppaftp::list::File::try_from(line.as_str())
             };
             if let Ok(f) = parsed {
-                if let Some(e) = to_entry(&dir, &f) {
+                if let Some(mut e) = to_entry(&dir, &f) {
+                    if self.unix_mode {
+                        e.mode = Some(posix_mode(&f));
+                    }
                     out.push(e);
                 }
             }

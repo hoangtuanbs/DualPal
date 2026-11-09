@@ -41,6 +41,18 @@ uuid.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 async_zip = { workspace = true, features = ["tokio-fs"] }
+regex.workspace = true
+proptest = "1"
+insta = { version = "1", features = ["json"] }
+filetime = "0.2"
+rstest = "0.25"
+criterion = "0.5"
+dualpal-testkit = { path = "../dualpal-testkit" }
+
+# Criterion provides its own main (PERF benches).
+[[bench]]
+name = "compare"
+harness = false
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }

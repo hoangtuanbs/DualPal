@@ -9,7 +9,7 @@ use dualpal_core::settings::Settings;
 use dualpal_core::vfs::{LocalFs, SshConfigHost};
 use dualpal_core::{Error, Location};
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::State;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -211,8 +211,15 @@ pub fn ssh_config_hosts() -> Vec<SshConfigHost> {
 
 // ---- editing and previewing remote files -----------------------------------
 
-fn open_with(app: &AppHandle, path: &str, with: Option<&str>) -> CmdResult<()> {
+fn open_with<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &str,
+    with: Option<&str>,
+) -> CmdResult<()> {
     use tauri_plugin_opener::OpenerExt;
+    if dualpal_core::launch_log::record("DUALPAL_OPENER_LOG", path) {
+        return Ok(());
+    }
     app.opener().open_path(path, with).map_err(|e| {
         let name = std::path::Path::new(path)
             .file_name()
@@ -227,8 +234,8 @@ fn open_with(app: &AppHandle, path: &str, with: Option<&str>) -> CmdResult<()> {
 /// again whenever the app saves them. `editor` true uses the preferred
 /// editor from Settings instead of the default app.
 #[tauri::command]
-pub async fn open_file(
-    app: AppHandle,
+pub async fn open_file<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
     location: Location,
     editor: bool,

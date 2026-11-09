@@ -40,6 +40,7 @@ async fn run(q: &OperationQueue, op: Operation) -> dualpal_core::OperationInfo {
 }
 
 #[tokio::test]
+/// OPS-COPY-001
 async fn copies_a_folder_tree_with_progress_totals() {
     let tmp = tempfile::tempdir().unwrap();
     let src = sample_tree(tmp.path());
@@ -75,6 +76,7 @@ async fn copies_a_folder_tree_with_progress_totals() {
 }
 
 #[tokio::test]
+/// OPS-COPY-003
 async fn copy_preserves_modification_time() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("old.txt");
@@ -109,6 +111,7 @@ async fn copy_preserves_modification_time() {
 }
 
 #[tokio::test]
+/// OPS-COPY-005
 async fn conflict_policies() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("f.txt");
@@ -138,6 +141,7 @@ async fn conflict_policies() {
 }
 
 #[tokio::test]
+/// OPS-COPY-007
 async fn refuses_to_copy_a_folder_into_itself() {
     let tmp = tempfile::tempdir().unwrap();
     let src = sample_tree(tmp.path());
@@ -155,6 +159,7 @@ async fn refuses_to_copy_a_folder_into_itself() {
 }
 
 #[tokio::test]
+/// OPS-COPY-008
 async fn refuses_to_copy_onto_itself() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("f.txt");
@@ -173,6 +178,7 @@ async fn refuses_to_copy_onto_itself() {
 }
 
 #[tokio::test]
+/// OPS-MOVE-001
 async fn moves_within_the_same_disk() {
     let tmp = tempfile::tempdir().unwrap();
     let src = sample_tree(tmp.path());
@@ -197,6 +203,7 @@ async fn moves_within_the_same_disk() {
 }
 
 #[tokio::test]
+/// OPS-MOVE-003
 async fn move_merge_keeps_skipped_sources() {
     let tmp = tempfile::tempdir().unwrap();
     let src = sample_tree(tmp.path());
@@ -244,6 +251,7 @@ async fn move_merge_keeps_skipped_sources() {
 }
 
 #[tokio::test]
+/// OPS-DEL-001
 async fn deletes_recursively() {
     let tmp = tempfile::tempdir().unwrap();
     let src = sample_tree(tmp.path());
@@ -267,6 +275,7 @@ async fn deletes_recursively() {
 
 #[cfg(unix)]
 #[tokio::test]
+/// OPS-DEL-002
 async fn delete_does_not_follow_symlinked_folders() {
     let tmp = tempfile::tempdir().unwrap();
     let keep = sample_tree(&tmp.path().join("keep"));
@@ -290,6 +299,7 @@ async fn delete_does_not_follow_symlinked_folders() {
 }
 
 #[tokio::test]
+/// OPS-DIR-001
 async fn creates_and_renames() {
     let tmp = tempfile::tempdir().unwrap();
     let q = queue();
@@ -327,6 +337,7 @@ async fn creates_and_renames() {
 }
 
 #[tokio::test]
+/// OPS-COPY-013
 async fn cancels_a_running_copy_and_cleans_up() {
     let tmp = tempfile::tempdir().unwrap();
     let big = tmp.path().join("big.bin");
@@ -355,6 +366,7 @@ async fn cancels_a_running_copy_and_cleans_up() {
 }
 
 #[tokio::test]
+/// OPS-Q-001
 async fn operations_wait_for_a_free_slot() {
     let tmp = tempfile::tempdir().unwrap();
     let q = OperationQueue::new(
@@ -376,6 +388,7 @@ async fn operations_wait_for_a_free_slot() {
 }
 
 #[test]
+/// OPS-Q-006
 fn operation_json_shape() {
     let op: Operation = serde_json::from_str(
         r#"{"type":"copy","sources":[{"fs":"local","path":"/a"}],"destination":{"fs":"local","path":"/b"}}"#,
@@ -397,6 +410,7 @@ fn operation_json_shape() {
 }
 
 #[tokio::test]
+/// OPS-TRASH-001
 async fn moves_items_to_trash() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("trash-me.txt");
@@ -426,6 +440,7 @@ async fn moves_items_to_trash() {
 // unreleased API; it is fine for verifying archives in a test.
 #[allow(deprecated)]
 #[tokio::test]
+/// OPS-ZIP-001
 async fn compresses_files_and_folders_into_a_zip() {
     let tmp = tempfile::tempdir().unwrap();
     let src = sample_tree(tmp.path());
@@ -482,6 +497,7 @@ async fn compresses_files_and_folders_into_a_zip() {
 }
 
 #[tokio::test]
+/// VFS-TXT-001
 async fn reads_and_saves_text() {
     use dualpal_core::vfs::{read_text, write_text, LocalFs};
     let tmp = tempfile::tempdir().unwrap();
@@ -519,6 +535,7 @@ async fn reads_and_saves_text() {
 
 #[cfg(unix)]
 #[tokio::test]
+/// OPS-MODE-001
 async fn changes_permissions_and_saving_keeps_them() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();

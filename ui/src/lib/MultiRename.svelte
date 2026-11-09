@@ -126,7 +126,7 @@
 <svelte:window onkeydown={keydown} />
 
 <div class="backdrop">
-  <div class="sheet" role="dialog" aria-modal="true" aria-label="Multi Rename">
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Multi Rename" data-testid="multi-rename">
     <header>
       <h2>Rename {items.length} items</h2>
       <label class="preset">

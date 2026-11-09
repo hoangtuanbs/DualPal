@@ -70,19 +70,19 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="backdrop" onkeydown={keydown}>
-  <div class="dialog" role="dialog" aria-modal="true" aria-label={title}>
+  <div class="dialog" role="dialog" aria-modal="true" aria-label={title} data-testid="dialog">
   <form onsubmit={submit}>
     <h2>{title}</h2>
     {#if message}<p>{message}</p>{/if}
     {#if input !== null}
-      <input bind:this={field} bind:value type={password ? "password" : "text"} spellcheck="false" autocomplete="off" />
+      <input data-testid="dialog-input" bind:this={field} bind:value type={password ? "password" : "text"} spellcheck="false" autocomplete="off" />
     {/if}
     {#if checkbox}
       <label class="check"><input type="checkbox" bind:checked /> {checkbox}</label>
     {/if}
     <div class="buttons">
-      <button type="button" class="secondary" onclick={oncancel} bind:this={cancelButton}>Cancel</button>
-      <button type="submit" class="primary" class:danger bind:this={okButton}>{confirmLabel}</button>
+      <button type="button" class="secondary" data-testid="dialog-cancel" onclick={oncancel} bind:this={cancelButton}>Cancel</button>
+      <button type="submit" class="primary" class:danger data-testid="dialog-ok" bind:this={okButton}>{confirmLabel}</button>
     </div>
   </form>
   </div>

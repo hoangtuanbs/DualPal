@@ -1103,7 +1103,7 @@ Dependencies: 0 → everything. 1 and 3 can run in parallel after 0. 2 after 0 (
 cargo nextest run --workspace -E 'not (binary(remote) | binary(contract_remote))'
 # L3
 docker compose -f docker/test-servers/compose.yaml up -d --build --wait
-eval "$(scripts/ci/remote-env.sh)"            # exports DUALPAL_TEST_* and DUALPAL_REQUIRE_REMOTE=1
+eval "$(scripts/ci/remote-env.sh --export)"            # exports DUALPAL_TEST_* and DUALPAL_REQUIRE_REMOTE=1
 cargo nextest run -p dualpal-core -E 'binary(remote) | binary(contract_remote)'
 # L4
 cargo nextest run -p dualpal

@@ -240,6 +240,14 @@ impl FileSystem for LocalFs {
         let mut f = tokio::fs::File::open(path)
             .await
             .map_err(|e| Error::io(path, e))?;
+        // Reading past the end of the file is an invalid request, not an
+        // empty read (VFS-CON-020).
+        let len = f.metadata().await.map_err(|e| Error::io(path, e))?.len();
+        if offset > len {
+            return Err(Error::Invalid(format!(
+                "reading {path} from byte {offset}, but it is {len} bytes"
+            )));
+        }
         f.seek(std::io::SeekFrom::Start(offset))
             .await
             .map_err(|e| Error::io(path, e))?;

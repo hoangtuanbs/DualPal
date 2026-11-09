@@ -10,18 +10,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Linux system libraries
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
@@ -43,40 +38,160 @@ jobs:
       - name: Type-check UI
         run: npm run check
 
-      - name: Build UI
-        run: npm run build
-
       - name: Rust format
-        if: runner.os == 'Linux'
         run: cargo fmt --all --check
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test SSH and S3 servers (Linux)
+      # Reports P0/P1 test IDs with no test yet. Add --strict once the
+      # catalogue is fully implemented (plan §11.4).
+      - name: Test ID traceability
+        run: scripts/ci/trace-check.sh
+
+  rust:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
-          # The throwaway servers in docker/test-servers, on 127.0.0.1.
-          docker compose -f docker/test-servers/compose.yaml up -d --build --wait
-          for i in $(seq 1 60); do
-            docker logs dualpal-test-s3 2>&1 | grep -q 'bucket dualpal-test ready' && break; sleep 1
-          done
-          for i in $(seq 1 30); do [ -f docker/test-servers/keys/id_ed25519 ] && break; sleep 1; done
-          cp docker/test-servers/keys/id_ed25519 "$RUNNER_TEMP/sftp_key"
-          chmod 600 "$RUNNER_TEMP/sftp_key"
-          echo "DUALPAL_TEST_SFTP=tester@127.0.0.1:2222" >> "$GITHUB_ENV"
-          echo "DUALPAL_TEST_SFTP_KEY=$RUNNER_TEMP/sftp_key" >> "$GITHUB_ENV"
-          echo "DUALPAL_TEST_SFTP_PASSWORD=dualpal" >> "$GITHUB_ENV"
-          echo "DUALPAL_TEST_SFTP_DROP=docker exec dualpal-test-sftp drop-connections" >> "$GITHUB_ENV"
-          echo "DUALPAL_TEST_S3=http://127.0.0.1:9000|dualpal-test|test|test-secret" >> "$GITHUB_ENV"
-          for i in $(seq 1 30); do docker logs dualpal-test-ftp 2>&1 | grep -q 'ftp ready' && break; sleep 1; done
-          echo "DUALPAL_TEST_FTP=tester:dualpal@127.0.0.1:2121" >> "$GITHUB_ENV"
-          echo "DUALPAL_TEST_FTPS=tester:dualpal@127.0.0.1:2990" >> "$GITHUB_ENV"
-          echo "DUALPAL_TEST_FTPS_IMPLICIT=tester:dualpal@127.0.0.1:2991" >> "$GITHUB_ENV"
-          echo "DUALPAL_TEST_WEBDAV=tester:dualpal@http://127.0.0.1:8088/dav" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
 
-      - name: Core tests
-        run: cargo test --workspace
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Install UI dependencies
+        run: npm ci
+
+      - name: Build UI
+        run: npm run build
+
+      # L1 + L2 + L4: everything except the remote suite, which needs the
+      # servers. The `commands` binary (L4) is skipped on Windows because
+      # `tauri::test` links the WebView2 loader there (see the L4 tests).
+      - name: Core tests (L1 + L2 + L4)
+        if: runner.os != 'Windows'
+        run: >-
+          cargo nextest run --workspace
+          -E 'not (binary(remote) | binary(contract_remote) | binary(remote_extra))'
+
+      - name: Core tests (L1 + L2, Windows)
+        if: runner.os == 'Windows'
+        run: >-
+          cargo nextest run --workspace
+          -E 'not (binary(remote) | binary(contract_remote) | binary(remote_extra) | binary(commands))'
 
       - name: Build app (no installer)
         run: npx tauri build --debug --no-bundle
+
+  rust-remote:
+    name: Remote (L3)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Start test servers
+        run: docker compose -f docker/test-servers/compose.yaml up -d --build --wait --wait-timeout 180
+
+      - name: Export server settings
+        run: |
+          cp docker/test-servers/keys/id_ed25519 "$RUNNER_TEMP/dualpal_sftp_key"
+          chmod 600 "$RUNNER_TEMP/dualpal_sftp_key"
+          scripts/ci/remote-env.sh >> "$GITHUB_ENV"
+
+      - name: Remote tests (shared servers, in parallel)
+        run: >-
+          cargo nextest run -p dualpal-core --profile ci
+          -E '(binary(remote) | binary(contract_remote) | binary(remote_extra)) - test(/fault_/)'
+
+      - name: Fault tests (cut or slow every connection, one at a time)
+        run: >-
+          cargo nextest run -p dualpal-core --profile ci
+          -E '(binary(remote) | binary(contract_remote)) & test(/fault_/)'
+          --test-threads 1 --no-tests=warn
+
+      - name: Collect server logs
+        if: failure()
+        run: docker compose -f docker/test-servers/compose.yaml logs > servers.log
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-remote-results
+          path: |
+            target/nextest/ci/junit.xml
+            servers.log
+
+  ui-unit:
+    name: UI unit (L5)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check UI
+        run: npm run check
+
+      - name: Unit and component tests (with coverage)
+        run: npm run test:unit
+
+  ui-e2e:
+    name: UI E2E (L6)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install browsers
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: E2E tests (mocked backend)
+        run: npm run test:e2e
+
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: test-results/

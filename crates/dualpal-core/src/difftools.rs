@@ -300,6 +300,9 @@ pub fn command_line(template: &str, left: &str, right: &str) -> Result<Vec<Strin
 /// Start the tool on two local paths without waiting for it.
 pub fn launch(template: &str, left: &str, right: &str) -> Result<()> {
     let argv = command_line(template, left, right)?;
+    if crate::launch_log::record("DUALPAL_DIFF_TOOL_LOG", &argv.join(" ")) {
+        return Ok(());
+    }
     let program = find_program(&argv[0]).unwrap_or_else(|| PathBuf::from(&argv[0]));
     let mut cmd = std::process::Command::new(&program);
     cmd.args(&argv[1..])
@@ -324,6 +327,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// DIFF-001
     fn templates_split_and_fill() {
         assert_eq!(
             command_line(
@@ -347,6 +351,7 @@ mod tests {
     }
 
     #[test]
+    /// DIFF-002
     fn env_vars_expand() {
         std::env::set_var("DP_TEST_DIR", "C:\\Tools");
         assert_eq!(expand_env(r"%DP_TEST_DIR%\x.exe"), r"C:\Tools\x.exe");

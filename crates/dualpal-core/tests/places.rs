@@ -10,6 +10,7 @@ fn fav(name: &str) -> Favorite {
 }
 
 #[test]
+/// PLC-001
 fn favorites_persist_add_remove_reorder() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("favorites.json");
@@ -28,6 +29,7 @@ fn favorites_persist_add_remove_reorder() {
 }
 
 #[test]
+/// PLC-002
 fn missing_favorites_file_starts_with_standard_folders() {
     let tmp = tempfile::tempdir().unwrap();
     let favs = Favorites::open(tmp.path().join("none.json"));
@@ -35,6 +37,7 @@ fn missing_favorites_file_starts_with_standard_folders() {
 }
 
 #[test]
+/// PLC-005
 fn volumes_include_the_system_disk() {
     let vols = places::volumes();
     assert!(!vols.is_empty(), "at least one volume");
@@ -43,6 +46,7 @@ fn volumes_include_the_system_disk() {
 }
 
 #[test]
+/// PLC-007
 fn wsl_names_hide_docker_and_keep_spaces() {
     use dualpal_core::places::{wsl_names, wsl_volumes};
     let names = wsl_names(vec![

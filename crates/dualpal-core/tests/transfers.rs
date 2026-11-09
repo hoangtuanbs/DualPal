@@ -183,6 +183,7 @@ fn leftovers(dir: &Path) -> Vec<String> {
 }
 
 #[tokio::test]
+/// OPS-COPY-014
 async fn copies_several_files_at_once_without_leftovers() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");
@@ -214,6 +215,7 @@ async fn copies_several_files_at_once_without_leftovers() {
 }
 
 #[tokio::test]
+/// OPS-COPY-016
 async fn carries_on_after_a_dropped_connection() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("big.bin");
@@ -237,6 +239,7 @@ async fn carries_on_after_a_dropped_connection() {
 }
 
 #[tokio::test]
+/// OPS-COPY-018
 async fn a_failed_copy_leaves_the_old_file_alone() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("doc.txt");
@@ -264,6 +267,7 @@ async fn a_failed_copy_leaves_the_old_file_alone() {
 
 #[cfg(unix)]
 #[tokio::test]
+/// OPS-COPY-019
 async fn overwriting_keeps_the_old_file_permissions() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
@@ -290,6 +294,7 @@ async fn overwriting_keeps_the_old_file_permissions() {
 }
 
 #[tokio::test]
+/// OPS-COPY-021
 async fn names_differing_only_in_case_are_copied_one_at_a_time() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");

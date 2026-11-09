@@ -173,6 +173,7 @@
 <div class="backdrop" onkeydown={keydown}>
   <form
     class="dialog"
+    data-testid="connection-dialog"
     onsubmit={(e) => {
       e.preventDefault();
       save(true);

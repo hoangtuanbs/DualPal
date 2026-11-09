@@ -5,6 +5,7 @@
 //! system. Servers, buckets and Windows network or WSL folders send no
 //! change notifications, so they are checked every few seconds.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -88,6 +89,11 @@ pub struct LiveSync {
     /// Held while starting or stopping, so that a new auto-sync never
     /// begins before the old one has finished copying.
     switching: tokio::sync::Mutex<()>,
+    /// How often a side without change notifications is checked. Overridden
+    /// in tests with [`LiveSync::with_poll_interval`] (PREP-03).
+    poll_interval_ms: AtomicU64,
+    /// How long a burst of changes settles before syncing.
+    watch_debounce_ms: AtomicU64,
 }
 
 impl LiveSync {
@@ -99,7 +105,31 @@ impl LiveSync {
             tx,
             running: Mutex::new(None),
             switching: tokio::sync::Mutex::new(()),
+            poll_interval_ms: AtomicU64::new(POLL_INTERVAL.as_millis() as u64),
+            watch_debounce_ms: AtomicU64::new(SETTLE.as_millis() as u64),
         })
+    }
+
+    /// Check a remote side this often instead of every 10 s.
+    pub fn with_poll_interval(&self, interval: Duration) -> &Self {
+        self.poll_interval_ms
+            .store(interval.as_millis().max(1) as u64, Ordering::SeqCst);
+        self
+    }
+
+    /// Wait this long after a change notification before syncing.
+    pub fn with_watch_debounce(&self, debounce: Duration) -> &Self {
+        self.watch_debounce_ms
+            .store(debounce.as_millis().max(1) as u64, Ordering::SeqCst);
+        self
+    }
+
+    fn poll_interval(&self) -> Duration {
+        Duration::from_millis(self.poll_interval_ms.load(Ordering::SeqCst))
+    }
+
+    fn watch_debounce(&self) -> Duration {
+        Duration::from_millis(self.watch_debounce_ms.load(Ordering::SeqCst))
     }
 
     /// Status updates; `None` once auto-sync stops.
@@ -212,8 +242,9 @@ impl LiveSync {
         let interval = if watched {
             SAFETY_INTERVAL
         } else {
-            POLL_INTERVAL
+            self.poll_interval()
         };
+        let settle = self.watch_debounce();
         loop {
             self.publish(&status, &cancel, |s| s.state = LiveState::Syncing);
             let pass = self.sync_once(&from, &to, direction, &cancel).await;
@@ -246,7 +277,7 @@ impl LiveSync {
                     // Let a burst of changes settle into one sync.
                     tokio::select! {
                         _ = cancel.cancelled() => return,
-                        _ = tokio::time::sleep(SETTLE) => {}
+                        _ = tokio::time::sleep(settle) => {}
                     }
                 }
                 _ = tokio::time::sleep(wait) => {}

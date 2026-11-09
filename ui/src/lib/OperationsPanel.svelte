@@ -52,7 +52,7 @@
   };
 </script>
 
-<section class="panel">
+<section class="panel" data-testid="ops-panel">
   <div class="tabs" role="tablist">
     <button role="tab" aria-selected={tab === "operations"} onclick={() => (tab = "operations")}>
       Operations {#if running}<span class="count">{running}</span>{/if}

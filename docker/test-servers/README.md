@@ -7,18 +7,23 @@ meant for anything else.
 | Server | Address | Sign-in |
 |---|---|---|
 | SSH / SFTP (OpenSSH on Alpine) | `127.0.0.1:2222` | user `tester`, password `dualpal`, or the key in `keys/id_ed25519` |
+| SSH / SFTP, key only | `127.0.0.1:2222` | user `keyonly`, key `keys/keyonly_ed25519` with passphrase `dualpal-pass` (a UTF-16 copy is in `keys/keyonly_ed25519_utf16`) |
 | S3 (moto emulator) | `http://127.0.0.1:9000` | bucket `dualpal-test`, access key `test`, secret `test-secret`, path-style |
 | FTP (pyftpdlib) | `127.0.0.1:2121` | user `tester`, password `dualpal` |
 | FTPS, explicit | `127.0.0.1:2990` | the same; self-signed certificate |
 | FTPS, implicit | `127.0.0.1:2991` | the same; self-signed certificate |
 | WebDAV (WsgiDAV) | `http://127.0.0.1:8088/dav` | user `tester`, password `dualpal` |
+| Toxiproxy (fault injection) | `http://127.0.0.1:8474` | proxies: `ftp-proxy` `:3121`, `webdav-proxy` `:9088`, `s3-proxy` `:9900` |
 
 ## Start and stop
 
 ```sh
-docker compose -f docker/test-servers/compose.yaml up -d --build
+docker compose -f docker/test-servers/compose.yaml up -d --build --wait
 docker compose -f docker/test-servers/compose.yaml down
 ```
+
+`--wait` returns once every server's health check passes, so there is no need
+to poll the logs for "ready" lines.
 
 On first start the SSH server creates a client key in `keys/` (ignored by
 git) and keeps its host key there, so the fingerprint stays the same across

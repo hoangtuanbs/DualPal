@@ -151,10 +151,13 @@ impl S3Fs {
                 "S3 refused the access key for bucket {}",
                 p.bucket
             ))),
-            Err(e) if e.kind() == ErrorKind::NotFound => Err(Error::Connection(format!(
-                "bucket {} was not found",
-                p.bucket
-            ))),
+            // opendal reports S3's NoSuchBucket as a config error, not NotFound.
+            Err(e) if e.kind() == ErrorKind::NotFound || e.to_string().contains("NoSuchBucket") => {
+                Err(Error::NotFound(format!(
+                    "bucket {} was not found",
+                    p.bucket
+                )))
+            }
             Err(e) => Err(Error::Connection(e.to_string())),
         }
     }

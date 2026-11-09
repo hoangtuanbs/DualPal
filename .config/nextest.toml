@@ -1,0 +1,25 @@
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+fail-fast = false
+retries = 0
+[profile.ci.junit]
+path = "junit.xml"
+
+[profile.nightly]
+retries = 2
+fail-fast = false
+
+# Remote tests share servers: limit their parallelism.
+# Tests that run DUALPAL_TEST_SFTP_DROP or add a Toxiproxy toxic affect every
+# connection to that server, so they must be named `fault_*` and run in a
+# separate, single-threaded invocation (see the rust-remote job). Running them
+# alongside other remote tests makes those tests fail at random.
+[[profile.default.overrides]]
+filter = "binary(remote) | binary(contract_remote) | binary(remote_extra)"
+threads-required = 2
+test-group = "remote"
+
+[test-groups]
+remote = { max-threads = 4 }
