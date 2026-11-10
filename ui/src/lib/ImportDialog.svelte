@@ -39,7 +39,11 @@
 
   const sourceInfo = $derived(SOURCES.find((s) => s.id === source) ?? SOURCES[0]);
 
+  /** Counts file reads, so a read that finishes late cannot replace a newer one. */
+  let reads = 0;
+
   function changeSource() {
+    reads++;
     report = null;
     fileName = "";
     error = null;
@@ -50,19 +54,21 @@
     const file = el.files?.[0];
     el.value = "";
     if (!file) return;
+    const read = ++reads;
+    report = null;
     error = null;
     fileName = file.name;
     if (file.size > MAX_BYTES) {
-      report = null;
       error = "That file is too large to be a list of servers.";
       return;
     }
     try {
       const next = await api.importConnections(source, await file.text());
+      if (read !== reads) return;
       report = next;
       selection = allSelected(next);
     } catch (err) {
-      report = null;
+      if (read !== reads) return;
       error = errorMessage(err);
     }
   }
@@ -83,9 +89,12 @@
       onclose();
     } catch (err) {
       // Keep the dialog open with the servers that were not saved yet.
+      // Keep only the servers that were ticked and not saved yet, ticked as they were.
       const done = new Set(saved);
-      report = { ...report, connections: report.connections.filter((c) => !done.has(c)) };
-      selection = allSelected(report);
+      const pending = new Set(items.filter((c) => !done.has(c)));
+      const left = { ...report, connections: report.connections.filter((c) => !done.has(c)) };
+      report = left;
+      selection = new Set(left.connections.flatMap((c, i) => (pending.has(c) ? [i] : [])));
       error = `Saved ${saved.length} of ${items.length}. ${errorMessage(err)}`;
       if (saved.length) onsaved();
     } finally {
@@ -96,7 +105,8 @@
   function keydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.stopPropagation();
-      onclose();
+      // Not while servers are being saved: the save finishes first.
+      if (!busy) onclose();
     }
   }
 </script>
@@ -180,7 +190,7 @@
     {#if error}<p class="error" role="alert">{error}</p>{/if}
 
     <div class="buttons">
-      <button type="button" onclick={onclose}>Cancel</button>
+      <button type="button" onclick={onclose} disabled={busy}>Cancel</button>
       <button
         type="button"
         class="primary"

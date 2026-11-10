@@ -322,11 +322,11 @@ fn filezilla_server(label: &str, host: &str, s: &Node) -> Draft {
 
 /// FileZilla stores passwords as base64 (`encoding="base64"`), or as plain text.
 fn filezilla_password(pass: &Node) -> Option<String> {
-    let text = pass.text.trim();
+    // Only the base64 form is trimmed; a plain-text password keeps its spaces.
     let value = if pass.attr("encoding") == Some("base64") {
-        String::from_utf8(base64_decode(text)?).ok()?
+        String::from_utf8(base64_decode(pass.text.trim())?).ok()?
     } else {
-        text.to_string()
+        pass.text.clone()
     };
     (!value.is_empty()).then_some(value)
 }
