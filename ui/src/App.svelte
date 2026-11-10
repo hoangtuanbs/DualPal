@@ -582,6 +582,7 @@
       { id: "info", group: "View", title: showInspector ? "Hide Info Panel" : "Show Info Panel", shortcut: `${MOD}I`, run: () => (showInspector = !showInspector) },
       { id: "filter", group: "View", title: "Filter Items by Name", shortcut: `${MOD}F`, run: () => active.openFilter() },
       { id: "refresh", group: "View", title: "Refresh", shortcut: `${MOD}R`, run: () => active.refresh() },
+      { id: "folderSizes", group: "View", title: "Calculate Folder Sizes", shortcut: "Alt+Shift+Enter", run: () => active.calculateSizes() },
       { id: "newTab", group: "View", title: "New Tab", shortcut: `${MOD}T`, run: () => groups[activeIndex].newTab() },
       { id: "closeTab", group: "View", title: "Close Tab", shortcut: `${MOD}W`, run: () => groups[activeIndex].closeTab() },
       { id: "switch", group: "View", title: "Switch to Other Pane", shortcut: "Tab", run: () => (activeIndex = 1 - activeIndex) },
@@ -1020,6 +1021,10 @@
       active.view = e.key === "1" ? "list" : "icons";
       return handled();
     }
+    if (e.altKey && e.shiftKey && e.key === "Enter") {
+      active.calculateSizes();
+      return handled();
+    }
     switch (e.key) {
       case "Tab":
         activeIndex = 1 - activeIndex;
@@ -1071,7 +1076,11 @@
         return handled();
       case " ":
       case "Insert":
-        if (active.current) active.toggle(active.current);
+        if (active.current) {
+          active.toggle(active.current);
+          // Space also works out the size of a folder, as in Total Commander.
+          if (e.key === " ") active.calculateSizes([active.current]);
+        }
         active.moveCursor(1);
         return handled();
       case "F2":
@@ -1279,6 +1288,7 @@
       <Inspector
         entry={active.current ?? null}
         fs={active.location?.fs ?? "local"}
+        folderSize={active.current?.kind === "dir" ? (active.sizes.get(active.current.path) ?? null) : null}
         onsetmode={(location, mode) => enqueue({ type: "setMode", location, mode })}
         onsaved={() => allPanes().forEach((p) => p.refresh())}
       />

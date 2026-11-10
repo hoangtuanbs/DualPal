@@ -29,6 +29,15 @@ export interface Entry {
   mode: number | null;
 }
 
+/** Total size and item counts of a folder, from `folder_size`. */
+export interface FolderSize {
+  bytes: number;
+  files: number;
+  folders: number;
+  /** Subfolders that could not be read and are not counted. */
+  skipped: number;
+}
+
 export type ConflictPolicy = "fail" | "skip" | "overwrite";
 
 export type Operation =
@@ -387,6 +396,9 @@ export const api = {
   aboutInfo: () => invoke<AboutInfo>("about_info"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   stat: (location: Location) => invoke<Entry>("stat", { location }),
+  /** Size of a folder. `request` names the calculation for `cancelFolderSize`. */
+  folderSize: (location: Location, request: number) => invoke<FolderSize>("folder_size", { location, request }),
+  cancelFolderSize: (request: number) => invoke<void>("cancel_folder_size", { request }),
   readText: (location: Location, maxBytes: number) => invoke<TextFile>("read_text", { location, maxBytes }),
   writeText: (location: Location, text: string) => invoke<void>("write_text", { location, text }),
   connections: () => invoke<ConnectionView[]>("connections"),

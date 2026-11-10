@@ -201,6 +201,118 @@ describe("PaneState helpers", () => {
   });
 });
 
+/** Let the pending folder size calls settle. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("Folder sizes", () => {
+  it("calculates folders only, once per folder, and keeps the result", async () => {
+    const mock = installMockBackend();
+    mock.setTree(
+      "local",
+      tree({ "/dir/": "", "/dir/big/": "", "/dir/big/x.txt": "x".repeat(100), "/dir/small/": "", "/dir/small/y.txt": "y", "/dir/f.txt": "f" }),
+    );
+    const p = new PaneState();
+    await p.open({ fs: "local", path: "/dir" });
+
+    p.calculateSizes();
+    expect([...p.sizing].sort()).toEqual(["/dir/big", "/dir/small"]);
+    await settle();
+    expect(p.sizing.size).toBe(0);
+    expect(p.sizes.get("/dir/big")).toEqual({ bytes: 100, files: 1, folders: 0, skipped: 0 });
+    expect(p.sizes.get("/dir/small")).toEqual({ bytes: 1, files: 1, folders: 0, skipped: 0 });
+    expect(p.sizes.has("/dir/f.txt")).toBe(false);
+
+    // Known folders are not calculated again.
+    p.calculateSizes();
+    expect(mock.calls("folder_size")).toHaveLength(2);
+  });
+
+  it("calculates just the folder given, and ignores files", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/sub/": "", "/dir/sub/x": "x", "/dir/f.txt": "f" }));
+    const p = new PaneState();
+    await p.open({ fs: "local", path: "/dir" });
+
+    p.calculateSizes([p.visible.find((e) => e.name === "f.txt")!]);
+    expect(mock.calls("folder_size")).toHaveLength(0);
+
+    p.calculateSizes([p.visible.find((e) => e.name === "sub")!]);
+    await settle();
+    expect([...p.sizes.keys()]).toEqual(["/dir/sub"]);
+  });
+
+  it("sorts folders by their calculated size once known", async () => {
+    installMockBackend().setTree(
+      "local",
+      tree({ "/dir/": "", "/dir/a/": "", "/dir/a/x": "x".repeat(500), "/dir/b/": "", "/dir/b/y": "y".repeat(10) }),
+    );
+    const p = new PaneState();
+    await p.open({ fs: "local", path: "/dir" });
+    p.setSort("size");
+    expect(p.visible.map((e) => e.name)).toEqual(["a", "b"]);
+
+    p.calculateSizes();
+    await settle();
+    expect(p.visible.map((e) => e.name)).toEqual(["b", "a"]);
+    // The cursor was on "a" and follows it to its new row.
+    expect(p.current?.name).toBe("a");
+  });
+
+  it("leaves links to folders out of the calculate-all, but sizes one when asked", async () => {
+    const mock = installMockBackend();
+    const link = { ...dir("link"), symlink: true };
+    const p = await pane([dir("real"), link]);
+
+    p.calculateSizes();
+    expect(mock.calls("folder_size").map((c) => (c.location as Location).path)).toEqual(["/dir/real"]);
+
+    p.calculateSizes([link]);
+    expect(mock.calls("folder_size")).toHaveLength(2);
+  });
+
+  it("drops the sizes and cancels the calculations in flight when the pane navigates", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/sub/": "", "/dir/sub/x": "x", "/other/": "" }));
+    const p = new PaneState();
+    await p.open({ fs: "local", path: "/dir" });
+
+    p.calculateSizes();
+    expect(p.sizing.has("/dir/sub")).toBe(true);
+    // An open with the listing already at hand resets the pane at once.
+    void p.open({ fs: "local", path: "/other" }, { entries: [] });
+    expect(p.sizing.size).toBe(0);
+    expect(mock.calls("cancel_folder_size")).toHaveLength(1);
+
+    await settle();
+    expect(p.sizes.size).toBe(0);
+  });
+
+  it("discards the sizes when the folder is refreshed", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/sub/": "", "/dir/sub/x": "x" }));
+    const p = new PaneState();
+    await p.open({ fs: "local", path: "/dir" });
+    p.calculateSizes();
+    await settle();
+    expect(p.sizes.size).toBe(1);
+
+    await p.refresh();
+    expect(p.sizes.size).toBe(0);
+  });
+
+  it("leaves a folder without a size when it cannot be read", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/sub/": "", "/dir/sub/x": "x" }));
+    mock.failNext("folder_size", { kind: "permissionDenied", message: "permission denied: /dir/sub" });
+    const p = new PaneState();
+    await p.open({ fs: "local", path: "/dir" });
+    p.calculateSizes();
+    await settle();
+    expect(p.sizing.size).toBe(0);
+    expect(p.sizes.size).toBe(0);
+  });
+});
+
 describe("UI-UNIT-018 PaneState quick filter", () => {
   it("shows only the names that match, and visible follows the filter", async () => {
     const p = await pane([file("Report.pdf"), file("notes.txt"), dir("reports")]);

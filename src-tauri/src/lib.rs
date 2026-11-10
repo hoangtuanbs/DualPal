@@ -52,6 +52,8 @@ pub struct AppState {
     pub rename_presets: RenamePresets,
     /// Stops the folder comparison that is running, if any.
     pub compare_cancel: Mutex<Option<CancellationToken>>,
+    /// Folder size calculations that are running, by request id.
+    pub folder_size_cancel: Mutex<HashMap<u64, CancellationToken>>,
 }
 
 /// Build the whole application state on `dirs`. The shell calls this with the
@@ -101,6 +103,7 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
         sync_favorites,
         rename_presets,
         compare_cancel: Mutex::new(None),
+        folder_size_cancel: Mutex::new(HashMap::new()),
     })
 }
 
@@ -178,6 +181,8 @@ pub const COMMANDS: &[&str] = &[
     "about_info",
     "open_url",
     "stat",
+    "folder_size",
+    "cancel_folder_size",
     "read_text",
     "write_text",
     "connections",
@@ -239,6 +244,8 @@ macro_rules! all_commands {
             commands::about_info,
             commands::open_url,
             commands::stat,
+            commands::folder_size,
+            commands::cancel_folder_size,
             commands::read_text,
             commands::write_text,
             remote::connections,
