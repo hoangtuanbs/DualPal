@@ -471,7 +471,7 @@ fn hex_pair(pair: &[u8]) -> Option<u8> {
 
 fn hex_bytes(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if s.is_empty() || s.len() % 2 != 0 {
+    if s.is_empty() || !s.len().is_multiple_of(2) {
         return None;
     }
     s.as_bytes().chunks(2).map(hex_pair).collect()
