@@ -306,6 +306,24 @@ const handlers: Record<string, Handler> = {
   open_url: () => null,
   open_path: () => null,
   cancel_compare: () => null,
+  folder_size: (a, s) => {
+    const loc: Location = a.location;
+    const t = s.scenario.trees[loc.fs] ?? s.scenario.trees.local;
+    const here = t.get(loc.path);
+    if (!here || here.kind !== "dir") throw { kind: "invalid", message: `not a folder: ${loc.path}` };
+    const prefix = loc.path === "/" ? "/" : `${loc.path}/`;
+    const total = { bytes: 0, files: 0, folders: 0, skipped: 0 };
+    for (const [p, e] of t) {
+      if (p === loc.path || !p.startsWith(prefix)) continue;
+      if (e.kind === "dir") total.folders++;
+      else {
+        total.files++;
+        total.bytes += e.size;
+      }
+    }
+    return total;
+  },
+  cancel_folder_size: () => null,
   run_sync: () => "op-1",
   forget_sync_history: () => null,
   live_sync_start: (a) => ({

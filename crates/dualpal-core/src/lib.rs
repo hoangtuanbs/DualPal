@@ -5,6 +5,7 @@
 //! * [`ops`] — a background operation queue (copy, move, delete, rename,
 //!   create folder) that reports live progress and supports cancellation.
 //! * [`activity`] — a persistent log of finished operations.
+//! * [`folder_size`] — the total size and item counts of a folder.
 //! * [`connections`] — saved SFTP and S3 connections with their favorites.
 //! * [`remote_edit`] — edit remote files in a local app, uploading on save.
 //! * [`compare`] and [`sync`] — folder comparison and one- or two-way sync.
@@ -19,6 +20,7 @@ pub mod compare;
 pub mod connections;
 pub mod difftools;
 pub mod error;
+pub mod folder_size;
 pub mod launch_log;
 pub mod livesync;
 pub mod ops;

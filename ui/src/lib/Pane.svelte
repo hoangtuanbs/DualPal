@@ -215,6 +215,14 @@
     return pane.sortKey === key ? (pane.sortAsc ? "▲" : "▼") : "";
   }
 
+  /** Size column: a folder's size once known, "…" while it is calculated, "—" before that. */
+  function sizeText(entry: Entry): string {
+    if (entry.kind !== "dir") return formatBytes(entry.size);
+    if (pane.sizing.has(entry.path)) return "…";
+    const size = pane.sizes.get(entry.path);
+    return size ? formatBytes(size.bytes) : "—";
+  }
+
   const summary = $derived.by(() => {
     const n = pane.visible.length;
     const sel = pane.selected.size;
@@ -325,7 +333,7 @@
             <span class="label">{entry.name}</span>
             {#if entry.symlink}<span class="badge" title="Symbolic link">↪</span>{/if}
           </span>
-          <span class="size">{entry.kind === "dir" ? "—" : formatBytes(entry.size)}</span>
+          <span class="size">{sizeText(entry)}</span>
           <span class="date">{formatShortDate(entry.modifiedMs)}</span>
         </div>
       {:else}

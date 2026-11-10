@@ -71,6 +71,8 @@ npm run test:unit                    # L5 UI unit/component tests
 | Enter | Open folder, or open file in its default app |
 | Backspace, Ctrl/⌘ ↑ | Enclosing folder |
 | Space / Insert | Mark item |
+| Space on a folder | Mark it and calculate its size (shown in the Size column and the Info panel) |
+| Alt Shift Enter | Calculate the sizes of all folders in the pane |
 | Shift ↑ / Shift ↓ | Mark the items the cursor passes |
 | Ctrl/⌘ A | Mark all |
 | Menu key / Shift F10 | Menu for the item under the cursor |

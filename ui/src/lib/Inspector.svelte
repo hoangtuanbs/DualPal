@@ -1,19 +1,22 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { untrack } from "svelte";
-  import { api, errorMessage, type Entry, type Location } from "./api";
+  import { api, errorMessage, type Entry, type FolderSize, type Location } from "./api";
   import { category, extension, glyph } from "./fileTypes";
   import { formatBytes, formatDate } from "./format";
 
   let {
     entry,
     fs,
+    folderSize,
     onsetmode,
     onsaved,
   }: {
     entry: Entry | null;
     /** File system id of the pane the entry comes from. */
     fs: string;
+    /** The size of `entry` when it is a folder and it has been calculated. */
+    folderSize: FolderSize | null;
     onsetmode: (location: Location, mode: number) => void;
     /** A file was saved from the quick editor. */
     onsaved: () => void;
@@ -232,6 +235,18 @@
     <dl>
       <dt>Path</dt>
       <dd class="path" title={entry.path}>{entry.path}</dd>
+      {#if entry.kind === "dir" && folderSize}
+        <dt>Size</dt>
+        <dd>{formatBytes(folderSize.bytes)} ({folderSize.bytes.toLocaleString()} bytes)</dd>
+        <dt>Contents</dt>
+        <dd>
+          {folderSize.files.toLocaleString()} {folderSize.files === 1 ? "file" : "files"},
+          {folderSize.folders.toLocaleString()} {folderSize.folders === 1 ? "folder" : "folders"}
+          {#if folderSize.skipped}
+            ({folderSize.skipped.toLocaleString()} {folderSize.skipped === 1 ? "folder" : "folders"} could not be read)
+          {/if}
+        </dd>
+      {/if}
       {#if entry.kind !== "dir"}
         <dt>Size</dt>
         <dd>{formatBytes(entry.size)} ({entry.size.toLocaleString()} bytes)</dd>

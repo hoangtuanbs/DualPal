@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { api, defaultCompareOptions, errorKind, errorMessage } from "./api";
-import { installMockBackend } from "../../tests/mock-backend";
+import { installMockBackend, tree } from "../../tests/mock-backend";
 
 describe("UI-UNIT-007 errorKind / errorMessage", () => {
   it("reads kind and message from an object", () => {
@@ -143,5 +143,18 @@ describe("api covers the remaining commands", () => {
     for (const cmd of ["home_location", "parent_location", "operations", "activity", "volumes", "favorites", "about_info", "connections", "ssh_config_hosts", "settings", "sync_favorites", "rename_presets", "diff_tools", "live_sync_stop", "live_sync_status"]) {
       expect(mock.calls(cmd).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("folder size API", () => {
+  it("passes the location and the request id, and cancels by id", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/d/": "", "/d/x": "xy" }));
+    const size = await api.folderSize({ fs: "local", path: "/d" }, 7);
+    expect(size).toEqual({ bytes: 2, files: 1, folders: 0, skipped: 0 });
+    expect(mock.lastCall("folder_size")).toEqual({ location: { fs: "local", path: "/d" }, request: 7 });
+
+    await api.cancelFolderSize(7);
+    expect(mock.lastCall("cancel_folder_size")).toEqual({ request: 7 });
   });
 });
