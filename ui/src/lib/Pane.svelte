@@ -48,6 +48,8 @@
   // WebKit (macOS) while the list is still being laid out.
   $effect(() => {
     const list = listEl;
+    // The filter changes which row the cursor index points at.
+    void pane.filter;
     const row = list?.querySelector<HTMLElement>(`[data-index="${pane.cursor}"]`);
     if (!list || !row || list.clientHeight === 0) return;
     const top = row.offsetTop; // .list is position: relative
