@@ -215,11 +215,31 @@
     return pane.sortKey === key ? (pane.sortAsc ? "▲" : "▼") : "";
   }
 
+  /** Keys in the filter bar: Esc clears it, Enter hands over to the list, arrows move the cursor. */
+  function filterKey(e: KeyboardEvent) {
+    if (e.key === "Escape" || e.key === "Enter") {
+      e.preventDefault();
+      if (e.key === "Escape" || pane.filter === "") pane.closeFilter();
+      listEl?.focus({ preventScroll: true });
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const step = pane.view === "icons" ? pane.columns : 1;
+      pane.moveCursor(e.key === "ArrowDown" ? step : -step);
+    }
+  }
+
+  /** Focus the filter input when the bar opens, and again each time Ctrl/⌘ F asks. */
+  function focusFilter(node: HTMLInputElement, _request: number) {
+    node.focus();
+    return { update: () => node.focus() };
+  }
+
   const summary = $derived.by(() => {
     const n = pane.visible.length;
     const sel = pane.selected.size;
     const items = `${n} ${n === 1 ? "item" : "items"}`;
-    const base = sel ? `${sel} of ${items} selected` : items;
+    let base = sel ? `${sel} of ${items} selected` : items;
+    if (pane.filter !== "") base = `${n} of ${pane.listed.length} items${sel ? `, ${sel} selected` : ""}`;
     return pane.freeBytes != null ? `${base}, ${formatBytes(pane.freeBytes)} available` : base;
   });
 </script>
@@ -277,6 +297,21 @@
     </div>
   {/if}
 
+  {#if pane.filterOpen}
+    <div class="filter">
+      <input
+        type="text"
+        placeholder="Filter by name (* and ? match patterns)"
+        aria-label="Filter by name"
+        data-testid={`pane-${side}-filter`}
+        value={pane.filter}
+        oninput={(e) => pane.setFilter(e.currentTarget.value)}
+        onkeydown={filterKey}
+        use:focusFilter={pane.filterFocus}
+      />
+    </div>
+  {/if}
+
   <div
     class="list"
     class:grid={pane.view === "icons"}
@@ -297,7 +332,7 @@
     {#if pane.error}
       <p class="message error" data-testid={`pane-${side}-error`}>{pane.error}</p>
     {:else if pane.visible.length === 0 && !pane.loading}
-      <p class="message">This folder is empty.</p>
+      <p class="message">{pane.filter ? "No items match the filter." : "This folder is empty."}</p>
     {/if}
     {#each pane.visible as entry, i (entry.path)}
       {#if pane.view === "list"}
@@ -425,6 +460,21 @@
   }
   .columns {
     border-bottom: 1px solid var(--border);
+  }
+  .filter {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .filter input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 8px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--pane-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
   }
   .columns button {
     text-align: left;
