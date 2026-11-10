@@ -1,11 +1,14 @@
-import { SvelteSet } from "svelte/reactivity";
-import { api, errorKind, errorMessage, type Entry, type Location } from "./api";
+import { SvelteMap, SvelteSet } from "svelte/reactivity";
+import { api, errorKind, errorMessage, type Entry, type FolderSize, type Location } from "./api";
 import { fsNames } from "./fs-names.svelte";
+import { nameFilter } from "./quick-filter";
 
 export type SortKey = "name" | "size" | "modified";
 export type ViewMode = "list" | "icons";
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+/** Ids of folder size calculations, unique across all panes. */
+let nextSizeRequest = 1;
 
 /** State of one file pane: where it is, what it shows, what is selected. */
 export class PaneState {
@@ -28,20 +31,41 @@ export class PaneState {
   columns = $state(1);
   /** Free bytes on this pane's volume, when known. */
   freeBytes = $state<number | null>(null);
+  /** Folder sizes calculated for the current listing, by entry path. */
+  sizes = new SvelteMap<string, FolderSize>();
+  /** Folders whose size is being calculated, by entry path. */
+  sizing = new SvelteSet<string>();
+  /** Calculations in flight, by entry path. */
+  private sizeRequests = new Map<string, number>();
+  /** Changes whenever the listing does, so that late results are dropped. */
+  private sizeEpoch = 0;
   private history = $state<Location[]>([]);
   private future = $state<Location[]>([]);
+  /** Quick filter text; empty when no filter is set. */
+  filter = $state("");
+  /** Whether the filter bar is shown. */
+  filterOpen = $state(false);
+  /** Bumped to move focus into the filter bar, even when it is already open. */
+  filterFocus = $state(0);
 
-  visible = $derived.by(() => {
+  /** Entries shown before the quick filter: hidden files left out, sorted. */
+  listed = $derived.by(() => {
     const list = this.showHidden ? this.entries : this.entries.filter((e) => !e.hidden);
     const dir = this.sortAsc ? 1 : -1;
     return [...list].sort((a, b) => {
       // Folders always first.
       if ((a.kind === "dir") !== (b.kind === "dir")) return a.kind === "dir" ? -1 : 1;
       let c = 0;
-      if (this.sortKey === "size") c = a.size - b.size;
+      if (this.sortKey === "size") c = this.sizeOf(a) - this.sizeOf(b);
       else if (this.sortKey === "modified") c = (a.modifiedMs ?? 0) - (b.modifiedMs ?? 0);
       return (c || collator.compare(a.name, b.name)) * dir;
     });
+  });
+
+  /** The entries shown: `listed` narrowed by the quick filter. */
+  visible = $derived.by(() => {
+    const keep = nameFilter(this.filter);
+    return keep ? this.listed.filter((e) => keep(e.name)) : this.listed;
   });
 
   get current(): Entry | undefined {
@@ -65,6 +89,9 @@ export class PaneState {
       }
       this.location = loc;
       this.entries = entries;
+      this.forgetSizes();
+      this.filter = "";
+      this.filterOpen = false;
       this.selected.clear();
       this.error = null;
       const idx = opts.focusName ? this.visible.findIndex((e) => e.name === opts.focusName) : 0;
@@ -76,6 +103,55 @@ export class PaneState {
     } finally {
       this.loading = false;
     }
+  }
+
+  /** Size used for sorting: a folder's calculated size when it is known. */
+  private sizeOf(e: Entry): number {
+    return e.kind === "dir" ? (this.sizes.get(e.path)?.bytes ?? e.size) : e.size;
+  }
+
+  /** Work out the size of these folders. The default is every folder in the
+   *  listing except links to folders, whose trees live elsewhere; a link is
+   *  only sized when asked for by name. Entries that are not folders, or
+   *  already known, are skipped. */
+  calculateSizes(folders: Entry[] = this.entries.filter((e) => e.kind === "dir" && !e.symlink)) {
+    for (const e of folders) this.startSize(e);
+  }
+
+  private startSize(entry: Entry) {
+    const loc = this.location;
+    if (!loc || entry.kind !== "dir" || this.sizes.has(entry.path) || this.sizing.has(entry.path)) return;
+    const epoch = this.sizeEpoch;
+    const request = nextSizeRequest++;
+    this.sizeRequests.set(entry.path, request);
+    this.sizing.add(entry.path);
+    api.folderSize({ fs: loc.fs, path: entry.path }, request).then(
+      (size) => {
+        if (epoch !== this.sizeEpoch) return;
+        this.sizeRequests.delete(entry.path);
+        this.sizing.delete(entry.path);
+        // Sorted by size, the new size can move rows: stay on the same entry.
+        const keep = this.current?.path;
+        this.sizes.set(entry.path, size);
+        const idx = keep ? this.visible.findIndex((e) => e.path === keep) : -1;
+        if (idx >= 0) this.cursor = idx;
+      },
+      () => {
+        // Cancelled, or the folder cannot be read: there is no size to show.
+        if (epoch !== this.sizeEpoch) return;
+        this.sizeRequests.delete(entry.path);
+        this.sizing.delete(entry.path);
+      },
+    );
+  }
+
+  /** Discard the folder sizes of this listing and stop calculating them. */
+  forgetSizes() {
+    this.sizeEpoch++;
+    for (const request of this.sizeRequests.values()) api.cancelFolderSize(request).catch(() => {});
+    this.sizeRequests.clear();
+    this.sizing.clear();
+    this.sizes.clear();
   }
 
   private updateSpace() {
@@ -112,6 +188,7 @@ export class PaneState {
       const entries = await api.listDir(here);
       if (this.location !== here) return; // the user went elsewhere meanwhile
       this.entries = entries;
+      this.forgetSizes();
       this.error = null;
     } catch (e) {
       if (this.location !== here) return;
@@ -123,9 +200,38 @@ export class PaneState {
     }
     this.selected.clear();
     for (const e of this.entries) if (marked.has(e.path)) this.selected.add(e.path);
+    this.unmarkFiltered();
     const idx = keep ? this.visible.findIndex((e) => e.name === keep) : -1;
     this.cursor = idx >= 0 ? idx : Math.min(this.cursor, Math.max(0, this.visible.length - 1));
     this.updateSpace();
+  }
+
+  /** Narrow the list to the names matching `text` (see nameFilter). */
+  setFilter(text: string) {
+    const keep = this.current?.path;
+    this.filter = text;
+    this.unmarkFiltered();
+    // Stay on the same entry when it is still shown, else go to the first.
+    const idx = keep ? this.visible.findIndex((e) => e.path === keep) : -1;
+    this.cursor = Math.max(0, idx);
+  }
+
+  /** Clear the filter and hide its bar. */
+  closeFilter() {
+    this.setFilter("");
+    this.filterOpen = false;
+  }
+
+  openFilter() {
+    this.filterOpen = true;
+    this.filterFocus++;
+  }
+
+  /** Marks never stay on entries the filter hides, so operations only act on what is shown. */
+  private unmarkFiltered() {
+    const keep = nameFilter(this.filter);
+    if (!keep) return;
+    for (const e of this.entries) if (!keep(e.name)) this.selected.delete(e.path);
   }
 
   /** Open the closest existing folder above `from`, unless the user moves
@@ -240,6 +346,7 @@ export class PaneGroup {
 
   closeTab(i = this.index) {
     if (this.tabs.length <= 1) return;
+    this.tabs[i].forgetSizes();
     this.tabs.splice(i, 1);
     if (this.index >= this.tabs.length || this.index > i) this.index = Math.max(0, this.index - 1);
   }

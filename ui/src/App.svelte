@@ -591,7 +591,9 @@
       { id: "icons", group: "View", title: "Icon View", shortcut: `${MOD}2`, run: () => (active.view = "icons") },
       { id: "hidden", group: "View", title: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files", shortcut: `${MOD}Shift+.`, run: () => (active.showHidden = !active.showHidden) },
       { id: "info", group: "View", title: showInspector ? "Hide Info Panel" : "Show Info Panel", shortcut: `${MOD}I`, run: () => (showInspector = !showInspector) },
+      { id: "filter", group: "View", title: "Filter Items by Name", shortcut: `${MOD}F`, run: () => active.openFilter() },
       { id: "refresh", group: "View", title: "Refresh", shortcut: `${MOD}R`, run: () => active.refresh() },
+      { id: "folderSizes", group: "View", title: "Calculate Folder Sizes", shortcut: "Alt+Shift+Enter", run: () => active.calculateSizes() },
       { id: "newTab", group: "View", title: "New Tab", shortcut: `${MOD}T`, run: () => groups[activeIndex].newTab() },
       { id: "closeTab", group: "View", title: "Close Tab", shortcut: `${MOD}W`, run: () => groups[activeIndex].closeTab() },
       { id: "switch", group: "View", title: "Switch to Other Pane", shortcut: "Tab", run: () => (activeIndex = 1 - activeIndex) },
@@ -995,6 +997,11 @@
       showPalette = true;
       return e.preventDefault();
     }
+    // Not from the quick editor, where the key belongs to the text being edited.
+    if (cmd && !e.shiftKey && e.key.toLowerCase() === "f" && (e.target as HTMLElement | null)?.tagName !== "TEXTAREA") {
+      active.openFilter();
+      return e.preventDefault();
+    }
     // Typing in the quick editor or another field: leave keys alone.
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -1002,6 +1009,10 @@
     const handled = () => e.preventDefault();
     const group = groups[activeIndex];
     const icons = active.view === "icons";
+    if (e.key === "Escape" && active.filterOpen) {
+      active.closeFilter();
+      return handled();
+    }
     if (e.ctrlKey && e.key === "Tab") {
       group.cycle(e.shiftKey ? -1 : 1);
       return handled();
@@ -1020,6 +1031,10 @@
     }
     if (mod && (e.key === "1" || e.key === "2")) {
       active.view = e.key === "1" ? "list" : "icons";
+      return handled();
+    }
+    if (e.altKey && e.shiftKey && e.key === "Enter") {
+      active.calculateSizes();
       return handled();
     }
     switch (e.key) {
@@ -1073,7 +1088,11 @@
         return handled();
       case " ":
       case "Insert":
-        if (active.current) active.toggle(active.current);
+        if (active.current) {
+          active.toggle(active.current);
+          // Space also works out the size of a folder, as in Total Commander.
+          if (e.key === " ") active.calculateSizes([active.current]);
+        }
         active.moveCursor(1);
         return handled();
       case "F2":
@@ -1281,6 +1300,7 @@
       <Inspector
         entry={active.current ?? null}
         fs={active.location?.fs ?? "local"}
+        folderSize={active.current?.kind === "dir" ? (active.sizes.get(active.current.path) ?? null) : null}
         onsetmode={(location, mode) => enqueue({ type: "setMode", location, mode })}
         onsaved={() => allPanes().forEach((p) => p.refresh())}
       />

@@ -40,6 +40,8 @@ fn tested_commands() -> HashSet<&'static str> {
         "about_info",
         "open_url",
         "stat",
+        "folder_size",
+        "cancel_folder_size",
         "read_text",
         "write_text",
         "connections",
@@ -824,4 +826,36 @@ fn csp_has_no_unsafe_eval_or_remote_origins() {
     let csp = value["app"]["security"]["csp"].as_str().unwrap();
     assert!(!csp.contains("unsafe-eval"), "{csp}");
     assert!(!csp.contains("https://"), "{csp}");
+}
+
+/// CMD-036 — folder_size totals a folder; a file is an error; cancelling an
+/// unknown request is a no-op.
+#[test]
+fn folder_size_totals_and_cancel() {
+    let TestApp { app, tmp } = app();
+    let dir = tmp.path().join("d");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("a.txt"), "hello").unwrap();
+    std::fs::write(dir.join("sub/b.txt"), "xy").unwrap();
+
+    let size: Value = call(
+        &app,
+        "folder_size",
+        json!({ "location": local(&dir.to_string_lossy()), "request": 1 }),
+    )
+    .unwrap();
+    assert_eq!(size["bytes"], 7);
+    assert_eq!(size["files"], 2);
+    assert_eq!(size["folders"], 1);
+    assert_eq!(size["skipped"], 0);
+
+    let file_err = call::<Value>(
+        &app,
+        "folder_size",
+        json!({ "location": local(&dir.join("a.txt").to_string_lossy()), "request": 2 }),
+    )
+    .unwrap_err();
+    assert_eq!(file_err["kind"], "invalid");
+
+    call_ok(&app, "cancel_folder_size", json!({ "request": 99 }));
 }

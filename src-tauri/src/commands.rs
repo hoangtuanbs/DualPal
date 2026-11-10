@@ -1,5 +1,8 @@
+use dualpal_core::folder_size::FolderSize;
 use dualpal_core::places::Favorite;
-use dualpal_core::{ActivityRecord, Entry, Error, Location, Operation, OperationInfo};
+use dualpal_core::{
+    ActivityRecord, CancellationToken, Entry, Error, Location, Operation, OperationInfo,
+};
 use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
@@ -184,6 +187,33 @@ fn io_err(path: &str, e: std::io::Error) -> Error {
 #[tauri::command]
 pub async fn stat(state: State<'_, AppState>, location: Location) -> CmdResult<Entry> {
     state.registry.get(&location.fs)?.stat(&location.path).await
+}
+
+/// Total size and item counts of a folder. `request` names this calculation
+/// so that [`cancel_folder_size`] can stop it.
+#[tauri::command]
+pub async fn folder_size(
+    state: State<'_, AppState>,
+    location: Location,
+    request: u64,
+) -> CmdResult<FolderSize> {
+    let cancel = CancellationToken::new();
+    state
+        .folder_size_cancel
+        .lock()
+        .unwrap()
+        .insert(request, cancel.clone());
+    let result = dualpal_core::folder_size::calculate(&state.registry, &location, &cancel).await;
+    state.folder_size_cancel.lock().unwrap().remove(&request);
+    result
+}
+
+/// Stop the folder size calculation `request`. Does nothing if it has finished.
+#[tauri::command]
+pub fn cancel_folder_size(state: State<'_, AppState>, request: u64) {
+    if let Some(c) = state.folder_size_cancel.lock().unwrap().remove(&request) {
+        c.cancel();
+    }
 }
 
 #[tauri::command]
