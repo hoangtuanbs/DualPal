@@ -12,6 +12,7 @@ import type {
   Insights,
   Location,
   OperationInfo,
+  Settings,
   SyncPreview,
   Volume,
 } from "../../src/lib/api";
@@ -102,7 +103,7 @@ export interface Scenario {
   favorites: Favorite[];
   connections: ConnectionView[];
   volumes: Volume[];
-  settings: { editor: string | null; diffTool: string | null };
+  settings: Settings;
   activity: ActivityRecord[];
 }
 
@@ -157,7 +158,7 @@ export interface MockHandle {
   setTree(fs: string, entries: Tree): void;
   removeFolder(path: string): void;
   completeAll(): void;
-  setSettings(settings: { editor: string | null; diffTool: string | null }): void;
+  setSettings(settings: Settings): void;
 }
 
 type Handler = (args: any, state: State) => unknown;

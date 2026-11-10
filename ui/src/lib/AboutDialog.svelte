@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, errorMessage, type AboutInfo } from "./api";
   import { ABOUT, copyText, osName, supportMailUrl } from "./about";
+  import { updates } from "./updates.svelte";
   import Icon from "./Icon.svelte";
   import appIcon from "../assets/app-icon.png";
   import donateQr from "../assets/donate-qr.svg";
@@ -14,6 +15,8 @@
   let info = $state<AboutInfo | null>(null);
   let copied = $state<"address" | "email" | null>(null);
   let error = $state<string | null>(null);
+  let checking = $state(false);
+  let updateNote = $state<{ text: string; bad: boolean } | null>(null);
 
   api.aboutInfo().then((i) => (info = i));
 
@@ -23,6 +26,22 @@
       await api.openUrl(url);
     } catch (e) {
       error = errorMessage(e);
+    }
+  }
+
+  async function checkUpdates() {
+    checking = true;
+    updateNote = null;
+    try {
+      const result = await updates.checkNow();
+      updateNote = {
+        text: result.kind === "available" ? `Dual Pal ${result.version} is available. Install it from the bar at the bottom right.` : "You're up to date.",
+        bad: false,
+      };
+    } catch (e) {
+      updateNote = { text: `Could not check for updates: ${errorMessage(e)}`, bad: true };
+    } finally {
+      checking = false;
     }
   }
 
@@ -68,12 +87,16 @@
       <div class="links">
         <button onclick={() => open(ABOUT.projectUrl)}><Icon name="github" size={15} /> Dual Pal on GitHub</button>
         <button onclick={() => info && open(supportMailUrl(info))}><Icon name="mail" size={15} /> Email Us…</button>
+        <button onclick={checkUpdates} disabled={checking}><Icon name="refresh" size={15} /> {checking ? "Checking…" : "Check for Updates…"}</button>
         <button class="donate" onclick={() => (page = "donate")}><Icon name="heart" size={15} filled /> Donate…</button>
       </div>
       <p class="small">
         Help: <span class="select">{ABOUT.supportEmail}</span>
         <button class="link" onclick={() => copy("email")}>{copied === "email" ? "Copied" : "Copy"}</button>
       </p>
+      {#if updateNote}
+        <p class="small center" class:err={updateNote.bad} role="status">{updateNote.text}</p>
+      {/if}
     {:else}
       <span class="heart"><Icon name="heart" size={32} filled /></span>
       <h2>Support Dual Pal</h2>

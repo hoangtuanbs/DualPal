@@ -343,10 +343,20 @@ fn secrets_from_env() -> Arc<dyn SecretStore> {
     }
 }
 
+/// Plugins that exist only on desktop: in-app updates and relaunch after one.
+#[cfg(desktop)]
+fn desktop_plugins<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    #[cfg(desktop)]
+    let builder = desktop_plugins(builder);
+    builder
         .setup(|app| {
             let state = build_state(app_dirs(app)?, secrets_from_env())?;
             if let Some(ms) = env_ms("DUALPAL_LIVE_POLL_MS") {

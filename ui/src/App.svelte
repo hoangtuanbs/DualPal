@@ -40,6 +40,9 @@
   import Icon from "./lib/Icon.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
   import { emailSupport, openProjectPage } from "./lib/about";
+  import UpdateBar from "./lib/UpdateBar.svelte";
+  import { updates } from "./lib/updates.svelte";
+  import { UPDATE_CHECK_DELAY_MS, activeOperationCount } from "./lib/updates";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -59,6 +62,11 @@
   let editing = $state<Connection | null | undefined>(undefined);
 
   let operations = $state<OperationInfo[]>([]);
+  // An update waits for queued and running file operations, and for saves
+  // of files edited on a server that are still uploading.
+  updates.setBusyCheck(
+    () => activeOperationCount(operations) + editSessions.filter((s) => s.status === "uploading").length,
+  );
   let activity = $state<ActivityRecord[]>([]);
   /** The request behind each operation id, so a failed one can be retried. */
   const requests = new Map<string, Operation>();
@@ -132,11 +140,14 @@
     PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
     const timer = setInterval(() => api.volumes().then((v) => (volumes = v)), 15000);
+    // Look for a new release shortly after start, at most once a day (not in E2E tests).
+    const updateTimer = window.__DUALPAL_TEST__ ? undefined : setTimeout(() => updates.checkOnStartup(), UPDATE_CHECK_DELAY_MS);
     return () => {
       unlisten?.();
       unlistenEdits?.();
       unlistenLive?.();
       clearInterval(timer);
+      clearTimeout(updateTimer);
       PaneState.navigated = null;
     };
   });
@@ -597,6 +608,7 @@
       { id: "donate", group: "Help", title: "Donate…", run: () => (aboutPage = "donate") },
       { id: "email", group: "Help", title: "Email Us…", run: () => emailSupport().catch((e) => (notice = errorMessage(e))) },
       { id: "github", group: "Help", title: "Dual Pal on GitHub", run: () => openProjectPage().catch((e) => (notice = errorMessage(e))) },
+      { id: "updates", group: "Help", title: "Check for Updates…", run: () => updates.checkNow().catch(() => {}) },
       { id: "clearOps", group: "Activity", title: "Clear Finished Operations", run: clearFinished },
       { id: "addServer", group: "Servers", title: "Add Server…", run: () => (editing = null) },
     ];
@@ -1381,6 +1393,9 @@
 {#if aboutPage}
   <AboutDialog start={aboutPage} onclose={() => (aboutPage = null)} />
 {/if}
+
+<UpdateBar />
+
 
 {#if showInsights}
   <Insights {nameOf} onclose={() => (showInsights = false)} />
