@@ -580,6 +580,7 @@
       { id: "icons", group: "View", title: "Icon View", shortcut: `${MOD}2`, run: () => (active.view = "icons") },
       { id: "hidden", group: "View", title: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files", shortcut: `${MOD}Shift+.`, run: () => (active.showHidden = !active.showHidden) },
       { id: "info", group: "View", title: showInspector ? "Hide Info Panel" : "Show Info Panel", shortcut: `${MOD}I`, run: () => (showInspector = !showInspector) },
+      { id: "filter", group: "View", title: "Filter Items by Name", shortcut: `${MOD}F`, run: () => active.openFilter() },
       { id: "refresh", group: "View", title: "Refresh", shortcut: `${MOD}R`, run: () => active.refresh() },
       { id: "newTab", group: "View", title: "New Tab", shortcut: `${MOD}T`, run: () => groups[activeIndex].newTab() },
       { id: "closeTab", group: "View", title: "Close Tab", shortcut: `${MOD}W`, run: () => groups[activeIndex].closeTab() },
@@ -983,6 +984,11 @@
       showPalette = true;
       return e.preventDefault();
     }
+    // Not from the quick editor, where the key belongs to the text being edited.
+    if (cmd && !e.shiftKey && e.key.toLowerCase() === "f" && (e.target as HTMLElement | null)?.tagName !== "TEXTAREA") {
+      active.openFilter();
+      return e.preventDefault();
+    }
     // Typing in the quick editor or another field: leave keys alone.
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -990,6 +996,10 @@
     const handled = () => e.preventDefault();
     const group = groups[activeIndex];
     const icons = active.view === "icons";
+    if (e.key === "Escape" && active.filterOpen) {
+      active.closeFilter();
+      return handled();
+    }
     if (e.ctrlKey && e.key === "Tab") {
       group.cycle(e.shiftKey ? -1 : 1);
       return handled();

@@ -200,3 +200,80 @@ describe("PaneState helpers", () => {
     expect(mock.lastCall("open_file")).toEqual({ location: { fs: "local", path: "/dir/a.txt" }, editor: false });
   });
 });
+
+describe("UI-UNIT-018 PaneState quick filter", () => {
+  it("shows only the names that match, and visible follows the filter", async () => {
+    const p = await pane([file("Report.pdf"), file("notes.txt"), dir("reports")]);
+    p.setFilter("rep");
+    expect(p.visible.map((e) => e.name)).toEqual(["reports", "Report.pdf"]);
+    expect(p.listed.length).toBe(3);
+
+    p.setFilter("*.txt");
+    expect(p.visible.map((e) => e.name)).toEqual(["notes.txt"]);
+
+    p.setFilter("");
+    expect(p.visible.length).toBe(3);
+  });
+
+  it("keeps the cursor on the same entry when it is still shown", async () => {
+    const p = await pane([file("a.txt"), file("b.txt"), file("c.txt")]);
+    p.moveCursor(2);
+    expect(p.current?.name).toBe("c.txt");
+    p.setFilter("c");
+    expect(p.current?.name).toBe("c.txt");
+    expect(p.cursor).toBe(0);
+  });
+
+  it("moves the cursor to the first shown entry when its own entry is hidden", async () => {
+    const p = await pane([file("a.txt"), file("b.txt")]);
+    p.moveCursor(1);
+    p.setFilter("a");
+    expect(p.current?.name).toBe("a.txt");
+  });
+
+  it("unmarks marked entries that the filter hides, so operations skip them", async () => {
+    const p = await pane([file("a.txt"), file("b.txt"), file("c.jpg")]);
+    p.toggle(p.visible[0]); // a.txt
+    p.toggle(p.visible[2]); // c.jpg
+    p.setFilter("*.txt");
+    expect(p.selected.size).toBe(1);
+    expect(p.targets.map((e) => e.name)).toEqual(["a.txt"]);
+    p.setFilter("");
+    expect(p.targets.map((e) => e.name)).toEqual(["a.txt"]);
+  });
+
+  it("closeFilter clears the text and hides the bar", async () => {
+    const p = await pane([file("a.txt"), file("b.txt")]);
+    p.openFilter();
+    expect(p.filterOpen).toBe(true);
+    p.setFilter("b");
+    p.closeFilter();
+    expect(p.filter).toBe("");
+    expect(p.filterOpen).toBe(false);
+    expect(p.visible.length).toBe(2);
+  });
+
+  it("is cleared when the pane opens another folder", async () => {
+    const p = await pane([file("a.txt"), file("b.txt")]);
+    p.openFilter();
+    p.setFilter("a");
+    await p.open({ fs: "local", path: "/dir/sub" }, { entries: [file("x.txt")] });
+    expect(p.filter).toBe("");
+    expect(p.filterOpen).toBe(false);
+    expect(p.visible.map((e) => e.name)).toEqual(["x.txt"]);
+  });
+
+  it("keeps the filter across a refresh of the same folder", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/a.txt": "a", "/dir/b.jpg": "b" }));
+    const p = new PaneState();
+    await p.open(LOC);
+    p.setFilter("*.txt");
+    p.toggle(p.visible[0]);
+    mock.setTree("local", tree({ "/dir/": "", "/dir/a.txt": "a", "/dir/b.jpg": "b", "/dir/c.txt": "c" }));
+    await p.refresh();
+    expect(p.filter).toBe("*.txt");
+    expect(p.visible.map((e) => e.name)).toEqual(["a.txt", "c.txt"]);
+    expect(p.selected.size).toBe(1);
+  });
+});
