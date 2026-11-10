@@ -1,6 +1,7 @@
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { api, errorKind, errorMessage, type Entry, type FolderSize, type Location } from "./api";
 import { fsNames } from "./fs-names.svelte";
+import { nameFilter } from "./quick-filter";
 
 export type SortKey = "name" | "size" | "modified";
 export type ViewMode = "list" | "icons";
@@ -40,8 +41,15 @@ export class PaneState {
   private sizeEpoch = 0;
   private history = $state<Location[]>([]);
   private future = $state<Location[]>([]);
+  /** Quick filter text; empty when no filter is set. */
+  filter = $state("");
+  /** Whether the filter bar is shown. */
+  filterOpen = $state(false);
+  /** Bumped to move focus into the filter bar, even when it is already open. */
+  filterFocus = $state(0);
 
-  visible = $derived.by(() => {
+  /** Entries shown before the quick filter: hidden files left out, sorted. */
+  listed = $derived.by(() => {
     const list = this.showHidden ? this.entries : this.entries.filter((e) => !e.hidden);
     const dir = this.sortAsc ? 1 : -1;
     return [...list].sort((a, b) => {
@@ -52,6 +60,12 @@ export class PaneState {
       else if (this.sortKey === "modified") c = (a.modifiedMs ?? 0) - (b.modifiedMs ?? 0);
       return (c || collator.compare(a.name, b.name)) * dir;
     });
+  });
+
+  /** The entries shown: `listed` narrowed by the quick filter. */
+  visible = $derived.by(() => {
+    const keep = nameFilter(this.filter);
+    return keep ? this.listed.filter((e) => keep(e.name)) : this.listed;
   });
 
   get current(): Entry | undefined {
@@ -76,6 +90,8 @@ export class PaneState {
       this.location = loc;
       this.entries = entries;
       this.forgetSizes();
+      this.filter = "";
+      this.filterOpen = false;
       this.selected.clear();
       this.error = null;
       const idx = opts.focusName ? this.visible.findIndex((e) => e.name === opts.focusName) : 0;
@@ -184,9 +200,38 @@ export class PaneState {
     }
     this.selected.clear();
     for (const e of this.entries) if (marked.has(e.path)) this.selected.add(e.path);
+    this.unmarkFiltered();
     const idx = keep ? this.visible.findIndex((e) => e.name === keep) : -1;
     this.cursor = idx >= 0 ? idx : Math.min(this.cursor, Math.max(0, this.visible.length - 1));
     this.updateSpace();
+  }
+
+  /** Narrow the list to the names matching `text` (see nameFilter). */
+  setFilter(text: string) {
+    const keep = this.current?.path;
+    this.filter = text;
+    this.unmarkFiltered();
+    // Stay on the same entry when it is still shown, else go to the first.
+    const idx = keep ? this.visible.findIndex((e) => e.path === keep) : -1;
+    this.cursor = Math.max(0, idx);
+  }
+
+  /** Clear the filter and hide its bar. */
+  closeFilter() {
+    this.setFilter("");
+    this.filterOpen = false;
+  }
+
+  openFilter() {
+    this.filterOpen = true;
+    this.filterFocus++;
+  }
+
+  /** Marks never stay on entries the filter hides, so operations only act on what is shown. */
+  private unmarkFiltered() {
+    const keep = nameFilter(this.filter);
+    if (!keep) return;
+    for (const e of this.entries) if (!keep(e.name)) this.selected.delete(e.path);
   }
 
   /** Open the closest existing folder above `from`, unless the user moves
