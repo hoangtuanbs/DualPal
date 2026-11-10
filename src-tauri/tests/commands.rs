@@ -806,7 +806,9 @@ fn capability_permissions_are_reviewed() {
     let value: Value = serde_json::from_str(&text).unwrap();
     insta::assert_json_snapshot!(value["permissions"], @r###"
     [
-      "core:default"
+      "core:default",
+      "updater:default",
+      "process:allow-restart"
     ]
     "###);
 }

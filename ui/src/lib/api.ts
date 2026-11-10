@@ -173,6 +173,8 @@ export interface EditSession {
 export interface Settings {
   editor: string | null;
   diffTool: string | null;
+  /** Milliseconds since the epoch of the last update check. */
+  lastUpdateCheck?: number | null;
 }
 
 // ---- compare and sync ----

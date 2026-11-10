@@ -150,6 +150,26 @@ Installers for each version are on the [Releases](https://github.com/hoangtuanbs
 
 To publish a release, set `version` in `src-tauri/tauri.conf.json` and the root `Cargo.toml`, merge to `main`, then push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`. The **Build installers** workflow builds all platforms and creates the release.
 
+## Updates
+
+Dual Pal looks for a new release at most once a day, a few seconds after it starts, and shows a small bar when one is available. **Install and restart** downloads the update, installs it and relaunches the app. Installs wait while file operations are running; you can also choose **Check for Updates…** in the command palette (⇧⌘P) or the **About** window. A failed check at start-up is silent.
+
+Updates are read from `latest.json` on the newest GitHub release. Each one is verified against the public key built into the app, so only releases signed with the maintainer's key are installed.
+
+On Linux the update replaces the `.AppImage`. Installs from the `.deb` or `.rpm` are told about a new version but update through a new package from the Releases page.
+
+### Release signing setup
+
+For the maintainer, once per signing key:
+
+1. Generate a key pair on your computer: `npx tauri signer generate -w ~/.tauri/dualpal.key`. Enter a password when asked. Keep the private key file and the password safe; losing them means existing installs can no longer be updated with a new key.
+2. In the GitHub repository settings, add these **secrets** (Settings → Secrets and variables → Actions → Secrets):
+   - `TAURI_SIGNING_PRIVATE_KEY`: the full contents of the private key file, or its path on your computer if you run the build locally.
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the password you entered.
+3. Add this **variable** (the same page, Variables tab): `TAURI_UPDATER_PUBKEY`, set to the contents of the public key file (`~/.tauri/dualpal.key.pub`).
+
+Until the secret and the variable are set, the **Build installers** workflow builds without updater files and publishes no `latest.json`, so releases still publish normally and installed copies simply find no update. Once they are set, push a version tag as usual: the build then signs the installers, and the release gets the `.sig` files and `latest.json`. Versions installed before the updater existed have no update check, so they are updated once by hand.
+
 ## Test builds
 
 Every push to `main` and every pull request runs the **Build installers** workflow (it can also be started by hand from the Actions tab). Download the installer from the run's **Artifacts** section:

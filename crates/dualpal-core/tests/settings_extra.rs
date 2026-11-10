@@ -20,6 +20,7 @@ fn round_trip_editor_and_diff_tool() {
         .set(Settings {
             editor: Some("/usr/bin/emacs".into()),
             diff_tool: Some("meld {left} {right}".into()),
+            last_update_check: None,
         })
         .unwrap();
     let reopened = SettingsStore::open(&path);
@@ -28,6 +29,26 @@ fn round_trip_editor_and_diff_tool() {
         reopened.get().diff_tool.as_deref(),
         Some("meld {left} {right}")
     );
+}
+
+/// SET-005 — the last update check time round-trips, and an older file without it still loads.
+#[test]
+fn last_update_check_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, r#"{ "editor": "/v" }"#).unwrap();
+    assert_eq!(SettingsStore::open(&path).get().last_update_check, None);
+
+    let store = SettingsStore::open(&path);
+    store
+        .set(Settings {
+            last_update_check: Some(1_794_328_406_642),
+            ..store.get()
+        })
+        .unwrap();
+    let reopened = SettingsStore::open(&path);
+    assert_eq!(reopened.get().last_update_check, Some(1_794_328_406_642));
+    assert_eq!(reopened.get().editor.as_deref(), Some("/v"));
 }
 
 /// SET-003 — a corrupt file yields the defaults.

@@ -17,6 +17,9 @@ pub struct Settings {
     /// Command line of the app used to compare two files, with `{left}`
     /// and `{right}` (see [`crate::difftools`]). Empty means the first one found.
     pub diff_tool: Option<String>,
+    /// When the app last looked for an update, in milliseconds since the Unix
+    /// epoch. The UI checks at most once a day.
+    pub last_update_check: Option<i64>,
 }
 
 pub struct SettingsStore {
