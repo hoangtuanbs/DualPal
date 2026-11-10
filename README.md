@@ -106,6 +106,7 @@ Add servers with **+** next to *Servers* in the sidebar.
 - **WebDAV** works with Nextcloud, ownCloud, NAS boxes and other WebDAV servers. Give the full address of the folder, e.g. `https://cloud.example.com/remote.php/dav/files/me` for Nextcloud, and your user name and password (or an app password).
 - **S3** works with Amazon S3 and S3-compatible services (MinIO, Cloudflare R2, Wasabi, Backblaze B2…). Give the bucket, region, access key and, for non-Amazon services, the endpoint URL; most self-hosted services also need *path-style addresses*.
 - Passwords, passphrases and secret keys are stored in the macOS Keychain or the Windows Credential Manager, never in Dual Pal's own files.
+- **Import from other apps**: in the server dialog, *Import from WinSCP, FileZilla or Cyberduck…* reads a WinSCP `.ini` export, FileZilla's `sitemanager.xml` or a Cyberduck `.duck` bookmark file. You see the servers found and why any were skipped, then tick the ones to add. Passwords are kept in the system keychain only when the export holds one that can be read; otherwise the server is added without one. Dual Pal never reads or changes the other app's files.
 - Press ★ while browsing a server to add that folder to the server's own favorites, shown under it in the sidebar.
 - Copy and move work between any two panes: local ↔ server, server ↔ server.
 - **Edit** (F4) or double-click opens a server file in an app; each save is uploaded back. Set the app with **Editor…** in the toolbar. The *Editing* bar shows the files being watched.

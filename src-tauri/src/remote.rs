@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use dualpal_core::connections::{self, ConnectOptions, Connection, RemoteFavorite, SecretStore};
+use dualpal_core::import::{self, ImportReport};
 use dualpal_core::remote_edit::{self, EditSession};
 use dualpal_core::settings::Settings;
 use dualpal_core::vfs::{LocalFs, SshConfigHost};
@@ -97,6 +98,19 @@ pub fn save_connection(
 ) -> CmdResult<ConnectionView> {
     let c = state.connections.save(connection, secret)?;
     Ok(view(&state, c))
+}
+
+/// Read the servers in another app's export (`source`: "winscp", "filezilla"
+/// or "cyberduck"). Nothing is saved here: the UI shows the report and saves
+/// the selected servers with `save_connection`.
+#[tauri::command]
+pub fn import_connections(source: String, text: String) -> CmdResult<ImportReport> {
+    match source.as_str() {
+        "winscp" => Ok(import::parse_winscp_ini(&text)),
+        "filezilla" => Ok(import::parse_filezilla_sitemanager(&text)),
+        "cyberduck" => Ok(import::parse_cyberduck_bookmarks(&text)),
+        other => Err(Error::Invalid(format!("unknown import source {other}"))),
+    }
 }
 
 #[tauri::command]

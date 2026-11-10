@@ -29,6 +29,7 @@
   import { copyText } from "./lib/about";
   import Sidebar from "./lib/Sidebar.svelte";
   import ConnectionDialog from "./lib/ConnectionDialog.svelte";
+  import ImportDialog from "./lib/ImportDialog.svelte";
   import EditSessions from "./lib/EditSessions.svelte";
   import { fsNames } from "./lib/fs-names.svelte";
   import { patternMatcher } from "./lib/fileTypes";
@@ -60,6 +61,8 @@
   let editSessions = $state<EditSession[]>([]);
   /** The connection being added (null) or edited; undefined when closed. */
   let editing = $state<Connection | null | undefined>(undefined);
+  /** The "Import servers" dialog, opened from the server form. */
+  let importing = $state(false);
 
   let operations = $state<OperationInfo[]>([]);
   // An update waits for queued and running file operations, and for saves
@@ -991,7 +994,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (frozen || menu || dialog || editing !== undefined || comparing || renaming || showPalette || showInsights || aboutPage) return;
+    if (frozen || menu || dialog || editing !== undefined || importing || comparing || renaming || showPalette || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -1402,7 +1405,19 @@
 {/if}
 
 {#if editing !== undefined}
-  <ConnectionDialog connection={editing} onsave={serverSaved} oncancel={() => (editing = undefined)} />
+  <ConnectionDialog
+    connection={editing}
+    onsave={serverSaved}
+    oncancel={() => (editing = undefined)}
+    onimport={() => {
+      editing = undefined;
+      importing = true;
+    }}
+  />
+{/if}
+
+{#if importing}
+  <ImportDialog onsaved={() => loadConnections()} onclose={() => (importing = false)} />
 {/if}
 
 <style>
