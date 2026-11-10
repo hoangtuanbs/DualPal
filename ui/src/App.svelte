@@ -62,8 +62,11 @@
   let editing = $state<Connection | null | undefined>(undefined);
 
   let operations = $state<OperationInfo[]>([]);
-  // An update waits for queued and running file operations.
-  updates.setBusyCheck(() => activeOperationCount(operations));
+  // An update waits for queued and running file operations, and for saves
+  // of files edited on a server that are still uploading.
+  updates.setBusyCheck(
+    () => activeOperationCount(operations) + editSessions.filter((s) => s.status === "uploading").length,
+  );
   let activity = $state<ActivityRecord[]>([]);
   /** The request behind each operation id, so a failed one can be retried. */
   const requests = new Map<string, Operation>();

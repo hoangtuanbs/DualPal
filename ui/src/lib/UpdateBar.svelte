@@ -20,7 +20,9 @@
 </script>
 
 {#if visible}
-  <div class="bar" role="status" aria-live="polite" data-testid="update-bar">
+  <!-- Keys pressed on the bar's buttons are theirs, not file pane shortcuts. -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div class="bar" role="status" aria-live="polite" data-testid="update-bar" onkeydown={(e) => e.stopPropagation()}>
     {#if updates.phase === "checking"}
       <span>Checking for updates…</span>
     {:else if updates.phase === "upToDate"}

@@ -142,6 +142,50 @@ describe("updates store", () => {
     expect(updates.waitingForOperations).toBe(false);
   });
 
+  it("leaves a running install alone when another check is asked for", async () => {
+    const update = fakeUpdate();
+    let finish = () => {};
+    update.download.mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)));
+    vi.mocked(check).mockResolvedValue(update as unknown as Update);
+    await updates.checkNow();
+    updates.setBusyCheck(() => 0);
+    const installing = updates.install();
+    vi.mocked(check).mockClear();
+
+    expect(await updates.checkNow()).toEqual({ kind: "available", version: "0.2.0" });
+    expect(check).not.toHaveBeenCalled();
+    expect(updates.phase).toBe("downloading");
+
+    finish();
+    await installing;
+    expect(update.install).toHaveBeenCalledOnce();
+  });
+
+  it("restarts only after work that began during the install has finished", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = fakeUpdate();
+      let busy = 0;
+      update.install.mockImplementation(async () => {
+        busy = 1;
+      });
+      vi.mocked(check).mockResolvedValue(update as unknown as Update);
+      await updates.checkNow();
+      updates.setBusyCheck(() => busy);
+
+      const installing = updates.install();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(relaunch).not.toHaveBeenCalled();
+
+      busy = 0;
+      await vi.advanceTimersByTimeAsync(600);
+      await installing;
+      expect(relaunch).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("downloads with progress, installs and relaunches when no operation is running", async () => {
     const update = fakeUpdate();
     vi.mocked(check).mockResolvedValue(update as unknown as Update);

@@ -6,6 +6,9 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { api, errorMessage } from "./api";
 import { isCheckDue, progressPercent } from "./updates";
 
+/** How often an installed update looks again for file work to finish before restarting. */
+const RESTART_POLL_MS = 500;
+
 export type UpdatePhase = "idle" | "checking" | "available" | "downloading" | "installing" | "upToDate" | "error";
 
 export type CheckOutcome = { kind: "available"; version: string } | { kind: "upToDate" };
@@ -22,7 +25,8 @@ class Updates {
   /** An install was asked for while file operations are running. */
   waitingForOperations = $state(false);
 
-  #downloaded = false;
+  /** The update whose download finished, so a retry does not fetch it again. */
+  #downloaded: Update | null = null;
   #busy: () => number = () => 0;
 
   /** How many file operations are running; the app sets this once. */
@@ -49,6 +53,10 @@ class Updates {
 
   /** A check the person asked for. Throws when the check fails. */
   async checkNow(): Promise<CheckOutcome> {
+    // An install is under way: leave it alone and report what it is installing.
+    if (this.update && (this.phase === "downloading" || this.phase === "installing")) {
+      return { kind: "available", version: this.update.version };
+    }
     this.phase = "checking";
     this.message = null;
     try {
@@ -90,7 +98,7 @@ class Updates {
     this.message = null;
     try {
       if (this.#holdForOperations(confirmed)) return;
-      if (!this.#downloaded) {
+      if (this.#downloaded !== update) {
         this.phase = "downloading";
         this.progress = 0;
         let total: number | null = null;
@@ -102,15 +110,19 @@ class Updates {
             this.progress = progressPercent(done, total);
           }
         });
-        this.#downloaded = true;
+        this.#downloaded = update;
       }
       // Operations may have started while the download ran.
       if (this.#holdForOperations(confirmed)) return;
       this.phase = "installing";
       await update.install();
+      // Work that began while the installer ran finishes before the restart.
+      while (!confirmed && this.#busy() > 0) await new Promise((r) => setTimeout(r, RESTART_POLL_MS));
       // macOS and Linux: the new version starts after a relaunch. Windows
       // quits while its installer runs, so this line is not reached there.
       await relaunch();
+      // Only reached if the restart did not happen: do not stay "installing".
+      this.phase = "idle";
     } catch (e) {
       this.phase = "error";
       this.message = `The update failed: ${errorMessage(e)}`;
@@ -124,7 +136,7 @@ class Updates {
     this.progress = null;
     this.dismissed = false;
     this.waitingForOperations = false;
-    this.#downloaded = false;
+    this.#downloaded = null;
   }
 
   #holdForOperations(confirmed: boolean): boolean {
