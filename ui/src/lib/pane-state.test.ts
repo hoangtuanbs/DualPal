@@ -254,6 +254,20 @@ describe("Folder sizes", () => {
     p.calculateSizes();
     await settle();
     expect(p.visible.map((e) => e.name)).toEqual(["b", "a"]);
+    // The cursor was on "a" and follows it to its new row.
+    expect(p.current?.name).toBe("a");
+  });
+
+  it("leaves links to folders out of the calculate-all, but sizes one when asked", async () => {
+    const mock = installMockBackend();
+    const link = { ...dir("link"), symlink: true };
+    const p = await pane([dir("real"), link]);
+
+    p.calculateSizes();
+    expect(mock.calls("folder_size").map((c) => (c.location as Location).path)).toEqual(["/dir/real"]);
+
+    p.calculateSizes([link]);
+    expect(mock.calls("folder_size")).toHaveLength(2);
   });
 
   it("drops the sizes and cancels the calculations in flight when the pane navigates", async () => {

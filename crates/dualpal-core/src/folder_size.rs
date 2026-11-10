@@ -27,7 +27,8 @@ pub struct FolderSize {
 ///
 /// Symbolic links are not followed: a link (even one to a folder) counts as
 /// one item with no bytes, so a link back up the tree cannot make the walk
-/// endless. A subfolder that cannot be read is counted in `skipped` and the
+/// endless. Only `location` itself may be a link to a folder, and is then
+/// followed, since the caller named it. A subfolder that cannot be read is counted in `skipped` and the
 /// walk goes on. Failing to read the folder itself is an error. The walk stops
 /// with [`Error::Cancelled`] once `cancel` is set.
 pub async fn calculate(
@@ -36,7 +37,11 @@ pub async fn calculate(
     cancel: &CancellationToken,
 ) -> Result<FolderSize> {
     let fs = registry.get(&location.fs)?;
-    if !fs.stat(&location.path).await?.is_dir() {
+    let root = tokio::select! {
+        r = fs.stat(&location.path) => r?,
+        _ = cancel.cancelled() => return Err(Error::Cancelled),
+    };
+    if !root.is_dir() {
         return Err(Error::Invalid(format!("not a folder: {}", location.path)));
     }
     let mut total = FolderSize::default();

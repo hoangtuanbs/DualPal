@@ -94,9 +94,11 @@ export class PaneState {
     return e.kind === "dir" ? (this.sizes.get(e.path)?.bytes ?? e.size) : e.size;
   }
 
-  /** Work out the size of these folders (default: every folder in the listing).
-   *  Entries that are not folders, or already known, are skipped. */
-  calculateSizes(folders: Entry[] = this.entries.filter((e) => e.kind === "dir")) {
+  /** Work out the size of these folders. The default is every folder in the
+   *  listing except links to folders, whose trees live elsewhere; a link is
+   *  only sized when asked for by name. Entries that are not folders, or
+   *  already known, are skipped. */
+  calculateSizes(folders: Entry[] = this.entries.filter((e) => e.kind === "dir" && !e.symlink)) {
     for (const e of folders) this.startSize(e);
   }
 
@@ -112,7 +114,11 @@ export class PaneState {
         if (epoch !== this.sizeEpoch) return;
         this.sizeRequests.delete(entry.path);
         this.sizing.delete(entry.path);
+        // Sorted by size, the new size can move rows: stay on the same entry.
+        const keep = this.current?.path;
         this.sizes.set(entry.path, size);
+        const idx = keep ? this.visible.findIndex((e) => e.path === keep) : -1;
+        if (idx >= 0) this.cursor = idx;
       },
       () => {
         // Cancelled, or the folder cannot be read: there is no size to show.
