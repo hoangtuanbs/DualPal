@@ -35,7 +35,7 @@ impl Default for SearchOptions {
 pub struct SearchResult {
     /// Matching entries, shallowest first.
     pub hits: Vec<Entry>,
-    /// True when `max_results` was reached and more matches may exist.
+    /// True when `max_results` was reached, so more matches may exist.
     pub truncated: bool,
     /// Subfolders that could not be read and were left out.
     pub skipped: u64,
@@ -63,6 +63,10 @@ pub async fn find_by_name(
     if query.trim().is_empty() {
         return Ok(result);
     }
+    if options.max_results == 0 {
+        result.truncated = true;
+        return Ok(result);
+    }
     // Breadth-first: a queue of (folder path, depth below the start).
     let mut queue = std::collections::VecDeque::from([(location.path.clone(), 0usize)]);
     let mut is_root = true;
@@ -85,11 +89,12 @@ pub async fn find_by_name(
         is_root = false;
         for e in entries {
             if name_matches(&e.name, query) {
+                result.hits.push(e.clone());
+                // Stop at the cap right away rather than looking for one more match.
                 if result.hits.len() >= options.max_results {
                     result.truncated = true;
                     return Ok(result);
                 }
-                result.hits.push(e.clone());
             }
             if e.kind == EntryKind::Dir && !e.symlink && depth < options.max_depth {
                 queue.push_back((e.path, depth + 1));

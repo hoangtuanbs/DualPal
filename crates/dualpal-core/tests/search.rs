@@ -66,6 +66,41 @@ async fn stops_at_max_results_and_says_so() {
 }
 
 #[tokio::test]
+async fn reaching_the_cap_stops_without_reading_more_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("report-1.txt"), "a").unwrap();
+    std::fs::write(root.join("report-2.txt"), "b").unwrap();
+    std::fs::create_dir(root.join("empty-of-matches")).unwrap();
+    let loc = Location::new(LocalFs::ID, root.to_string_lossy());
+    let opts = SearchOptions {
+        max_results: 2,
+        max_depth: 32,
+    };
+    let res = find_by_name(&registry(), &loc, "report", opts, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(res.hits.len(), 2);
+    assert!(res.truncated);
+    assert_eq!(res.skipped, 0);
+}
+
+#[tokio::test]
+async fn zero_cap_returns_truncated_at_once() {
+    let tmp = tree();
+    let loc = Location::new(LocalFs::ID, tmp.path().to_string_lossy());
+    let opts = SearchOptions {
+        max_results: 0,
+        max_depth: 32,
+    };
+    let res = find_by_name(&registry(), &loc, "report", opts, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(res.hits.is_empty());
+    assert!(res.truncated);
+}
+
+#[tokio::test]
 async fn max_depth_limits_descent() {
     let tmp = tree();
     let loc = Location::new(LocalFs::ID, tmp.path().to_string_lossy());
