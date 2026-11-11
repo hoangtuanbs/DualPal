@@ -158,3 +158,16 @@ describe("folder size API", () => {
     expect(mock.lastCall("cancel_folder_size")).toEqual({ request: 7 });
   });
 });
+
+describe("find files", () => {
+  it("searches names below a folder and cancels by id", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/d/": "", "/d/Report.txt": "x", "/d/sub/": "", "/d/sub/report-2.md": "y", "/d/other": "z" }));
+    const res = await api.findFiles({ fs: "local", path: "/d" }, "report", 9);
+    expect(res.hits.map((h) => h.name)).toEqual(["Report.txt", "report-2.md"]);
+    expect(mock.lastCall("find_files")).toEqual({ location: { fs: "local", path: "/d" }, query: "report", request: 9 });
+
+    await api.cancelFindFiles(9);
+    expect(mock.lastCall("cancel_find_files")).toEqual({ request: 9 });
+  });
+});

@@ -54,6 +54,8 @@ pub struct AppState {
     pub compare_cancel: Mutex<Option<CancellationToken>>,
     /// Folder size calculations that are running, by request id.
     pub folder_size_cancel: Mutex<HashMap<u64, CancellationToken>>,
+    /// Name searches that are running, by request id.
+    pub find_cancel: Mutex<HashMap<u64, CancellationToken>>,
 }
 
 /// Build the whole application state on `dirs`. The shell calls this with the
@@ -104,6 +106,7 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
         rename_presets,
         compare_cancel: Mutex::new(None),
         folder_size_cancel: Mutex::new(HashMap::new()),
+        find_cancel: Mutex::new(HashMap::new()),
     })
 }
 
@@ -183,6 +186,8 @@ pub const COMMANDS: &[&str] = &[
     "stat",
     "folder_size",
     "cancel_folder_size",
+    "find_files",
+    "cancel_find_files",
     "read_text",
     "write_text",
     "connections",
@@ -246,6 +251,8 @@ macro_rules! all_commands {
             commands::stat,
             commands::folder_size,
             commands::cancel_folder_size,
+            commands::find_files,
+            commands::cancel_find_files,
             commands::read_text,
             commands::write_text,
             remote::connections,

@@ -38,6 +38,15 @@ export interface FolderSize {
   skipped: number;
 }
 
+/** Name matches below a folder, from `find_files`. */
+export interface SearchResult {
+  hits: Entry[];
+  /** The result cap was reached, so more matches may exist. */
+  truncated: boolean;
+  /** Subfolders that could not be read and are not searched. */
+  skipped: number;
+}
+
 export type ConflictPolicy = "fail" | "skip" | "overwrite";
 
 export type Operation =
@@ -401,6 +410,10 @@ export const api = {
   /** Size of a folder. `request` names the calculation for `cancelFolderSize`. */
   folderSize: (location: Location, request: number) => invoke<FolderSize>("folder_size", { location, request }),
   cancelFolderSize: (request: number) => invoke<void>("cancel_folder_size", { request }),
+  /** Search names below `location`. `request` names the search for `cancelFindFiles`. */
+  findFiles: (location: Location, query: string, request: number) =>
+    invoke<SearchResult>("find_files", { location, query, request }),
+  cancelFindFiles: (request: number) => invoke<void>("cancel_find_files", { request }),
   readText: (location: Location, maxBytes: number) => invoke<TextFile>("read_text", { location, maxBytes }),
   writeText: (location: Location, text: string) => invoke<void>("write_text", { location, text }),
   connections: () => invoke<ConnectionView[]>("connections"),

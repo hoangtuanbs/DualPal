@@ -42,6 +42,8 @@ fn tested_commands() -> HashSet<&'static str> {
         "stat",
         "folder_size",
         "cancel_folder_size",
+        "find_files",
+        "cancel_find_files",
         "read_text",
         "write_text",
         "connections",
@@ -858,4 +860,41 @@ fn folder_size_totals_and_cancel() {
     assert_eq!(file_err["kind"], "invalid");
 
     call_ok(&app, "cancel_folder_size", json!({ "request": 99 }));
+}
+
+/// CMD-037 — find_files returns names that match below a folder, shallowest
+/// first; a blank query finds nothing; cancelling an unknown request is a no-op.
+#[test]
+fn find_files_matches_names_and_cancel() {
+    let TestApp { app, tmp } = app();
+    let dir = tmp.path().join("d");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("Report.txt"), "a").unwrap();
+    std::fs::write(dir.join("sub/report-2.md"), "b").unwrap();
+    std::fs::write(dir.join("other.txt"), "c").unwrap();
+
+    let found: Value = call(
+        &app,
+        "find_files",
+        json!({ "location": local(&dir.to_string_lossy()), "query": "REPORT", "request": 1 }),
+    )
+    .unwrap();
+    let names: Vec<&str> = found["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Report.txt", "report-2.md"]);
+    assert_eq!(found["truncated"], false);
+
+    let blank: Value = call(
+        &app,
+        "find_files",
+        json!({ "location": local(&dir.to_string_lossy()), "query": "  ", "request": 2 }),
+    )
+    .unwrap();
+    assert!(blank["hits"].as_array().unwrap().is_empty());
+
+    call_ok(&app, "cancel_find_files", json!({ "request": 99 }));
 }
