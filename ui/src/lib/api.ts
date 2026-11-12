@@ -47,6 +47,14 @@ export interface SearchResult {
   skipped: number;
 }
 
+/** Matches found so far by search `request` (`find-files-progress`). */
+export interface FindProgress {
+  request: number;
+  hits: Entry[];
+  /** Folders read so far. */
+  folders: number;
+}
+
 export type ConflictPolicy = "fail" | "skip" | "overwrite";
 
 export type Operation =
@@ -474,6 +482,9 @@ export const api = {
   syncFavorites: () => invoke<SyncFavorite[]>("sync_favorites"),
   saveSyncFavorite: (favorite: SyncFavorite) => invoke<SyncFavorite>("save_sync_favorite", { favorite }),
   removeSyncFavorite: (id: string) => invoke<void>("remove_sync_favorite", { id }),
+  /** Matches of a running `findFiles` search, as they are found. */
+  onFindProgress: (cb: (p: FindProgress) => void): Promise<UnlistenFn> =>
+    listen<FindProgress>("find-files-progress", (e) => cb(e.payload)),
   onCompareProgress: (cb: (p: { folders: number; current: string }) => void): Promise<UnlistenFn> =>
     listen<{ folders: number; current: string }>("compare-progress", (e) => cb(e.payload)),
   renamePreview: (rules: RenameRule[], inputs: RenameInput[], others: string[]) =>

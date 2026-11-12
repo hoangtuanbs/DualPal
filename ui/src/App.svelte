@@ -581,7 +581,7 @@
       { id: "multiRename", group: "File", title: "Multi Rename…", shortcut: "Shift+F2", run: multiRename },
       { id: "edit", group: "File", title: "Edit in Editor", shortcut: "F4", run: editInEditor },
       { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
-      { id: "find", group: "File", title: "Find files by name…", run: () => (showFind = true) },
+      { id: "find", group: "File", title: "Find files by name…", shortcut: `${MOD}Shift+F`, run: () => (showFind = true) },
       { id: "trash", group: "File", title: "Move to Trash", shortcut: "F8", run: trash },
       { id: "delete", group: "File", title: "Delete Permanently", shortcut: "Shift+Delete", run: remove },
       { id: "compareFolders", group: "Compare", title: "Compare & Sync Folders…", shortcut: `${MOD}Shift+Y`, run: compareFolders },
@@ -1001,6 +1001,11 @@
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
+      return e.preventDefault();
+    }
+    // Find files by name below the active folder.
+    if (cmd && e.shiftKey && e.key.toLowerCase() === "f") {
+      if (active.location) showFind = true;
       return e.preventDefault();
     }
     // Not from the quick editor, where the key belongs to the text being edited.

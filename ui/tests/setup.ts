@@ -7,6 +7,10 @@ import { afterEach } from "vitest";
 
 mockWindows("main");
 
+// jsdom has no layout, so it leaves out scrolling; the app calls it to keep
+// the active row or option in view.
+if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {};
+
 afterEach(() => {
   cleanup();
   clearMocks();
