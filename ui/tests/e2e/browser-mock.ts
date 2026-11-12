@@ -486,6 +486,8 @@ export function installBrowserMock(scenario: BrowserScenario) {
     open_path: () => null,
     preview_path: (a) => a.location.path,
     cancel_compare: () => null,
+    folder_size: () => ({ bytes: 0, files: 0, folders: 0, skipped: 0 }),
+    cancel_folder_size: () => null,
     run_sync: () => "op-1",
     forget_sync_history: () => null,
     compare_files: () => null,

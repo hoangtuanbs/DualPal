@@ -40,10 +40,15 @@ fn tested_commands() -> HashSet<&'static str> {
         "about_info",
         "open_url",
         "stat",
+        "folder_size",
+        "cancel_folder_size",
+        "find_files",
+        "cancel_find_files",
         "read_text",
         "write_text",
         "connections",
         "save_connection",
+        "import_connections",
         "remove_connection",
         "reorder_connections",
         "connect",
@@ -413,6 +418,46 @@ fn connections_never_include_secrets() {
     call_ok(&app, "remove_connection", json!({ "id": "c1" }));
     let list: Vec<Value> = call(&app, "connections", json!({})).unwrap();
     assert!(list.is_empty());
+}
+
+/// IMP-100 — `import_connections` reads each source and saves nothing itself.
+#[test]
+fn import_connections_reads_each_source() {
+    let TestApp { app, tmp: _tmp } = app();
+    let winscp = "[Sessions\\Work]\nHostName=files.example.com\nUserName=alice\nFSProtocol=1\n";
+    let report: Value = call(
+        &app,
+        "import_connections",
+        json!({ "source": "winscp", "text": winscp }),
+    )
+    .unwrap();
+    assert_eq!(report["connections"][0]["connection"]["name"], "Work");
+    assert_eq!(
+        report["connections"][0]["connection"]["endpoint"]["host"],
+        "files.example.com"
+    );
+    assert_eq!(report["connections"][0]["passwordMissing"], true);
+    assert!(report["skipped"].as_array().unwrap().is_empty());
+
+    // Nothing is saved until the UI calls save_connection.
+    let list: Vec<Value> = call(&app, "connections", json!({})).unwrap();
+    assert!(list.is_empty());
+
+    let cyberduck: Value = call(
+        &app,
+        "import_connections",
+        json!({ "source": "cyberduck", "text": "<plist><array></array></plist>" }),
+    )
+    .unwrap();
+    assert!(cyberduck["connections"].as_array().unwrap().is_empty());
+
+    let bad = call::<Value>(
+        &app,
+        "import_connections",
+        json!({ "source": "putty", "text": "" }),
+    )
+    .unwrap_err();
+    assert_eq!(bad["kind"], "invalid", "{bad}");
 }
 
 /// CMD-016/017 — connect with a real server (L3; skipped without one).
@@ -806,7 +851,9 @@ fn capability_permissions_are_reviewed() {
     let value: Value = serde_json::from_str(&text).unwrap();
     insta::assert_json_snapshot!(value["permissions"], @r###"
     [
-      "core:default"
+      "core:default",
+      "updater:default",
+      "process:allow-restart"
     ]
     "###);
 }
@@ -902,4 +949,72 @@ fn compare_files_downloads_remote_files_first() {
         assert!(p.is_absolute(), "{path} is a local path");
         assert_eq!(std::fs::read_to_string(p).unwrap(), want, "{path}");
     }
+
+/// CMD-036 — folder_size totals a folder; a file is an error; cancelling an
+/// unknown request is a no-op.
+#[test]
+fn folder_size_totals_and_cancel() {
+    let TestApp { app, tmp } = app();
+    let dir = tmp.path().join("d");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("a.txt"), "hello").unwrap();
+    std::fs::write(dir.join("sub/b.txt"), "xy").unwrap();
+
+    let size: Value = call(
+        &app,
+        "folder_size",
+        json!({ "location": local(&dir.to_string_lossy()), "request": 1 }),
+    )
+    .unwrap();
+    assert_eq!(size["bytes"], 7);
+    assert_eq!(size["files"], 2);
+    assert_eq!(size["folders"], 1);
+    assert_eq!(size["skipped"], 0);
+
+    let file_err = call::<Value>(
+        &app,
+        "folder_size",
+        json!({ "location": local(&dir.join("a.txt").to_string_lossy()), "request": 2 }),
+    )
+    .unwrap_err();
+    assert_eq!(file_err["kind"], "invalid");
+
+    call_ok(&app, "cancel_folder_size", json!({ "request": 99 }));
+}
+
+/// CMD-037 — find_files returns names that match below a folder, shallowest
+/// first; a blank query finds nothing; cancelling an unknown request is a no-op.
+#[test]
+fn find_files_matches_names_and_cancel() {
+    let TestApp { app, tmp } = app();
+    let dir = tmp.path().join("d");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("Report.txt"), "a").unwrap();
+    std::fs::write(dir.join("sub/report-2.md"), "b").unwrap();
+    std::fs::write(dir.join("other.txt"), "c").unwrap();
+
+    let found: Value = call(
+        &app,
+        "find_files",
+        json!({ "location": local(&dir.to_string_lossy()), "query": "REPORT", "request": 1 }),
+    )
+    .unwrap();
+    let names: Vec<&str> = found["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Report.txt", "report-2.md"]);
+    assert_eq!(found["truncated"], false);
+
+    let blank: Value = call(
+        &app,
+        "find_files",
+        json!({ "location": local(&dir.to_string_lossy()), "query": "  ", "request": 2 }),
+    )
+    .unwrap();
+    assert!(blank["hits"].as_array().unwrap().is_empty());
+
+    call_ok(&app, "cancel_find_files", json!({ "request": 99 }));
 }

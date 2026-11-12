@@ -52,6 +52,10 @@ pub struct AppState {
     pub rename_presets: RenamePresets,
     /// Stops the folder comparison that is running, if any.
     pub compare_cancel: Mutex<Option<CancellationToken>>,
+    /// Folder size calculations that are running, by request id.
+    pub folder_size_cancel: Mutex<HashMap<u64, CancellationToken>>,
+    /// Name searches that are running, by request id.
+    pub find_cancel: Mutex<HashMap<u64, CancellationToken>>,
 }
 
 /// Build the whole application state on `dirs`. The shell calls this with the
@@ -101,6 +105,8 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
         sync_favorites,
         rename_presets,
         compare_cancel: Mutex::new(None),
+        folder_size_cancel: Mutex::new(HashMap::new()),
+        find_cancel: Mutex::new(HashMap::new()),
     })
 }
 
@@ -178,10 +184,15 @@ pub const COMMANDS: &[&str] = &[
     "about_info",
     "open_url",
     "stat",
+    "folder_size",
+    "cancel_folder_size",
+    "find_files",
+    "cancel_find_files",
     "read_text",
     "write_text",
     "connections",
     "save_connection",
+    "import_connections",
     "remove_connection",
     "reorder_connections",
     "connect",
@@ -239,10 +250,15 @@ macro_rules! all_commands {
             commands::about_info,
             commands::open_url,
             commands::stat,
+            commands::folder_size,
+            commands::cancel_folder_size,
+            commands::find_files,
+            commands::cancel_find_files,
             commands::read_text,
             commands::write_text,
             remote::connections,
             remote::save_connection,
+            remote::import_connections,
             remote::remove_connection,
             remote::reorder_connections,
             remote::connect,
@@ -336,10 +352,20 @@ fn secrets_from_env() -> Arc<dyn SecretStore> {
     }
 }
 
+/// Plugins that exist only on desktop: in-app updates and relaunch after one.
+#[cfg(desktop)]
+fn desktop_plugins<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    #[cfg(desktop)]
+    let builder = desktop_plugins(builder);
+    builder
         .setup(|app| {
             let state = build_state(app_dirs(app)?, secrets_from_env())?;
             if let Some(ms) = env_ms("DUALPAL_LIVE_POLL_MS") {

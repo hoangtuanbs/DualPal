@@ -71,6 +71,8 @@ npm run test:unit                    # L5 UI unit/component tests
 | Enter | Open folder, or open file in its default app |
 | Backspace, Ctrl/⌘ ↑ | Enclosing folder |
 | Space / Insert | Mark item |
+| Space on a folder | Mark it and calculate its size (shown in the Size column and the Info panel) |
+| Alt Shift Enter | Calculate the sizes of all folders in the pane |
 | Shift ↑ / Shift ↓ | Mark the items the cursor passes |
 | Ctrl/⌘ A | Mark all |
 | Menu key / Shift F10 | Menu for the item under the cursor |
@@ -82,6 +84,8 @@ npm run test:unit                    # L5 UI unit/component tests
 | F8 / Delete | Move to Trash |
 | Shift F8 / Shift Delete | Delete permanently (asks first) |
 | + / − | Select / deselect by name pattern (e.g. `*.jpg; *.png`) |
+| Ctrl/⌘ F | Filter the list by name (`*` and `?` as wildcards); Enter moves to the list, Esc clears |
+| Ctrl/⌘ Shift F | Find files and folders by name below the current folder; matches appear as they are found |
 | Ctrl/⌘ 1 / Ctrl/⌘ 2 | List / icon view |
 | Ctrl/⌘ T, Ctrl/⌘ W | New tab / close tab |
 | Ctrl Tab, Ctrl Shift Tab | Next / previous tab |
@@ -103,6 +107,7 @@ Add servers with **+** next to *Servers* in the sidebar.
 - **WebDAV** works with Nextcloud, ownCloud, NAS boxes and other WebDAV servers. Give the full address of the folder, e.g. `https://cloud.example.com/remote.php/dav/files/me` for Nextcloud, and your user name and password (or an app password).
 - **S3** works with Amazon S3 and S3-compatible services (MinIO, Cloudflare R2, Wasabi, Backblaze B2…). Give the bucket, region, access key and, for non-Amazon services, the endpoint URL; most self-hosted services also need *path-style addresses*.
 - Passwords, passphrases and secret keys are stored in the macOS Keychain or the Windows Credential Manager, never in Dual Pal's own files.
+- **Import from other apps**: in the server dialog, *Import from WinSCP, FileZilla or Cyberduck…* reads a WinSCP `.ini` export, FileZilla's `sitemanager.xml` or a Cyberduck `.duck` bookmark file. You see the servers found and why any were skipped, then tick the ones to add. Passwords are kept in the system keychain only when the export holds one that can be read; otherwise the server is added without one. Dual Pal never reads or changes the other app's files.
 - Press ★ while browsing a server to add that folder to the server's own favorites, shown under it in the sidebar.
 - Copy and move work between any two panes: local ↔ server, server ↔ server.
 - **Edit** (F4) or double-click opens a server file in an app; each save is uploaded back. Set the app with **Editor…** in the toolbar. The *Editing* bar shows the files being watched.
@@ -149,6 +154,26 @@ Installers for each version are on the [Releases](https://github.com/hoangtuanbs
 - **macOS** — the `.dmg` runs on Apple Silicon and Intel. The app is not notarized yet, so after dragging it to Applications run `xattr -cr "/Applications/Dual Pal.app"` once.
 
 To publish a release, set `version` in `src-tauri/tauri.conf.json` and the root `Cargo.toml`, merge to `main`, then push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`. The **Build installers** workflow builds all platforms and creates the release.
+
+## Updates
+
+Dual Pal looks for a new release at most once a day, a few seconds after it starts, and shows a small bar when one is available. **Install and restart** downloads the update, installs it and relaunches the app. Installs wait while file operations are running; you can also choose **Check for Updates…** in the command palette (⇧⌘P) or the **About** window. A failed check at start-up is silent.
+
+Updates are read from `latest.json` on the newest GitHub release. Each one is verified against the public key built into the app, so only releases signed with the maintainer's key are installed.
+
+On Linux the update replaces the `.AppImage`. Installs from the `.deb` or `.rpm` are told about a new version but update through a new package from the Releases page.
+
+### Release signing setup
+
+For the maintainer, once per signing key:
+
+1. Generate a key pair on your computer: `npx tauri signer generate -w ~/.tauri/dualpal.key`. Enter a password when asked. Keep the private key file and the password safe; losing them means existing installs can no longer be updated with a new key.
+2. In the GitHub repository settings, add these **secrets** (Settings → Secrets and variables → Actions → Secrets):
+   - `TAURI_SIGNING_PRIVATE_KEY`: the full contents of the private key file, or its path on your computer if you run the build locally.
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the password you entered.
+3. Add this **variable** (the same page, Variables tab): `TAURI_UPDATER_PUBKEY`, set to the contents of the public key file (`~/.tauri/dualpal.key.pub`).
+
+Until the secret and the variable are set, the **Build installers** workflow builds without updater files and publishes no `latest.json`, so releases still publish normally and installed copies simply find no update. Once they are set, push a version tag as usual: the build then signs the installers, and the release gets the `.sig` files and `latest.json`. Versions installed before the updater existed have no update check, so they are updated once by hand.
 
 ## Test builds
 

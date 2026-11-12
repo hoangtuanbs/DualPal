@@ -5,11 +5,14 @@
 //! * [`ops`] — a background operation queue (copy, move, delete, rename,
 //!   create folder) that reports live progress and supports cancellation.
 //! * [`activity`] — a persistent log of finished operations.
+//! * [`folder_size`] — the total size and item counts of a folder.
+//! * [`search`] — find files by name below a folder.
 //! * [`connections`] — saved SFTP and S3 connections with their favorites.
 //! * [`remote_edit`] — edit remote files in a local app, uploading on save.
 //! * [`compare`] and [`sync`] — folder comparison and one- or two-way sync.
 //! * [`rename`] — Multi Rename rules and presets.
 //! * [`difftools`] — external file compare apps.
+//! * [`import`] — read saved servers from WinSCP, FileZilla and Cyberduck exports.
 //!
 //! Nothing in this crate depends on Tauri, so it can be tested on any OS and
 //! reused by other front ends (CLI, tests).
@@ -19,12 +22,15 @@ pub mod compare;
 pub mod connections;
 pub mod difftools;
 pub mod error;
+pub mod folder_size;
+pub mod import;
 pub mod launch_log;
 pub mod livesync;
 pub mod ops;
 pub mod places;
 pub mod remote_edit;
 pub mod rename;
+pub mod search;
 pub mod settings;
 pub mod sync;
 pub mod vfs;

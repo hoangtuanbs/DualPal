@@ -88,15 +88,48 @@ async fn mark_wsl_folder_links(entries: &mut [Entry]) {
     }
 }
 
+/// Read every entry of the folder `dir` in one blocking task, using the
+/// metadata that comes with the listing (on Windows it is part of the
+/// directory data, so no file is opened). Only symbolic links need another
+/// call, to learn what they point to. This keeps listing, and a name search
+/// over thousands of folders, fast.
+async fn read_entries(dir: PathBuf) -> std::io::Result<Vec<Entry>> {
+    tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        for de in std::fs::read_dir(&dir)? {
+            let de = de?;
+            // An entry can vanish between read_dir and stat; skip it.
+            let Ok(meta) = de.metadata() else { continue };
+            let path = de.path();
+            let target = if meta.file_type().is_symlink() {
+                std::fs::metadata(&path).ok()
+            } else {
+                None
+            };
+            out.push(entry_from(&path, meta, target));
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
 /// Build an entry from `symlink_metadata`, following the link (if any) to
 /// learn the target's kind and size.
 async fn entry_for(path: &Path, link_meta: Metadata) -> Entry {
-    let symlink = link_meta.file_type().is_symlink();
-    let meta = if symlink {
-        tokio::fs::metadata(path).await.unwrap_or(link_meta)
+    let target = if link_meta.file_type().is_symlink() {
+        tokio::fs::metadata(path).await.ok()
     } else {
-        link_meta
+        None
     };
+    entry_from(path, link_meta, target)
+}
+
+/// [`entry_for`] without waiting: `target` is the metadata of what a
+/// symbolic link points to, if `link_meta` is a link that could be followed.
+fn entry_from(path: &Path, link_meta: Metadata, target: Option<Metadata>) -> Entry {
+    let symlink = link_meta.file_type().is_symlink();
+    let meta = target.unwrap_or(link_meta);
     let ft = meta.file_type();
     let kind = if ft.is_dir() {
         EntryKind::Dir
@@ -160,25 +193,16 @@ impl FileSystem for LocalFs {
     }
 
     async fn list(&self, dir: &str) -> Result<Vec<Entry>> {
-        let mut rd = match tokio::fs::read_dir(dir).await {
-            Ok(rd) => rd,
+        let mut out = match read_entries(PathBuf::from(dir)).await {
+            Ok(entries) => entries,
             // A WSL link to a folder, which Windows can't follow: list its target.
             Err(e) => match super::wsl::resolve_dir(dir).await {
-                Some(target) => tokio::fs::read_dir(&target)
+                Some(target) => read_entries(PathBuf::from(target))
                     .await
                     .map_err(|_| Error::io(dir, e))?,
                 None => return Err(Error::io(dir, e)),
             },
         };
-        let mut out = Vec::new();
-        while let Some(de) = rd.next_entry().await.map_err(|e| Error::io(dir, e))? {
-            let path: PathBuf = de.path();
-            // An entry can vanish between read_dir and stat; skip it.
-            let Ok(meta) = tokio::fs::symlink_metadata(&path).await else {
-                continue;
-            };
-            out.push(entry_for(&path, meta).await);
-        }
         if super::wsl::split(dir).is_some() {
             mark_wsl_folder_links(&mut out).await;
         }

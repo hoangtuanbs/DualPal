@@ -29,6 +29,7 @@
   import { copyText } from "./lib/about";
   import Sidebar from "./lib/Sidebar.svelte";
   import ConnectionDialog from "./lib/ConnectionDialog.svelte";
+  import ImportDialog from "./lib/ImportDialog.svelte";
   import EditSessions from "./lib/EditSessions.svelte";
   import { fsNames } from "./lib/fs-names.svelte";
   import { patternMatcher } from "./lib/fileTypes";
@@ -36,10 +37,14 @@
   import CompareView from "./lib/CompareView.svelte";
   import MultiRename from "./lib/MultiRename.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
+  import FindDialog from "./lib/FindDialog.svelte";
   import Insights from "./lib/Insights.svelte";
   import Icon from "./lib/Icon.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
   import { emailSupport, openProjectPage } from "./lib/about";
+  import UpdateBar from "./lib/UpdateBar.svelte";
+  import { updates } from "./lib/updates.svelte";
+  import { UPDATE_CHECK_DELAY_MS, activeOperationCount } from "./lib/updates";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -57,8 +62,15 @@
   let editSessions = $state<EditSession[]>([]);
   /** The connection being added (null) or edited; undefined when closed. */
   let editing = $state<Connection | null | undefined>(undefined);
+  /** The "Import servers" dialog, opened from the server form. */
+  let importing = $state(false);
 
   let operations = $state<OperationInfo[]>([]);
+  // An update waits for queued and running file operations, and for saves
+  // of files edited on a server that are still uploading.
+  updates.setBusyCheck(
+    () => activeOperationCount(operations) + editSessions.filter((s) => s.status === "uploading").length,
+  );
   let activity = $state<ActivityRecord[]>([]);
   /** The request behind each operation id, so a failed one can be retried. */
   const requests = new Map<string, Operation>();
@@ -82,6 +94,7 @@
   let comparing = $state<{ left: Location; right: Location; favorite: SyncFavorite | null } | null>(null);
   let renaming = $state<{ items: Entry[]; folder: Location; others: string[] } | null>(null);
   let showPalette = $state(false);
+  let showFind = $state(false);
   let showInsights = $state(false);
   let aboutPage = $state<"about" | "donate" | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
@@ -132,11 +145,14 @@
     PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
     const timer = setInterval(() => api.volumes().then((v) => (volumes = v)), 15000);
+    // Look for a new release shortly after start, at most once a day (not in E2E tests).
+    const updateTimer = window.__DUALPAL_TEST__ ? undefined : setTimeout(() => updates.checkOnStartup(), UPDATE_CHECK_DELAY_MS);
     return () => {
       unlisten?.();
       unlistenEdits?.();
       unlistenLive?.();
       clearInterval(timer);
+      clearTimeout(updateTimer);
       PaneState.navigated = null;
     };
   });
@@ -565,6 +581,7 @@
       { id: "multiRename", group: "File", title: "Multi Rename…", shortcut: "Shift+F2", run: multiRename },
       { id: "edit", group: "File", title: "Edit in Editor", shortcut: "F4", run: editInEditor },
       { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
+      { id: "find", group: "File", title: "Find files by name…", shortcut: `${MOD}Shift+F`, run: () => (showFind = true) },
       { id: "trash", group: "File", title: "Move to Trash", shortcut: "F8", run: trash },
       { id: "delete", group: "File", title: "Delete Permanently", shortcut: "Shift+Delete", run: remove },
       { id: "compareFolders", group: "Compare", title: "Compare & Sync Folders…", shortcut: `${MOD}Shift+Y`, run: compareFolders },
@@ -580,7 +597,9 @@
       { id: "icons", group: "View", title: "Icon View", shortcut: `${MOD}2`, run: () => (active.view = "icons") },
       { id: "hidden", group: "View", title: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files", shortcut: `${MOD}Shift+.`, run: () => (active.showHidden = !active.showHidden) },
       { id: "info", group: "View", title: showInspector ? "Hide Info Panel" : "Show Info Panel", shortcut: `${MOD}I`, run: () => (showInspector = !showInspector) },
+      { id: "filter", group: "View", title: "Filter Items by Name", shortcut: `${MOD}F`, run: () => active.openFilter() },
       { id: "refresh", group: "View", title: "Refresh", shortcut: `${MOD}R`, run: () => active.refresh() },
+      { id: "folderSizes", group: "View", title: "Calculate Folder Sizes", shortcut: "Alt+Shift+Enter", run: () => active.calculateSizes() },
       { id: "newTab", group: "View", title: "New Tab", shortcut: `${MOD}T`, run: () => groups[activeIndex].newTab() },
       { id: "closeTab", group: "View", title: "Close Tab", shortcut: `${MOD}W`, run: () => groups[activeIndex].closeTab() },
       { id: "switch", group: "View", title: "Switch to Other Pane", shortcut: "Tab", run: () => (activeIndex = 1 - activeIndex) },
@@ -595,6 +614,7 @@
       { id: "donate", group: "Help", title: "Donate…", run: () => (aboutPage = "donate") },
       { id: "email", group: "Help", title: "Email Us…", run: () => emailSupport().catch((e) => (notice = errorMessage(e))) },
       { id: "github", group: "Help", title: "Dual Pal on GitHub", run: () => openProjectPage().catch((e) => (notice = errorMessage(e))) },
+      { id: "updates", group: "Help", title: "Check for Updates…", run: () => updates.checkNow().catch(() => {}) },
       { id: "clearOps", group: "Activity", title: "Clear Finished Operations", run: clearFinished },
       { id: "addServer", group: "Servers", title: "Add Server…", run: () => (editing = null) },
     ];
@@ -977,10 +997,20 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (frozen || menu || dialog || editing !== undefined || comparing || renaming || showPalette || showInsights || aboutPage) return;
+    if (frozen || menu || dialog || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
+      return e.preventDefault();
+    }
+    // Find files by name below the active folder.
+    if (cmd && e.shiftKey && e.key.toLowerCase() === "f") {
+      if (active.location) showFind = true;
+      return e.preventDefault();
+    }
+    // Not from the quick editor, where the key belongs to the text being edited.
+    if (cmd && !e.shiftKey && e.key.toLowerCase() === "f" && (e.target as HTMLElement | null)?.tagName !== "TEXTAREA") {
+      active.openFilter();
       return e.preventDefault();
     }
     // Typing in the quick editor or another field: leave keys alone.
@@ -990,6 +1020,10 @@
     const handled = () => e.preventDefault();
     const group = groups[activeIndex];
     const icons = active.view === "icons";
+    if (e.key === "Escape" && active.filterOpen) {
+      active.closeFilter();
+      return handled();
+    }
     if (e.ctrlKey && e.key === "Tab") {
       group.cycle(e.shiftKey ? -1 : 1);
       return handled();
@@ -1008,6 +1042,10 @@
     }
     if (mod && (e.key === "1" || e.key === "2")) {
       active.view = e.key === "1" ? "list" : "icons";
+      return handled();
+    }
+    if (e.altKey && e.shiftKey && e.key === "Enter") {
+      active.calculateSizes();
       return handled();
     }
     switch (e.key) {
@@ -1061,7 +1099,11 @@
         return handled();
       case " ":
       case "Insert":
-        if (active.current) active.toggle(active.current);
+        if (active.current) {
+          active.toggle(active.current);
+          // Space also works out the size of a folder, as in Total Commander.
+          if (e.key === " ") active.calculateSizes([active.current]);
+        }
         active.moveCursor(1);
         return handled();
       case "F2":
@@ -1269,6 +1311,7 @@
       <Inspector
         entry={active.current ?? null}
         fs={active.location?.fs ?? "local"}
+        folderSize={active.current?.kind === "dir" ? (active.sizes.get(active.current.path) ?? null) : null}
         onsetmode={(location, mode) => enqueue({ type: "setMode", location, mode })}
         onsaved={() => allPanes().forEach((p) => p.refresh())}
       />
@@ -1357,17 +1400,43 @@
 {#if showPalette}
   <CommandPalette {commands} onclose={() => (showPalette = false)} />
 {/if}
+{#if showFind && active.location}
+  <FindDialog
+    location={active.location}
+    onclose={() => (showFind = false)}
+    onopen={async (hit) => {
+      showFind = false;
+      const parent = await api.parentLocation({ fs: active.location!.fs, path: hit.path });
+      if (parent) await active.open(parent, { record: true, focusName: hit.name });
+    }}
+  />
+{/if}
 
 {#if aboutPage}
   <AboutDialog start={aboutPage} onclose={() => (aboutPage = null)} />
 {/if}
+
+<UpdateBar />
+
 
 {#if showInsights}
   <Insights {nameOf} onclose={() => (showInsights = false)} />
 {/if}
 
 {#if editing !== undefined}
-  <ConnectionDialog connection={editing} onsave={serverSaved} oncancel={() => (editing = undefined)} />
+  <ConnectionDialog
+    connection={editing}
+    onsave={serverSaved}
+    oncancel={() => (editing = undefined)}
+    onimport={() => {
+      editing = undefined;
+      importing = true;
+    }}
+  />
+{/if}
+
+{#if importing}
+  <ImportDialog onsaved={() => loadConnections()} onclose={() => (importing = false)} />
 {/if}
 
 <style>

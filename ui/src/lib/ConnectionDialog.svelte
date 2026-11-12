@@ -7,12 +7,15 @@
     connection,
     onsave,
     oncancel,
+    onimport,
   }: {
     /** The connection to edit, or null to add a new one. */
     connection: Connection | null;
     /** Saved; `connect` is true for "Connect". */
     onsave: (saved: Connection, connect: boolean) => void;
     oncancel: () => void;
+    /** Open the import dialog instead (add mode only). */
+    onimport?: () => void;
   } = $props();
 
   // svelte-ignore state_referenced_locally
@@ -187,6 +190,10 @@
       <button type="button" role="radio" aria-checked={type === "webDav"} onclick={() => choose("webDav")}>WebDAV</button>
       <button type="button" role="radio" aria-checked={type === "s3"} onclick={() => choose("s3")}>S3</button>
     </div>
+
+    {#if !start && onimport}
+      <button type="button" class="link" onclick={onimport}>Import from WinSCP, FileZilla or Cyberduck…</button>
+    {/if}
 
     {#if type === "sftp" && sshHosts.length > 0 && !start}
       <label class="row">
@@ -385,6 +392,16 @@
   .kind button {
     padding: 5px 12px;
     background: var(--control);
+  }
+  .link {
+    align-self: flex-start;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
   }
   .kind button[aria-checked="true"] {
     background: var(--accent);

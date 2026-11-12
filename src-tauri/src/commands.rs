@@ -1,5 +1,9 @@
+use dualpal_core::folder_size::FolderSize;
 use dualpal_core::places::Favorite;
-use dualpal_core::{ActivityRecord, Entry, Error, Location, Operation, OperationInfo};
+use dualpal_core::search::{SearchOptions, SearchResult};
+use dualpal_core::{
+    ActivityRecord, CancellationToken, Entry, Error, Location, Operation, OperationInfo,
+};
 use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
@@ -184,6 +188,97 @@ fn io_err(path: &str, e: std::io::Error) -> Error {
 #[tauri::command]
 pub async fn stat(state: State<'_, AppState>, location: Location) -> CmdResult<Entry> {
     state.registry.get(&location.fs)?.stat(&location.path).await
+}
+
+/// Total size and item counts of a folder. `request` names this calculation
+/// so that [`cancel_folder_size`] can stop it.
+#[tauri::command]
+pub async fn folder_size(
+    state: State<'_, AppState>,
+    location: Location,
+    request: u64,
+) -> CmdResult<FolderSize> {
+    let cancel = CancellationToken::new();
+    state
+        .folder_size_cancel
+        .lock()
+        .unwrap()
+        .insert(request, cancel.clone());
+    let result = dualpal_core::folder_size::calculate(&state.registry, &location, &cancel).await;
+    state.folder_size_cancel.lock().unwrap().remove(&request);
+    result
+}
+
+/// Stop the folder size calculation `request`. Does nothing if it has finished.
+#[tauri::command]
+pub fn cancel_folder_size(state: State<'_, AppState>, request: u64) {
+    if let Some(c) = state.folder_size_cancel.lock().unwrap().remove(&request) {
+        c.cancel();
+    }
+}
+
+/// Matches found so far by search `request`, sent as `find-files-progress`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FindProgress {
+    request: u64,
+    hits: Vec<Entry>,
+    folders: u64,
+}
+
+/// Find files and folders named like `query` below `location`. `request`
+/// names this search so that [`cancel_find_files`] can stop it. Matches are
+/// also sent as `find-files-progress` events while the search runs, so the
+/// first ones show before a large tree has been read.
+#[tauri::command]
+pub async fn find_files<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, AppState>,
+    location: Location,
+    query: String,
+    request: u64,
+) -> CmdResult<SearchResult> {
+    use tauri::Emitter;
+    let cancel = CancellationToken::new();
+    state
+        .find_cancel
+        .lock()
+        .unwrap()
+        .insert(request, cancel.clone());
+    // New matches go out at once; folder counts at most every 150 ms.
+    let mut last = std::time::Instant::now();
+    let result = dualpal_core::search::find_by_name_with(
+        &state.registry,
+        &location,
+        &query,
+        SearchOptions::default(),
+        &cancel,
+        |p| {
+            if p.hits.is_empty() && last.elapsed().as_millis() < 150 {
+                return;
+            }
+            last = std::time::Instant::now();
+            let _ = app.emit(
+                "find-files-progress",
+                FindProgress {
+                    request,
+                    hits: p.hits,
+                    folders: p.folders,
+                },
+            );
+        },
+    )
+    .await;
+    state.find_cancel.lock().unwrap().remove(&request);
+    result
+}
+
+/// Stop the name search `request`. Does nothing if it has finished.
+#[tauri::command]
+pub fn cancel_find_files(state: State<'_, AppState>, request: u64) {
+    if let Some(c) = state.find_cancel.lock().unwrap().remove(&request) {
+        c.cancel();
+    }
 }
 
 #[tauri::command]

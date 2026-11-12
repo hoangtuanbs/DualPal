@@ -12,6 +12,7 @@ import type {
   Insights,
   Location,
   OperationInfo,
+  Settings,
   SyncPreview,
   Volume,
 } from "../../src/lib/api";
@@ -102,7 +103,7 @@ export interface Scenario {
   favorites: Favorite[];
   connections: ConnectionView[];
   volumes: Volume[];
-  settings: { editor: string | null; diffTool: string | null };
+  settings: Settings;
   activity: ActivityRecord[];
 }
 
@@ -157,7 +158,7 @@ export interface MockHandle {
   setTree(fs: string, entries: Tree): void;
   removeFolder(path: string): void;
   completeAll(): void;
-  setSettings(settings: { editor: string | null; diffTool: string | null }): void;
+  setSettings(settings: Settings): void;
 }
 
 type Handler = (args: any, state: State) => unknown;
@@ -306,6 +307,41 @@ const handlers: Record<string, Handler> = {
   open_url: () => null,
   open_path: () => null,
   cancel_compare: () => null,
+  folder_size: (a, s) => {
+    const loc: Location = a.location;
+    const t = s.scenario.trees[loc.fs] ?? s.scenario.trees.local;
+    const here = t.get(loc.path);
+    if (!here || here.kind !== "dir") throw { kind: "invalid", message: `not a folder: ${loc.path}` };
+    const prefix = loc.path === "/" ? "/" : `${loc.path}/`;
+    const total = { bytes: 0, files: 0, folders: 0, skipped: 0 };
+    for (const [p, e] of t) {
+      if (p === loc.path || !p.startsWith(prefix)) continue;
+      if (e.kind === "dir") total.folders++;
+      else {
+        total.files++;
+        total.bytes += e.size;
+      }
+    }
+    return total;
+  },
+  cancel_folder_size: () => null,
+  find_files: (a, s) => {
+    const loc: Location = a.location;
+    const t = s.scenario.trees[loc.fs] ?? s.scenario.trees.local;
+    const here = t.get(loc.path);
+    if (!here || here.kind !== "dir") throw { kind: "notFound", message: `not found: ${loc.path}` };
+    const q = String(a.query).trim().toLowerCase();
+    const prefix = loc.path === "/" ? "/" : `${loc.path}/`;
+    const hits: Entry[] = [];
+    if (q) {
+      // Shallowest first, like the core search.
+      const depth = (p: string) => p.split("/").length;
+      const sorted = [...t.entries()].filter(([p]) => p !== loc.path && p.startsWith(prefix)).sort((x, y) => depth(x[0]) - depth(y[0]));
+      for (const [, e] of sorted) if (e.name.toLowerCase().includes(q)) hits.push({ ...e });
+    }
+    return { hits, truncated: false, skipped: 0 };
+  },
+  cancel_find_files: () => null,
   run_sync: () => "op-1",
   forget_sync_history: () => null,
   live_sync_start: (a) => ({
