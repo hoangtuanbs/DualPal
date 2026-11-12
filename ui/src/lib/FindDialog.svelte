@@ -94,7 +94,7 @@
         Searching…
       {:else if result}
         {result.hits.length} {result.hits.length === 1 ? "match" : "matches"}
-        {#if result.truncated}· first {result.hits.length} shown{/if}
+        {#if result.truncated}· stopped early, more may match{/if}
         {#if result.skipped}· {result.skipped} folders could not be read{/if}
       {:else}
         Type part of a name. Enter opens the selected match.
@@ -124,6 +124,7 @@
     position: fixed;
     inset: 0;
     background: rgb(0 0 0 / 0.25);
+    height: 100%;
     display: flex;
     justify-content: center;
     padding-top: 12vh;
@@ -134,7 +135,7 @@
     max-height: 70vh;
     display: flex;
     flex-direction: column;
-    background: var(--surface, #fff);
+    background: var(--pane-bg, #fff);
     color: var(--text, #111);
     border: 1px solid var(--border, #ccc);
     border-radius: 8px;
@@ -155,7 +156,7 @@
     color: var(--muted, #555);
   }
   .error {
-    color: var(--danger, #b00020);
+    color: var(--danger, #d70015);
   }
   .hits {
     list-style: none;
@@ -170,7 +171,7 @@
     cursor: pointer;
   }
   li.active {
-    background: var(--accent-soft, #e6f0ff);
+    background: color-mix(in srgb, var(--accent, #0a6cff) 16%, var(--pane-bg, #fff));
   }
   .path {
     font-size: 0.8em;

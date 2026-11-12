@@ -57,6 +57,7 @@ async fn stops_at_max_results_and_says_so() {
     let opts = SearchOptions {
         max_results: 2,
         max_depth: 32,
+        max_millis: 10_000,
     };
     let res = find_by_name(&registry(), &loc, "report", opts, &CancellationToken::new())
         .await
@@ -76,6 +77,7 @@ async fn reaching_the_cap_stops_without_reading_more_folders() {
     let opts = SearchOptions {
         max_results: 2,
         max_depth: 32,
+        max_millis: 10_000,
     };
     let res = find_by_name(&registry(), &loc, "report", opts, &CancellationToken::new())
         .await
@@ -92,6 +94,7 @@ async fn zero_cap_returns_truncated_at_once() {
     let opts = SearchOptions {
         max_results: 0,
         max_depth: 32,
+        max_millis: 10_000,
     };
     let res = find_by_name(&registry(), &loc, "report", opts, &CancellationToken::new())
         .await
@@ -107,6 +110,7 @@ async fn max_depth_limits_descent() {
     let opts = SearchOptions {
         max_results: 100,
         max_depth: 1,
+        max_millis: 10_000,
     };
     let res = find_by_name(&registry(), &loc, "report", opts, &CancellationToken::new())
         .await
@@ -161,6 +165,21 @@ async fn cancelled_search_returns_cancelled() {
     )
     .await;
     assert!(matches!(res, Err(Error::Cancelled)));
+}
+
+#[tokio::test]
+async fn time_budget_stops_the_walk_and_says_so() {
+    let tmp = tree();
+    let loc = Location::new(LocalFs::ID, tmp.path().to_string_lossy());
+    let opts = SearchOptions {
+        max_millis: 0,
+        ..SearchOptions::default()
+    };
+    let res = find_by_name(&registry(), &loc, "report", opts, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(res.truncated);
+    assert!(res.hits.is_empty());
 }
 
 #[cfg(unix)]

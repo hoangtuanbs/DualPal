@@ -18,6 +18,9 @@ pub struct SearchOptions {
     pub max_results: usize,
     /// Do not descend deeper than this many folder levels below the start.
     pub max_depth: usize,
+    /// Stop after this many milliseconds, returning what was found so far
+    /// with `truncated` set. Keeps a search of a huge tree from hanging.
+    pub max_millis: u64,
 }
 
 impl Default for SearchOptions {
@@ -25,6 +28,7 @@ impl Default for SearchOptions {
         Self {
             max_results: 1000,
             max_depth: 32,
+            max_millis: 10_000,
         }
     }
 }
@@ -67,12 +71,17 @@ pub async fn find_by_name(
         result.truncated = true;
         return Ok(result);
     }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(options.max_millis);
     // Breadth-first: a queue of (folder path, depth below the start).
     let mut queue = std::collections::VecDeque::from([(location.path.clone(), 0usize)]);
     let mut is_root = true;
     while let Some((dir, depth)) = queue.pop_front() {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
+        }
+        if std::time::Instant::now() >= deadline {
+            result.truncated = true;
+            return Ok(result);
         }
         let listing = tokio::select! {
             r = fs.list(&dir) => r,
