@@ -46,6 +46,9 @@
 
   const MODE: Record<string, string> = { update: "→", mirror: "⇥", twoWay: "⇄" };
 
+  /** The server row picked with a single click; a double-click connects. */
+  let selectedServer = $state<string | null>(null);
+
   /** Connections whose favorites are folded away. */
   let collapsed = $state<Record<string, boolean>>({});
 
@@ -168,8 +171,14 @@
       role="button"
       tabindex="0"
       aria-busy={connecting[c.id] ? "true" : undefined}
-      title={connecting[c.id] ? `Connecting to ${serverTitle(c)}…` : serverTitle(c)}
-      onclick={() => onconnect(c)}
+      class:selected={selectedServer === c.id}
+      title={connecting[c.id] ? `Connecting to ${serverTitle(c)}…` : `${serverTitle(c)}\nDouble-click to connect`}
+      onclick={() => (selectedServer = c.id)}
+      ondblclick={(e) => {
+        // A quick second click on Edit or Disconnect is not a request to connect.
+        if ((e.target as Element).closest("button")) return;
+        onconnect(c);
+      }}
       onkeydown={(e) => e.key === "Enter" && onconnect(c)}
     >
       {#if c.favorites.length > 0}
@@ -307,6 +316,9 @@
   .item.current {
     background: var(--control-hover);
     font-weight: 500;
+  }
+  .item.selected:not(.current) {
+    background: var(--control);
   }
   .item.drag-over {
     box-shadow: inset 0 2px 0 var(--accent);

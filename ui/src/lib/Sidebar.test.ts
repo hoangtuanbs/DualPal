@@ -119,7 +119,28 @@ describe("UI-CMP-010 Sidebar", () => {
     const row = screen.getByText("Server a").closest(".item")!;
     expect(row).toHaveAttribute("aria-busy", "true");
     expect(screen.getByText("Server b").closest(".item")).not.toHaveAttribute("aria-busy");
-    await user.click(screen.getByText("Server b"));
+    await user.dblClick(screen.getByText("Server b"));
     expect(p.onconnect).toHaveBeenCalledWith(expect.objectContaining({ id: "b" }));
+  });
+
+  it("connects a server on double-click or Enter; a single click only selects it", async () => {
+    const user = userEvent.setup();
+    const p = setup([server("a", false)]);
+    const item = screen.getByText("Server a").closest(".item")!;
+    await user.click(item);
+    expect(item).toHaveClass("selected");
+    expect(p.onconnect).not.toHaveBeenCalled();
+    await user.dblClick(item);
+    expect(p.onconnect).toHaveBeenCalledTimes(1);
+    await user.keyboard("{Enter}");
+    expect(p.onconnect).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not connect when Edit or Remove is double-clicked", async () => {
+    const user = userEvent.setup();
+    const p = setup([server("a", false)]);
+    await user.dblClick(screen.getByRole("button", { name: "Edit Server a" }));
+    await user.dblClick(screen.getByRole("button", { name: "Remove Server a" }));
+    expect(p.onconnect).not.toHaveBeenCalled();
   });
 });
