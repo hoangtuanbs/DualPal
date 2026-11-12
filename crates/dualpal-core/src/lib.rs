@@ -11,6 +11,7 @@
 //! * [`compare`] and [`sync`] — folder comparison and one- or two-way sync.
 //! * [`rename`] — Multi Rename rules and presets.
 //! * [`difftools`] — external file compare apps.
+//! * [`import`] — read saved servers from WinSCP, FileZilla and Cyberduck exports.
 //!
 //! Nothing in this crate depends on Tauri, so it can be tested on any OS and
 //! reused by other front ends (CLI, tests).
@@ -21,6 +22,7 @@ pub mod connections;
 pub mod difftools;
 pub mod error;
 pub mod folder_size;
+pub mod import;
 pub mod launch_log;
 pub mod livesync;
 pub mod ops;
