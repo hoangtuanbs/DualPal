@@ -38,6 +38,10 @@ const COVERED_BY: Record<string, string> = {
   "Ctrl/⌘ Shift Y": "UI-KEY-026",
   "Ctrl/⌘ Shift D": "UI-KEY-027",
   "Ctrl/⌘ Shift L": "UI-KEY-028",
+  "Ctrl/⌘ Shift F": "UI-KEY-031",
+  "Space on a folder": "UI-KEY-032",
+  "Alt Shift Enter": "UI-KEY-033",
+  "Ctrl/⌘ F": "UI-KEY-034",
 };
 
 const root = join(here, "..", "..", "..");

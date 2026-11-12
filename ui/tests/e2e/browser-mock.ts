@@ -316,6 +316,18 @@ export function installBrowserMock(scenario: BrowserScenario) {
     ],
     home_location: () => ({ fs: "local", path: scenario.home }),
     list_dir: (a) => fsOf(a.location.fs).list(a.location.path),
+    find_files: (a) => {
+      const t = fsOf(a.location.fs);
+      if (!t.dirs.has(a.location.path)) throw t.notFound(a.location.path);
+      const q = String(a.query).trim().toLowerCase();
+      const hits = q
+        ? t.subtree(a.location.path)
+            .filter(([rel]) => rel !== "" && t.base(rel).toLowerCase().includes(q))
+            .map(([rel]) => t.entry(a.location.path + rel))
+        : [];
+      return { hits, truncated: false, skipped: 0 };
+    },
+    cancel_find_files: () => null,
     parent_location: (a) => {
       const up = fsOf(a.location.fs).parent(a.location.path);
       return up === null ? null : { fs: a.location.fs, path: up };

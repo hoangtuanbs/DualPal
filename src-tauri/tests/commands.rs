@@ -949,6 +949,7 @@ fn compare_files_downloads_remote_files_first() {
         assert!(p.is_absolute(), "{path} is a local path");
         assert_eq!(std::fs::read_to_string(p).unwrap(), want, "{path}");
     }
+}
 
 /// CMD-036 — folder_size totals a folder; a file is an error; cancelling an
 /// unknown request is a no-op.

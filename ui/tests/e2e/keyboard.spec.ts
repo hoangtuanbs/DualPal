@@ -374,6 +374,57 @@ test.describe("UI-KEY keyboard", () => {
     await expect(row(page, "right", "docs")).toBeVisible();
   });
 
+  test("UI-KEY-031 Ctrl/Cmd Shift F finds files by name below the folder", async ({ page }) => {
+    await start(page);
+    await page.keyboard.press(`${MOD}+Shift+f`);
+    const find = page.getByRole("dialog", { name: "Find files" });
+    await expect(find).toBeVisible();
+    const field = find.getByRole("textbox", { name: "Find files named" });
+    await expect(field).toBeFocused();
+    await field.fill("notes");
+    await expect.poll(async () => (await calls(page, "find_files")).map((a) => [a.location.path, a.query])).toContainEqual([
+      "/home/user",
+      "notes",
+    ]);
+    await expect(find.getByRole("option", { name: /notes\.txt/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(find).toHaveCount(0);
+  });
+
+  test("UI-KEY-032 Space on a folder marks it and calculates its size", async ({ page }) => {
+    await start(page);
+    await point(page, "left", "docs");
+    await clearCalls(page);
+    await page.keyboard.press(" ");
+    expect(await marked(page, "left")).toContain("docs");
+    await expect.poll(async () => (await calls(page, "folder_size")).map((a) => a.location.path)).toEqual([
+      "/home/user/docs",
+    ]);
+  });
+
+  test("UI-KEY-033 Alt Shift Enter calculates the size of every folder in the pane", async ({ page }) => {
+    await start(page);
+    await page.keyboard.press("Alt+Shift+Enter");
+    await expect
+      .poll(async () => (await calls(page, "folder_size")).map((a) => a.location.path))
+      .toContain("/home/user/docs");
+    // Files are not sized.
+    const paths = (await calls(page, "folder_size")).map((a) => a.location.path);
+    expect(paths).not.toContain("/home/user/a.txt");
+  });
+
+  test("UI-KEY-034 Ctrl/Cmd F filters the list by name; Esc clears it", async ({ page }) => {
+    await start(page);
+    await page.keyboard.press(`${MOD}+f`);
+    const filter = page.getByTestId("pane-left-filter");
+    await expect(filter).toBeFocused();
+    await filter.fill("a*");
+    await expect(row(page, "left", "a.txt")).toBeVisible();
+    await expect(row(page, "left", "b.txt")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(row(page, "left", "b.txt")).toBeVisible();
+  });
+
   test("UI-KEY-029 shortcuts are ignored while typing in a field", async ({ page }) => {
     await start(page);
     await page.keyboard.press("F2");

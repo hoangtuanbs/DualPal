@@ -23,7 +23,7 @@ function setup(e: Entry | null, texts: Record<string, { text: string; truncated?
     cmd === "read_text" ? Promise.resolve().then(() => reads(args.location.path)) : orig(cmd, args, opts))(
     (globalThis as any).__TAURI_INTERNALS__.invoke,
   );
-  const props = { entry: e, fs: "local", onsetmode: vi.fn(), onsaved: vi.fn() };
+  const props = { entry: e, fs: "local", folderSize: null, onsetmode: vi.fn(), onsaved: vi.fn() };
   const r = render(Inspector, { props });
   return { mock, props, ...r };
 }
