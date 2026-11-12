@@ -10,6 +10,7 @@
     onremovefavorite,
     onreorder,
     connections,
+    connecting = {},
     onconnect,
     onaddserver,
     oneditserver,
@@ -28,6 +29,8 @@
     onremovefavorite: (location: Location) => void;
     onreorder: (from: number, to: number) => void;
     connections: ConnectionView[];
+    /** Ids of servers that are connecting right now. */
+    connecting?: Record<string, boolean>;
     /** Connect if needed and open `path` (or the start folder). */
     onconnect: (c: ConnectionView, path?: string) => void;
     onaddserver: () => void;
@@ -164,7 +167,8 @@
       class:current={current?.fs === c.fsId}
       role="button"
       tabindex="0"
-      title={serverTitle(c)}
+      aria-busy={connecting[c.id] ? "true" : undefined}
+      title={connecting[c.id] ? `Connecting to ${serverTitle(c)}…` : serverTitle(c)}
       onclick={() => onconnect(c)}
       onkeydown={(e) => e.key === "Enter" && onconnect(c)}
     >
@@ -181,7 +185,9 @@
       {/if}
       <span class="icon" aria-hidden="true">{serverIcon(c)}</span>
       <span class="name">{c.name}</span>
-      {#if c.connected}<span class="dot" title="Connected" aria-label="Connected"></span>{/if}
+      {#if connecting[c.id]}
+        <span class="spinner" role="status" aria-label="Connecting"></span>
+      {:else if c.connected}<span class="dot" title="Connected" aria-label="Connected"></span>{/if}
       <span class="actions">
         <button
           title="Edit server"
@@ -369,6 +375,27 @@
     border-radius: 50%;
     background: var(--success);
     flex-shrink: 0;
+  }
+  .spinner {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid var(--muted);
+    border-top-color: transparent;
+    flex-shrink: 0;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+      border-top-color: var(--muted);
+      opacity: 0.6;
+    }
   }
   .actions {
     display: none;

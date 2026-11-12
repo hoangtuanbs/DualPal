@@ -275,6 +275,9 @@
 
   // ---- servers --------------------------------------------------------------
 
+  /** Servers with a connection attempt in flight, shown as "Connecting…". */
+  let connecting = $state<Record<string, boolean>>({});
+
   async function loadConnections() {
     connections = await api.connections();
     for (const c of connections) fsNames[c.fsId] = c.name;
@@ -298,7 +301,11 @@
     after: (start: Location) => Promise<void> | void,
     opts: { secret?: string; remember?: boolean; trust?: string } = {},
   ) {
+    // A second click while the first is still connecting would start another
+    // handshake and stack up password prompts.
+    if (connecting[c.id]) return;
     notice = null;
+    connecting[c.id] = true;
     try {
       const r = await api.connect(c.id, opts);
       fsNames[c.fsId] = c.name;
@@ -356,6 +363,8 @@
       } else {
         notice = errorMessage(e);
       }
+    } finally {
+      delete connecting[c.id];
     }
   }
 
@@ -1282,6 +1291,7 @@
       onremovefavorite={async (loc) => (favorites = await api.removeFavorite(loc))}
       onreorder={async (from, to) => (favorites = await api.reorderFavorites(from, to))}
       {connections}
+      {connecting}
       onconnect={(c, path) => connectTo(c, path)}
       onaddserver={() => (editing = null)}
       oneditserver={(c) => (editing = c)}

@@ -176,6 +176,15 @@ export function installBrowserMock(scenario: BrowserScenario) {
     holdOps: false,
     /** Extra settings for the next server added through save_connection. */
     newServer: null as null | Partial<ServerScenario>,
+    /** Keep `connect` calls waiting until the test calls `__mock.releaseConnects()`. */
+    holdConnect: false,
+  };
+  /** Held `connect` calls, run when released. */
+  let heldConnects: (() => void)[] = [];
+  const releaseConnects = () => {
+    const held = heldConnects;
+    heldConnects = [];
+    held.forEach((run) => run());
   };
 
   /** A small stand-in for the Rust rename engine: Replace and Case rules. */
@@ -376,26 +385,18 @@ export function installBrowserMock(scenario: BrowserScenario) {
     },
     reorder_connections: () => null,
     connect: (a) => {
-      const s = server(a.id);
-      const host = s.connection.endpoint.host ?? s.connection.endpoint.url ?? s.connection.name;
-      if (s.hostKeyChanged) {
-        throw {
-          kind: "hostKeyChanged",
-          message: `the host key of ${host} has changed (now ${s.fingerprint}); this could be an attack`,
-          host,
-          fingerprint: s.fingerprint,
-        };
+      if (control.holdConnect) {
+        return new Promise((resolve, reject) =>
+          heldConnects.push(() => {
+            try {
+              resolve(connectNow(a));
+            } catch (e) {
+              reject(e);
+            }
+          }),
+        );
       }
-      if (!s.trusted) {
-        if (a.trust && a.trust === s.fingerprint) s.trusted = true;
-        else throw { kind: "unknownHost", message: `unknown host ${host}, key fingerprint ${s.fingerprint}`, host, fingerprint: s.fingerprint };
-      }
-      if (s.password && !s.remembered && a.secret !== s.password) {
-        throw { kind: "authFailed", message: "sign-in failed: wrong user name or password" };
-      }
-      if (a.remember) s.remembered = true;
-      s.connected = true;
-      return { location: { fs: fsId(s.connection.id), path: s.start ?? s.connection.initialPath ?? "/" }, name: s.connection.name };
+      return connectNow(a);
     },
     disconnect: (a) => {
       const s = servers.get(a.id);
@@ -518,6 +519,29 @@ export function installBrowserMock(scenario: BrowserScenario) {
     },
   };
 
+  const connectNow = (a: any) => {
+    const s = server(a.id);
+    const host = s.connection.endpoint.host ?? s.connection.endpoint.url ?? s.connection.name;
+    if (s.hostKeyChanged) {
+      throw {
+        kind: "hostKeyChanged",
+        message: `the host key of ${host} has changed (now ${s.fingerprint}); this could be an attack`,
+        host,
+        fingerprint: s.fingerprint,
+      };
+    }
+    if (!s.trusted) {
+      if (a.trust && a.trust === s.fingerprint) s.trusted = true;
+      else throw { kind: "unknownHost", message: `unknown host ${host}, key fingerprint ${s.fingerprint}`, host, fingerprint: s.fingerprint };
+    }
+    if (s.password && !s.remembered && a.secret !== s.password) {
+      throw { kind: "authFailed", message: "sign-in failed: wrong user name or password" };
+    }
+    if (a.remember) s.remembered = true;
+    s.connected = true;
+    return { location: { fs: fsId(s.connection.id), path: s.start ?? s.connection.initialPath ?? "/" }, name: s.connection.name };
+  };
+
   const invoke = (cmd: string, args: any) => {
     if (!cmd.startsWith("plugin:event|")) calls.push({ cmd, args: JSON.parse(JSON.stringify(args ?? {})) });
     const failure = scenario.failures?.[cmd];
@@ -537,6 +561,7 @@ export function installBrowserMock(scenario: BrowserScenario) {
     calls,
     emit,
     control,
+    releaseConnects,
     handlers,
     finishOp,
     servers,

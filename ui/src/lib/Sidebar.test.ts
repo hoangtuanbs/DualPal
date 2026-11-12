@@ -35,7 +35,7 @@ const sync = {
   options: {},
 } as unknown as SyncFavorite;
 
-function setup(connections: ConnectionView[]) {
+function setup(connections: ConnectionView[], connecting: Record<string, boolean> = {}) {
   const props = {
     volumes: [volume],
     favorites: [favorite],
@@ -44,6 +44,7 @@ function setup(connections: ConnectionView[]) {
     onremovefavorite: vi.fn(),
     onreorder: vi.fn(),
     connections,
+    connecting,
     onconnect: vi.fn(),
     onaddserver: vi.fn(),
     oneditserver: vi.fn(),
@@ -108,5 +109,17 @@ describe("UI-CMP-010 Sidebar", () => {
     expect(p.onopensync).not.toHaveBeenCalled();
     await user.click(screen.getByText("Photos backup"));
     expect(p.onopensync).toHaveBeenCalledWith(sync);
+  });
+
+  it("shows a server that is connecting as busy, instead of the connected dot", async () => {
+    const user = userEvent.setup();
+    const p = setup([server("a", true), server("b", false)], { a: true });
+    expect(screen.getByRole("status", { name: "Connecting" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Connected")).toBeNull();
+    const row = screen.getByText("Server a").closest(".item")!;
+    expect(row).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByText("Server b").closest(".item")).not.toHaveAttribute("aria-busy");
+    await user.click(screen.getByText("Server b"));
+    expect(p.onconnect).toHaveBeenCalledWith(expect.objectContaining({ id: "b" }));
   });
 });

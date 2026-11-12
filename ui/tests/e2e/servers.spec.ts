@@ -151,6 +151,21 @@ test.describe("UI-E2E servers", () => {
     await expect(form.getByLabel("User")).toHaveValue("me");
   });
 
+  test("a click on a server shows it connecting, and a second click does not connect again", async ({ page }) => {
+    await withServers(page, sftp());
+    await control(page, { holdConnect: true });
+    await serverItem(page, "Build box").click();
+    await expect(serverItem(page, "Build box")).toHaveAttribute("aria-busy", "true");
+    await expect(serverItem(page, "Build box").getByRole("status", { name: "Connecting" })).toBeVisible();
+    await serverItem(page, "Build box").click();
+    expect(await calls(page, "connect")).toHaveLength(1);
+
+    await page.evaluate(() => (window as any).__mock.releaseConnects());
+    await expect(row(page, "left", "app")).toBeVisible();
+    await expect(serverItem(page, "Build box")).not.toHaveAttribute("aria-busy");
+    await expect(serverItem(page, "Build box").getByLabel("Connected")).toBeVisible();
+  });
+
   test("UI-E2E-013 ★ on a server folder saves it under the server; disconnect sends panes home", async ({ page }) => {
     await withServers(page, sftp());
     await serverItem(page, "Build box").click();
