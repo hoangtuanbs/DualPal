@@ -13,6 +13,9 @@ jobs:
   flake-hunt:
     name: Flake hunt (REL-001)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - name: Linux system libraries
@@ -30,7 +33,30 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Playwright repeat-each
-        run: npx playwright test --repeat-each 3 --project=chromium
+        if: always()
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-report.json
+        run: npx playwright test --repeat-each 3 --project=chromium --reporter=list,json
+      # Tests that passed only on a retry (Rust) or on some repeats (UI) go to
+      # the job summary and to one open "Flaky tests" issue.
+      - name: Report flaky tests
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          report="$(node scripts/ci/flaky-report.mjs --junit target/nextest/nightly/junit.xml --playwright playwright-report.json)"
+          if [ -z "$report" ]; then
+            echo "No flaky tests tonight." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          { echo "## Flaky tests"; echo; echo "$report"; } >> "$GITHUB_STEP_SUMMARY"
+          body="$(printf 'Nightly run %s/%s/actions/runs/%s found:\n\n%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$report")"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search '"Flaky tests" in:title' --json number --jq '.[0].number')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Flaky tests" --body "$body"
+          fi
 
   remote-chaos:
     name: Remote under latency (REL-002)
@@ -74,18 +100,25 @@ jobs:
         run: cargo bench -p dualpal-core
 
   upgrade:
-    name: Upgrade from the last release
+    name: Upgrade from the last release (INS-LNX-004)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Download the latest release installers
-        run: |
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir prev
+      - name: Download the last release and the newest main build
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install previous, then the new build
+          GH_TOKEN: ${{ github.token }}
         run: |
-          sudo apt-get install -y ./prev/*.deb
-          # The new .deb is produced by the Build installers workflow and
-          # downloaded here in a real pipeline.
-          echo "upgrade check placeholder"
+          mkdir -p prev installers
+          if ! gh release download --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir prev; then
+            echo "no release yet: nothing to upgrade from" >> "$GITHUB_STEP_SUMMARY"
+            echo "SKIP_UPGRADE=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          gh run download "$run" --repo "$GITHUB_REPOSITORY" --name DualPal-Linux --dir installers
+          find installers -mindepth 2 -type f -exec mv {} installers/ \;
+      - name: Install the last release, then upgrade
+        if: env.SKIP_UPGRADE != '1'
+        run: |
+          export DUALPAL_PREVIOUS_DEB="$(ls "$PWD"/prev/*.deb | head -n 1)"
+          bash scripts/installer-tests/linux.sh installers

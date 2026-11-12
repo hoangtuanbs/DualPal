@@ -31,4 +31,16 @@ plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist" | grep -q 
 # INS-MAC-003: ad-hoc signature is valid.
 codesign --verify --deep --strict "$app"
 
+# INS-MAC-005: after clearing the quarantine flag (what users are told to do
+# for an unsigned app), it launches and stays up for 10 s.
+copy="$(mktemp -d)/Dual Pal.app"
+cp -R "$app" "$copy"
+xattr -cr "$copy"
+tmp="$(mktemp -d)"
+DUALPAL_DATA_DIR="$tmp/data" DUALPAL_CACHE_DIR="$tmp/cache" DUALPAL_HOME="$tmp/home" DUALPAL_SECRETS=memory   "$copy/Contents/MacOS/dualpal" &
+pid=$!
+sleep 10
+kill -0 "$pid" || { echo "app exited early"; exit 1; }
+kill "$pid" 2>/dev/null || true
+
 echo "macos installer checks passed"

@@ -75,12 +75,8 @@ jobs:
       - name: Check the version matches the tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
-        run: |
-          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in tauri.conf.json"
-            exit 1
-          fi
+        # INS-001 and INS-REL-001: the versions agree and match the tag.
+        run: bash scripts/release/check-version.sh "$GITHUB_REF_NAME"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -97,6 +93,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/release
+
       - uses: actions/download-artifact@v4
         with:
           path: installers
@@ -108,7 +108,7 @@ jobs:
         run: |
           # Artifacts keep their bundle subfolders (msi/, nsis/, deb/...),
           # so collect the installer files from every level.
-          mapfile -t files < <(find installers -type f)
+          mapfile -t files < <(bash scripts/release/collect-installers.sh installers)
           printf '%s\n' "${files[@]}"
           gh release create "$GITHUB_REF_NAME" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
