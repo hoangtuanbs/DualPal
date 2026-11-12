@@ -126,9 +126,18 @@ test.describe("UI-MOUSE mouse", () => {
       ["compress", "/home/user/c.zip"],
     ]);
 
-    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    // WebKit can't be granted clipboard permissions, so record what the app
+    // writes instead of reading the system clipboard back.
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__copied = [];
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (t: string) => void w.__copied.push(t) },
+      });
+    });
     await choose("readme.md", "Copy Path");
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("/home/user/readme.md");
+    await expect.poll(() => page.evaluate(() => (window as any).__copied)).toEqual(["/home/user/readme.md"]);
 
     await clearCalls(page);
     await choose("readme.md", /Move to Trash/);
