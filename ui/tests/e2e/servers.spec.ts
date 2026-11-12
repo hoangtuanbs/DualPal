@@ -252,6 +252,30 @@ test.describe("UI-E2E servers", () => {
     expect((await calls(page, "connect")).map((c) => c.id)).toEqual(["build"]);
     await expect.poll(async () => (await calls(page, "sync_plan"))[0]?.left).toEqual({ fs: "conn:build", path: "/srv" });
   });
+
+  test("a saved sync opened while its server is still connecting waits for it and opens Compare", async ({ page }) => {
+    const deploy = {
+      id: "s1",
+      name: "Deploy",
+      left: { fs: "conn:build", path: "/srv" },
+      right: { fs: "local", path: "/home/user" },
+      mode: "update",
+      options: { by: "sizeAndDate", toleranceMs: 2000, exclude: [], includeHidden: true },
+    };
+    await openApp(page, {
+      ...defaultScenario,
+      servers: { build: sftp() },
+      results: { ...defaultScenario.results, sync_favorites: [deploy] },
+    });
+    await control(page, { holdConnect: true });
+    await serverItem(page, "Build box").dblclick();
+    await expect(serverItem(page, "Build box")).toHaveAttribute("aria-busy", "true");
+    await sidebar(page).locator(".item", { hasText: "Deploy" }).click();
+
+    await page.evaluate(() => (window as any).__mock.releaseConnects());
+    await expect(page.getByTestId("compare-view")).toBeVisible();
+    expect(await calls(page, "connect")).toHaveLength(1);
+  });
 });
 
 test.describe("UI-E2E Windows paths", () => {

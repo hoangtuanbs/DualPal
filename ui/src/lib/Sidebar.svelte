@@ -177,6 +177,8 @@
       ondblclick={(e) => {
         // A quick second click on Edit or Disconnect is not a request to connect.
         if ((e.target as Element).closest("button")) return;
+        // Already connecting: the pane opens when it is done.
+        if (connecting[c.id]) return;
         onconnect(c);
       }}
       onkeydown={(e) => e.key === "Enter" && onconnect(c)}
