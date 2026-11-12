@@ -784,6 +784,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-MOUSE-008 | external file drop (simulate Tauri drag-drop event) copies to target folder | P1 | mock emits `tauri://drag-drop` with paths |
 | UI-MOUSE-009 | column header click sorts, second click reverses | P1 | |
 | UI-MOUSE-010 | breadcrumb click navigates | P1 | |
+| UI-MOUSE-011 | dragging the divider between the panes resizes them; arrow keys on it move it; double-click evens them; the split survives a reload | P1 | |
 
 **Flows**
 
