@@ -6,6 +6,7 @@
 //!   create folder) that reports live progress and supports cancellation.
 //! * [`activity`] — a persistent log of finished operations.
 //! * [`folder_size`] — the total size and item counts of a folder.
+//! * [`search`] — find files by name below a folder.
 //! * [`connections`] — saved SFTP and S3 connections with their favorites.
 //! * [`remote_edit`] — edit remote files in a local app, uploading on save.
 //! * [`compare`] and [`sync`] — folder comparison and one- or two-way sync.
@@ -29,6 +30,7 @@ pub mod ops;
 pub mod places;
 pub mod remote_edit;
 pub mod rename;
+pub mod search;
 pub mod settings;
 pub mod sync;
 pub mod vfs;

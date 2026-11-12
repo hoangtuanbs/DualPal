@@ -37,6 +37,7 @@
   import CompareView from "./lib/CompareView.svelte";
   import MultiRename from "./lib/MultiRename.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
+  import FindDialog from "./lib/FindDialog.svelte";
   import Insights from "./lib/Insights.svelte";
   import Icon from "./lib/Icon.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
@@ -93,6 +94,7 @@
   let comparing = $state<{ left: Location; right: Location; favorite: SyncFavorite | null } | null>(null);
   let renaming = $state<{ items: Entry[]; folder: Location; others: string[] } | null>(null);
   let showPalette = $state(false);
+  let showFind = $state(false);
   let showInsights = $state(false);
   let aboutPage = $state<"about" | "donate" | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
@@ -579,6 +581,7 @@
       { id: "multiRename", group: "File", title: "Multi Rename…", shortcut: "Shift+F2", run: multiRename },
       { id: "edit", group: "File", title: "Edit in Editor", shortcut: "F4", run: editInEditor },
       { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
+      { id: "find", group: "File", title: "Find files by name…", shortcut: `${MOD}Shift+F`, run: () => (showFind = true) },
       { id: "trash", group: "File", title: "Move to Trash", shortcut: "F8", run: trash },
       { id: "delete", group: "File", title: "Delete Permanently", shortcut: "Shift+Delete", run: remove },
       { id: "compareFolders", group: "Compare", title: "Compare & Sync Folders…", shortcut: `${MOD}Shift+Y`, run: compareFolders },
@@ -994,10 +997,15 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (frozen || menu || dialog || editing !== undefined || importing || comparing || renaming || showPalette || showInsights || aboutPage) return;
+    if (frozen || menu || dialog || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
+      return e.preventDefault();
+    }
+    // Find files by name below the active folder.
+    if (cmd && e.shiftKey && e.key.toLowerCase() === "f") {
+      if (active.location) showFind = true;
       return e.preventDefault();
     }
     // Not from the quick editor, where the key belongs to the text being edited.
@@ -1391,6 +1399,17 @@
 
 {#if showPalette}
   <CommandPalette {commands} onclose={() => (showPalette = false)} />
+{/if}
+{#if showFind && active.location}
+  <FindDialog
+    location={active.location}
+    onclose={() => (showFind = false)}
+    onopen={async (hit) => {
+      showFind = false;
+      const parent = await api.parentLocation({ fs: active.location!.fs, path: hit.path });
+      if (parent) await active.open(parent, { record: true, focusName: hit.name });
+    }}
+  />
 {/if}
 
 {#if aboutPage}

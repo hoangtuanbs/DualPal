@@ -85,6 +85,7 @@ npm run test:unit                    # L5 UI unit/component tests
 | Shift F8 / Shift Delete | Delete permanently (asks first) |
 | + / − | Select / deselect by name pattern (e.g. `*.jpg; *.png`) |
 | Ctrl/⌘ F | Filter the list by name (`*` and `?` as wildcards); Enter moves to the list, Esc clears |
+| Ctrl/⌘ Shift F | Find files and folders by name below the current folder; matches appear as they are found |
 | Ctrl/⌘ 1 / Ctrl/⌘ 2 | List / icon view |
 | Ctrl/⌘ T, Ctrl/⌘ W | New tab / close tab |
 | Ctrl Tab, Ctrl Shift Tab | Next / previous tab |

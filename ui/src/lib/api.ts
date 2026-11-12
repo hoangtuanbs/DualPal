@@ -38,6 +38,23 @@ export interface FolderSize {
   skipped: number;
 }
 
+/** Name matches below a folder, from `find_files`. */
+export interface SearchResult {
+  hits: Entry[];
+  /** The result cap was reached, so more matches may exist. */
+  truncated: boolean;
+  /** Subfolders that could not be read and are not searched. */
+  skipped: number;
+}
+
+/** Matches found so far by search `request` (`find-files-progress`). */
+export interface FindProgress {
+  request: number;
+  hits: Entry[];
+  /** Folders read so far. */
+  folders: number;
+}
+
 export type ConflictPolicy = "fail" | "skip" | "overwrite";
 
 export type Operation =
@@ -423,6 +440,10 @@ export const api = {
   /** Size of a folder. `request` names the calculation for `cancelFolderSize`. */
   folderSize: (location: Location, request: number) => invoke<FolderSize>("folder_size", { location, request }),
   cancelFolderSize: (request: number) => invoke<void>("cancel_folder_size", { request }),
+  /** Search names below `location`. `request` names the search for `cancelFindFiles`. */
+  findFiles: (location: Location, query: string, request: number) =>
+    invoke<SearchResult>("find_files", { location, query, request }),
+  cancelFindFiles: (request: number) => invoke<void>("cancel_find_files", { request }),
   readText: (location: Location, maxBytes: number) => invoke<TextFile>("read_text", { location, maxBytes }),
   writeText: (location: Location, text: string) => invoke<void>("write_text", { location, text }),
   connections: () => invoke<ConnectionView[]>("connections"),
@@ -461,6 +482,9 @@ export const api = {
   syncFavorites: () => invoke<SyncFavorite[]>("sync_favorites"),
   saveSyncFavorite: (favorite: SyncFavorite) => invoke<SyncFavorite>("save_sync_favorite", { favorite }),
   removeSyncFavorite: (id: string) => invoke<void>("remove_sync_favorite", { id }),
+  /** Matches of a running `findFiles` search, as they are found. */
+  onFindProgress: (cb: (p: FindProgress) => void): Promise<UnlistenFn> =>
+    listen<FindProgress>("find-files-progress", (e) => cb(e.payload)),
   onCompareProgress: (cb: (p: { folders: number; current: string }) => void): Promise<UnlistenFn> =>
     listen<{ folders: number; current: string }>("compare-progress", (e) => cb(e.payload)),
   renamePreview: (rules: RenameRule[], inputs: RenameInput[], others: string[]) =>
