@@ -44,10 +44,10 @@ async function unreachable(page: Page) {
   const missing: string[] = [];
   for (const { label, title } of buttons) {
     // A shortcut in the tooltip, e.g. "(F5)" or "(Ctrl/⌘ Shift L)", counts.
-    if (/((Fd+|Ctrl|⌘|Shift|Alt)[^)]*)/.test(title) || /⇧|⌘/.test(title)) continue;
+    if (/\((F\d+|Ctrl|⌘|Shift|Alt)[^)]*\)/.test(title) || /⇧|⌘/.test(title)) continue;
     await input.fill(label);
     const titles = await palette.locator("li .title").allTextContents();
-    const words = label.toLowerCase().split(/s+/);
+    const words = label.toLowerCase().split(/\s+/);
     if (!titles.some((t) => words.every((w) => t.toLowerCase().includes(w)))) missing.push(label);
   }
   await page.keyboard.press("Escape");

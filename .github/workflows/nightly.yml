@@ -114,8 +114,11 @@ jobs:
             echo "SKIP_UPGRADE=1" >> "$GITHUB_ENV"
             exit 0
           fi
-          run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          read -r run sha < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --status success --limit 1 --json databaseId,headSha --jq '.[0] | "\(.databaseId) \(.headSha)"')
           gh run download "$run" --repo "$GITHUB_REPOSITORY" --name DualPal-Linux --dir installers
+          # Test with the scripts and version of the commit that build came from.
+          git fetch --depth 1 origin "$sha"
+          git checkout --detach FETCH_HEAD
           find installers -mindepth 2 -type f -exec mv {} installers/ \;
       - name: Install the last release, then upgrade
         if: env.SKIP_UPGRADE != '1'

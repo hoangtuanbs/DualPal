@@ -132,7 +132,9 @@ jobs:
         run: |
           # Artifacts keep their bundle subfolders (msi/, nsis/, deb/...),
           # so collect the installer files from every level.
-          mapfile -t files < <(bash scripts/release/collect-installers.sh installers)
+          # A plain assignment so the script failing (no installers) stops the step.
+          installer_list="$(bash scripts/release/collect-installers.sh installers)"
+          mapfile -t files <<< "$installer_list"
           printf '%s\n' "${files[@]}"
           gh release create "$GITHUB_REF_NAME" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \

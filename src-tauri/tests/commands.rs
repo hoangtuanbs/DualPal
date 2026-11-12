@@ -927,7 +927,7 @@ fn compare_files_downloads_remote_files_first() {
     call_ok(
         &app.app,
         "save_settings",
-        json!({ "settings": { "editor": null, "diffTool": "difftool {left} {right}" } }),
+        json!({ "settings": { "editor": null, "diffTool": "difftool {left} -- {right}" } }),
     );
     let result = call::<Value>(
         &app.app,
@@ -941,10 +941,11 @@ fn compare_files_downloads_remote_files_first() {
     result.unwrap();
 
     let line = std::fs::read_to_string(&log).unwrap();
-    let args: Vec<&str> = line.trim().split(' ').collect();
-    assert_eq!(args.len(), 3, "{line}");
-    assert_eq!(args[0], "difftool");
-    for (path, want) in [(args[1], "left side\n"), (args[2], "right side\n")] {
+    // The log joins argv with spaces, and temp paths may hold spaces too,
+    // so a `--` marker separates the two paths.
+    let rest = line.trim().strip_prefix("difftool ").expect(&line);
+    let (left, right) = rest.split_once(" -- ").expect(&line);
+    for (path, want) in [(left, "left side\n"), (right, "right side\n")] {
         let p = std::path::Path::new(path);
         assert!(p.is_absolute(), "{path} is a local path");
         assert_eq!(std::fs::read_to_string(p).unwrap(), want, "{path}");
