@@ -168,6 +168,28 @@ export interface ConnectionView extends Connection {
   fsId: string;
 }
 
+/** Apps that saved servers can be imported from. */
+export type ImportSource = "winscp" | "filezilla" | "cyberduck";
+
+export interface ImportedConnection {
+  /** Ready to save: the id is empty, so the store assigns one. */
+  connection: Connection;
+  /** Decoded password, to save with the connection. Null when the export had none. */
+  secret: string | null;
+  /** The connection needs a password that the export did not contain. */
+  passwordMissing: boolean;
+}
+
+export interface SkippedImport {
+  name: string;
+  reason: string;
+}
+
+export interface ImportReport {
+  connections: ImportedConnection[];
+  skipped: SkippedImport[];
+}
+
 export interface SshConfigHost {
   alias: string;
   hostName: string;
@@ -417,6 +439,8 @@ export const api = {
   readText: (location: Location, maxBytes: number) => invoke<TextFile>("read_text", { location, maxBytes }),
   writeText: (location: Location, text: string) => invoke<void>("write_text", { location, text }),
   connections: () => invoke<ConnectionView[]>("connections"),
+  importConnections: (source: ImportSource, text: string) =>
+    invoke<ImportReport>("import_connections", { source, text }),
   saveConnection: (connection: Connection, secret: string | null) =>
     invoke<ConnectionView>("save_connection", { connection, secret }),
   removeConnection: (id: string) => invoke<void>("remove_connection", { id }),

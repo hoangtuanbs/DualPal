@@ -48,6 +48,7 @@ fn tested_commands() -> HashSet<&'static str> {
         "write_text",
         "connections",
         "save_connection",
+        "import_connections",
         "remove_connection",
         "reorder_connections",
         "connect",
@@ -417,6 +418,46 @@ fn connections_never_include_secrets() {
     call_ok(&app, "remove_connection", json!({ "id": "c1" }));
     let list: Vec<Value> = call(&app, "connections", json!({})).unwrap();
     assert!(list.is_empty());
+}
+
+/// IMP-100 — `import_connections` reads each source and saves nothing itself.
+#[test]
+fn import_connections_reads_each_source() {
+    let TestApp { app, tmp: _tmp } = app();
+    let winscp = "[Sessions\\Work]\nHostName=files.example.com\nUserName=alice\nFSProtocol=1\n";
+    let report: Value = call(
+        &app,
+        "import_connections",
+        json!({ "source": "winscp", "text": winscp }),
+    )
+    .unwrap();
+    assert_eq!(report["connections"][0]["connection"]["name"], "Work");
+    assert_eq!(
+        report["connections"][0]["connection"]["endpoint"]["host"],
+        "files.example.com"
+    );
+    assert_eq!(report["connections"][0]["passwordMissing"], true);
+    assert!(report["skipped"].as_array().unwrap().is_empty());
+
+    // Nothing is saved until the UI calls save_connection.
+    let list: Vec<Value> = call(&app, "connections", json!({})).unwrap();
+    assert!(list.is_empty());
+
+    let cyberduck: Value = call(
+        &app,
+        "import_connections",
+        json!({ "source": "cyberduck", "text": "<plist><array></array></plist>" }),
+    )
+    .unwrap();
+    assert!(cyberduck["connections"].as_array().unwrap().is_empty());
+
+    let bad = call::<Value>(
+        &app,
+        "import_connections",
+        json!({ "source": "putty", "text": "" }),
+    )
+    .unwrap_err();
+    assert_eq!(bad["kind"], "invalid", "{bad}");
 }
 
 /// CMD-016/017 — connect with a real server (L3; skipped without one).
