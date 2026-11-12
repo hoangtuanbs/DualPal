@@ -316,7 +316,7 @@ fn favorites_crud() {
     assert!(!removed.iter().any(|f| f["name"] == "Work"));
 }
 
-/// CMD-011 — `open_path` / `open_url` record to the opener log; bad schemes refused.
+/// CMD-011, SEC-004 — `open_path` / `open_url` record to the opener log; bad schemes refused.
 #[test]
 fn open_path_and_open_url_use_the_log() {
     let _guard = common::ENV_LOCK.lock().unwrap();
@@ -841,7 +841,7 @@ fn live_sync_lifecycle() {
     assert!(after.is_none());
 }
 
-/// CMD-034 — the capability file grants only what the UI needs.
+/// CMD-034, SEC-005 — the capability file grants only what the UI needs.
 #[test]
 fn capability_permissions_are_reviewed() {
     let text = std::fs::read_to_string(
@@ -858,7 +858,7 @@ fn capability_permissions_are_reviewed() {
     "###);
 }
 
-/// CMD-035 — the CSP has no `unsafe-eval` and no remote origins.
+/// CMD-035, SEC-005 — the CSP has no `unsafe-eval` and no remote origins.
 #[test]
 fn csp_has_no_unsafe_eval_or_remote_origins() {
     let text = std::fs::read_to_string(
@@ -869,6 +869,87 @@ fn csp_has_no_unsafe_eval_or_remote_origins() {
     let csp = value["app"]["security"]["csp"].as_str().unwrap();
     assert!(!csp.contains("unsafe-eval"), "{csp}");
     assert!(!csp.contains("https://"), "{csp}");
+}
+
+/// CON-025 — disconnecting a connection unregisters its file system and ends
+/// the edit sessions open on it.
+#[test]
+fn disconnect_unregisters_the_fs_and_stops_its_edit_sessions() {
+    use tauri::Manager;
+    let TestApp { app, tmp: _tmp } = app();
+    let state = app.state::<dualpal_app::AppState>();
+    let fs_id = dualpal_core::connections::fs_id("server-1");
+    let mem = dualpal_testkit::MemFs::new(fs_id.clone());
+    mem.seed_file("/notes.txt", "remote notes");
+    state.registry.register(Arc::new(mem));
+    let session = tauri::async_runtime::block_on(
+        state
+            .editor
+            .start(dualpal_core::Location::new(fs_id.clone(), "/notes.txt")),
+    )
+    .unwrap();
+    assert!(state.registry.ids().contains(&fs_id));
+    assert_eq!(state.editor.list().len(), 1);
+
+    call_ok(&app, "disconnect", json!({ "id": "server-1" }));
+
+    assert!(
+        !state.registry.ids().contains(&fs_id),
+        "{:?}",
+        state.registry.ids()
+    );
+    assert!(
+        state.editor.list().iter().all(|s| s.id != session.id),
+        "the edit session on that server is stopped: {:?}",
+        state.editor.list()
+    );
+    assert!(
+        !std::path::Path::new(&session.local_path).exists(),
+        "an unchanged local copy is removed"
+    );
+}
+
+/// DIFF-006 — comparing two remote files downloads them first and hands the
+/// compare app two local paths holding the server contents.
+#[test]
+fn compare_files_downloads_remote_files_first() {
+    use tauri::Manager;
+    let _guard = common::ENV_LOCK.lock().unwrap();
+    let app = app();
+    let state = app.app.state::<dualpal_app::AppState>();
+    let mem = dualpal_testkit::MemFs::new("conn:diff");
+    mem.seed_file("/left.txt", "left side\n");
+    mem.seed_file("/right.txt", "right side\n");
+    state.registry.register(Arc::new(mem));
+
+    let log = app.tmp.path().join("diff.log");
+    std::env::set_var("DUALPAL_DIFF_TOOL_LOG", &log);
+    call_ok(
+        &app.app,
+        "save_settings",
+        json!({ "settings": { "editor": null, "diffTool": "difftool {left} -- {right}" } }),
+    );
+    let result = call::<Value>(
+        &app.app,
+        "compare_files",
+        json!({
+            "left": { "fs": "conn:diff", "path": "/left.txt" },
+            "right": { "fs": "conn:diff", "path": "/right.txt" },
+        }),
+    );
+    std::env::remove_var("DUALPAL_DIFF_TOOL_LOG");
+    result.unwrap();
+
+    let line = std::fs::read_to_string(&log).unwrap();
+    // The log joins argv with spaces, and temp paths may hold spaces too,
+    // so a `--` marker separates the two paths.
+    let rest = line.trim().strip_prefix("difftool ").expect(&line);
+    let (left, right) = rest.split_once(" -- ").expect(&line);
+    for (path, want) in [(left, "left side\n"), (right, "right side\n")] {
+        let p = std::path::Path::new(path);
+        assert!(p.is_absolute(), "{path} is a local path");
+        assert_eq!(std::fs::read_to_string(p).unwrap(), want, "{path}");
+    }
 }
 
 /// CMD-036 — folder_size totals a folder; a file is an error; cancelling an

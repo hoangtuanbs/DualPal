@@ -10,6 +10,9 @@ path = "junit.xml"
 [profile.nightly]
 retries = 2
 fail-fast = false
+# REL-001: tests that pass only on a retry are listed from this report.
+[profile.nightly.junit]
+path = "junit.xml"
 
 # Remote tests share servers: limit their parallelism.
 # Tests that run DUALPAL_TEST_SFTP_DROP or add a Toxiproxy toxic affect every

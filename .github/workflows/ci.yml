@@ -49,6 +49,14 @@ jobs:
       - name: Test ID traceability
         run: scripts/ci/trace-check.sh
 
+      # INS-001, INS-REL-001/002: version check and installer collection.
+      - name: Release scripts self-test
+        run: bash scripts/release/self-test.sh
+
+      # SEC-008: the test servers only listen on 127.0.0.1.
+      - name: Test servers bind to localhost
+        run: node scripts/ci/check-compose-ports.mjs
+
   rust:
     name: ${{ matrix.os }}
     strategy:

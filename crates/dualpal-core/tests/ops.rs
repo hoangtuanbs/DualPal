@@ -410,7 +410,7 @@ fn operation_json_shape() {
 }
 
 #[tokio::test]
-/// OPS-TRASH-001
+/// OPS-TRASH-001, VFS-LOC-003
 async fn moves_items_to_trash() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("trash-me.txt");
@@ -535,7 +535,7 @@ async fn reads_and_saves_text() {
 
 #[cfg(unix)]
 #[tokio::test]
-/// OPS-MODE-001
+/// OPS-MODE-001, VFS-TXT-005
 async fn changes_permissions_and_saving_keeps_them() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();

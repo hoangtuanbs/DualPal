@@ -1,0 +1,15 @@
+{
+  "_about": "A11Y-001 baseline: serious/critical axe violations that existed when the scan was added (2026-11-11). Key = screen name used in a11y.spec.ts, '*' = every screen. Remove an entry once it is fixed; a new violation fails the test.",
+  "_notes": {
+    "aria-input-field-name": "The pane lists (role=listbox) have no accessible name; e.g. aria-label=\"Left pane\".",
+    "aria-required-children": "The operations panel tab strip (role=tablist) also holds non-tab buttons (Clear finished, Insights).",
+    "color-contrast": "Muted text (inactive tab, empty-state text, palette group, column headers) is below 4.5:1.",
+    "label": "The prompt dialog's text input has no label tied to the dialog title.",
+    "select-name": "Multi Rename's '+ Add rule…' select has no accessible name."
+  },
+  "allow": {
+    "*": ["aria-input-field-name", "aria-required-children", "color-contrast"],
+    "dialog": ["label"],
+    "multi-rename": ["select-name"]
+  }
+}

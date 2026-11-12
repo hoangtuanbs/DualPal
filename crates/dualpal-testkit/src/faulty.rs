@@ -3,6 +3,7 @@
 //! rename that refuses to replace, or a one-off error on any call.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -58,6 +59,8 @@ struct State {
     /// 0 = use the wrapped backend.
     parallel: AtomicUsize,
     rename_replaces: AtomicBool,
+    /// How long every new writer waits before taking its first byte.
+    write_delay: Mutex<Option<Duration>>,
 }
 
 impl<F: FileSystem> FaultyFs<F> {
@@ -78,6 +81,7 @@ impl<F: FileSystem> FaultyFs<F> {
                 atomic: AtomicU64::new(0),
                 parallel: AtomicUsize::new(0),
                 rename_replaces: AtomicBool::new(true),
+                write_delay: Mutex::new(None),
             }),
         }
     }
@@ -114,6 +118,13 @@ impl<F: FileSystem> FaultyFs<F> {
     /// Sleep before every call of `op`.
     pub fn latency(&self, op: FaultOp, delay: Duration) {
         self.state.latency.lock().unwrap().insert(op, delay);
+    }
+
+    /// Every writer opened from now on holds off its first byte for `delay`,
+    /// so writers that start together are all open at the same time
+    /// (OPS-COPY-015 counts them without depending on disk speed).
+    pub fn slow_writes(&self, delay: Duration) {
+        *self.state.write_delay.lock().unwrap() = Some(delay);
     }
 
     /// Writers open right now (a file being copied is one writer).
@@ -190,8 +201,10 @@ impl<F: FileSystem> FaultyFs<F> {
     fn wrap_writer(&self, inner: Writer, budget: u64, path: &str) -> Writer {
         let n = self.state.open_writers.fetch_add(1, Ordering::SeqCst) + 1;
         self.state.most_writers.fetch_max(n, Ordering::SeqCst);
+        let delay = *self.state.write_delay.lock().unwrap();
         Box::new(CountingWriter {
             inner,
+            delay: delay.map(|d| Box::pin(tokio::time::sleep(d))),
             budget,
             state: self.state.clone(),
             path: path.to_string(),
@@ -208,6 +221,8 @@ impl<F: FileSystem> FaultyFs<F> {
 
 struct CountingWriter {
     inner: Writer,
+    /// Waited out before the first byte is written.
+    delay: Option<Pin<Box<tokio::time::Sleep>>>,
     budget: u64,
     state: Arc<State>,
     path: String,
@@ -225,6 +240,10 @@ impl AsyncWrite for CountingWriter {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
+        if let Some(d) = self.delay.as_mut() {
+            std::task::ready!(d.as_mut().poll(cx));
+            self.delay = None;
+        }
         if self.budget != NEVER {
             if self.budget == 0 {
                 return Poll::Ready(Err(std::io::Error::other(format!(
