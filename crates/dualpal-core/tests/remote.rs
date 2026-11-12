@@ -351,7 +351,7 @@ async fn sync_round_trip(fs: Arc<dyn FileSystem>, base: &str) {
 
 /// `DUALPAL_TEST_SFTP=user@host:port`, `DUALPAL_TEST_SFTP_KEY=/path/to/key`.
 #[tokio::test]
-/// CON-009
+/// CON-009, CON-011 (wrong password), CON-012 (key file)
 async fn sftp_backend_against_a_real_server() {
     let Some(target) = dualpal_testkit::remote_env("DUALPAL_TEST_SFTP") else {
         return;
@@ -686,7 +686,7 @@ async fn unsent_edits_survive_failures_and_restarts() {
 }
 
 #[test]
-/// VFS-PATH-001
+/// VFS-PATH-001, SEC-001 (path traversal from server names)
 fn server_names_cannot_escape_local_folders() {
     use dualpal_core::vfs::{is_safe_local_name, safe_local_name};
     assert!(is_safe_local_name("notes.txt"));
