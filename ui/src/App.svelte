@@ -45,7 +45,7 @@
   import UpdateBar from "./lib/UpdateBar.svelte";
   import { updates } from "./lib/updates.svelte";
   import { UPDATE_CHECK_DELAY_MS, activeOperationCount } from "./lib/updates";
-  import { SPLIT_DEFAULT, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
+  import { SPLIT_DEFAULT, clampSplit, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -58,6 +58,10 @@
   /** The left pane's share of the width; the divider between the panes moves it. */
   let split = $state(loadSplit());
   let panesEl = $state<HTMLElement>();
+  let splitterEl = $state<HTMLElement>();
+  let panesWidth = $state(0);
+  /** The split as drawn: the saved one, kept within the minimum pane width as the window or Info panel changes. */
+  const shownSplit = $derived(clampSplit(split, panesWidth));
   let resizing = $state(false);
 
   function splitDown(e: PointerEvent) {
@@ -78,7 +82,15 @@
     saveSplit(split);
   }
   function splitKey(e: KeyboardEvent) {
-    const next = splitForKey(split, e.key, e.shiftKey, panesEl?.getBoundingClientRect().width ?? 0);
+    // Tab and Esc hand the keyboard back to the panes. Tab switches panes
+    // everywhere else, so without this focus would stay on the divider.
+    if (e.key === "Tab" || e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      splitterEl?.blur();
+      return;
+    }
+    const next = splitForKey(shownSplit, e.key, e.shiftKey, panesWidth);
     if (next === null) return;
     // The divider's own keys: the panes' arrow-key handling must not see them.
     e.preventDefault();
@@ -640,6 +652,8 @@
       { id: "closeTab", group: "View", title: "Close Tab", shortcut: `${MOD}W`, run: () => groups[activeIndex].closeTab() },
       { id: "switch", group: "View", title: "Switch to Other Pane", shortcut: "Tab", run: () => (activeIndex = 1 - activeIndex) },
       { id: "swap", group: "View", title: "Swap Panes", run: swapPanes },
+      { id: "resizePanes", group: "View", title: "Resize Panes (← → to move, Tab when done)", run: () => splitterEl?.focus() },
+      { id: "evenPanes", group: "View", title: "Make Panes Equal Width", run: splitReset },
       { id: "same", group: "View", title: "Same Folder in Other Pane", run: sameFolderInOther },
       { id: "favorite", group: "Go", title: isFavorite ? "Remove Folder from Favorites" : "Add Folder to Favorites", run: toggleFavorite },
       { id: "back", group: "Go", title: "Back", run: () => active.back() },
@@ -1335,7 +1349,8 @@
       class="panes"
       class:resizing
       bind:this={panesEl}
-      style:grid-template-columns={`minmax(0, ${split}fr) 1px minmax(0, ${1 - split}fr)`}
+      bind:clientWidth={panesWidth}
+      style:grid-template-columns={`minmax(0, ${shownSplit}fr) 1px minmax(0, ${1 - shownSplit}fr)`}
     >
       {#each groups as group, i}
         {#if i === 1}
@@ -1348,10 +1363,11 @@
             aria-label="Resize panes"
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={Math.round(split * 100)}
+            aria-valuenow={Math.round(shownSplit * 100)}
             tabindex="0"
             title="Drag to resize the panes, double-click to make them equal"
             data-testid="pane-splitter"
+            bind:this={splitterEl}
             onpointerdown={splitDown}
             onpointermove={splitMove}
             onpointerup={splitUp}

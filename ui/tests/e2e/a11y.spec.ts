@@ -128,4 +128,33 @@ test.describe("A11Y", () => {
     await page.keyboard.press("ArrowDown");
     await expect(pane(page, "left").locator(".cursor")).toHaveAttribute("data-name", "b.txt");
   });
+
+  test("A11Y-004 the pane divider can be moved without the mouse, and Tab hands the keys back", async ({ page }) => {
+    await openApp(page);
+    await point(page, "left", "a.txt");
+    const splitter = page.getByTestId("pane-splitter");
+    await page.keyboard.press(`${MOD}+Shift+p`);
+    await page.getByTestId("palette").locator("input").fill("resize panes");
+    await page.keyboard.press("Enter");
+    await expect(splitter).toBeFocused();
+
+    await page.keyboard.press("ArrowLeft");
+    await expect(splitter).toHaveAttribute("aria-valuenow", "48");
+    await expect(pane(page, "left").locator(".cursor")).toHaveAttribute("data-name", "a.txt");
+
+    // Tab leaves the divider without switching panes; arrows move the file cursor again.
+    await page.keyboard.press("Tab");
+    await expect(splitter).not.toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(pane(page, "left").locator(".cursor")).toHaveAttribute("data-name", "b.txt");
+    await expect(splitter).toHaveAttribute("aria-valuenow", "48");
+
+    // A narrower window keeps both panes at their minimum width.
+    await splitter.focus();
+    await page.keyboard.press("Home");
+    const wide = Number(await splitter.getAttribute("aria-valuenow"));
+    await page.setViewportSize({ width: 900, height: 700 });
+    await expect.poll(async () => Number(await splitter.getAttribute("aria-valuenow"))).toBeGreaterThan(wide);
+    expect((await pane(page, "left").boundingBox())!.width).toBeGreaterThanOrEqual(159);
+  });
 });
