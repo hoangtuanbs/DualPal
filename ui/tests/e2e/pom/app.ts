@@ -46,3 +46,50 @@ export function dialog(page: Page) {
 export function ops(page: Page) {
   return page.getByTestId("ops-panel");
 }
+
+/** Arguments of every recorded call to `cmd`, oldest first. */
+export async function calls(page: Page, cmd: string): Promise<any[]> {
+  return page.evaluate(
+    (c) => (window as any).__mock.calls.filter((x: { cmd: string }) => x.cmd === c).map((x: { args: unknown }) => x.args),
+    cmd,
+  );
+}
+
+/** Forget the calls recorded so far (e.g. the startup listing). */
+export async function clearCalls(page: Page) {
+  await page.evaluate(() => ((window as any).__mock.calls.length = 0));
+}
+
+/** The `operation` argument of every `enqueue_operation` call. */
+export async function enqueued(page: Page): Promise<any[]> {
+  return (await calls(page, "enqueue_operation")).map((a) => a.operation);
+}
+
+/** Send a backend event to the app, as Tauri would. */
+export async function emit(page: Page, event: string, payload: unknown) {
+  await page.evaluate(([e, p]) => (window as any).__mock.emit(e, p), [event, payload] as const);
+}
+
+/** Steer the mock: e.g. `{ nextOpError: {...} }` or `{ holdOps: true }`. */
+export async function control(page: Page, values: Record<string, unknown>) {
+  await page.evaluate((v) => Object.assign((window as any).__mock.control, v), values);
+}
+
+/** Index of the row under the cursor in a pane, or -1. */
+export async function cursorIndex(page: Page, side: "left" | "right") {
+  const el = pane(page, side).locator(".cursor").first();
+  if ((await el.count()) === 0) return -1;
+  return Number(await el.getAttribute("data-index"));
+}
+
+/** Names of the marked rows in a pane. */
+export async function marked(page: Page, side: "left" | "right") {
+  return pane(page, side).locator('[aria-selected="true"][data-name]').evaluateAll((els) =>
+    els.map((e) => (e as HTMLElement).dataset.name!),
+  );
+}
+
+/** Put the cursor on a row by clicking it, leaving the focus on the pane. */
+export async function point(page: Page, side: "left" | "right", name: string) {
+  await row(page, side, name).click();
+}
