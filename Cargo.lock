@@ -1549,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "dualpal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dualpal-core",
  "dualpal-testkit",
@@ -1569,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "dualpal-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "async_zip",
@@ -1609,7 +1609,7 @@ dependencies = [
 
 [[package]]
 name = "dualpal-testkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "dualpal-core",
