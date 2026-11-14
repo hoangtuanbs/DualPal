@@ -359,6 +359,16 @@ test.describe("UI-KEY keyboard", () => {
     ]);
   });
 
+  test("UI-KEY-035 Ctrl/Cmd Shift T opens a terminal in the active pane's folder", async ({ page }) => {
+    await start(page);
+    await page.keyboard.press("Tab");
+    await row(page, "right", "docs").dblclick();
+    await expect(row(page, "right", "notes.txt")).toBeVisible();
+    await clearCalls(page);
+    await page.keyboard.press(`${MOD}+Shift+t`);
+    await expect.poll(() => calls(page, "open_terminal")).toEqual([{ location: { fs: "local", path: "/home/user/docs" } }]);
+  });
+
   test("UI-KEY-028 Ctrl/Cmd Shift L links browsing in both panes", async ({ page }) => {
     await start(page);
     await page.keyboard.press(`${MOD}+Shift+l`);

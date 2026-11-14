@@ -42,6 +42,7 @@ const COVERED_BY: Record<string, string> = {
   "Space on a folder": "UI-KEY-032",
   "Alt Shift Enter": "UI-KEY-033",
   "Ctrl/⌘ F": "UI-KEY-034",
+  "Ctrl/⌘ Shift T": "UI-KEY-035",
 };
 
 const root = join(here, "..", "..", "..");

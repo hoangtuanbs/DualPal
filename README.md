@@ -94,7 +94,8 @@ npm run test:unit                    # L5 UI unit/component tests
 | Ctrl/⌘ S (in the editor) | Save the file being quick-edited |
 | Ctrl/⌘ R | Refresh |
 | Ctrl/⌘ Shift . | Show hidden files |
-| Ctrl/⌘ Shift P | Command palette: find any command, server, favorite or sync |
+| Ctrl/⌘ Shift P | Command palette: find any command, server, favorite or sync (also the ⌘-shaped toolbar button) |
+| Ctrl/⌘ Shift T | Open a terminal in the current local folder (Windows Terminal, else PowerShell; Terminal on macOS; `$TERMINAL` or a common terminal on Linux) |
 | Ctrl/⌘ Shift Y | Compare & Sync the folders of both panes |
 | Ctrl/⌘ Shift D | Compare two files in your compare app |
 | Ctrl/⌘ Shift L | Synchronized browsing on / off |

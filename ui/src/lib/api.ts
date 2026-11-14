@@ -434,6 +434,7 @@ export const api = {
   removeFavorite: (location: Location) => invoke<Favorite[]>("remove_favorite", { location }),
   reorderFavorites: (from: number, to: number) => invoke<Favorite[]>("reorder_favorites", { from, to }),
   openPath: (location: Location) => invoke<void>("open_path", { location }),
+  openTerminal: (location: Location) => invoke<void>("open_terminal", { location }),
   aboutInfo: () => invoke<AboutInfo>("about_info"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   stat: (location: Location) => invoke<Entry>("stat", { location }),

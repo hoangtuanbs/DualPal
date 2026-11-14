@@ -692,6 +692,7 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-033 | `live_sync_start/stop/status` + `live-sync-updated` (null on stop) | P0 | |
 | CMD-034 | capabilities file grants only what the UI needs | P1 | parse `src-tauri/capabilities/default.json`; snapshot permissions list so additions are reviewed |
 | CMD-035 | CSP in `tauri.conf.json` has no `unsafe-eval` and no remote origins | P1 | |
+| CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
@@ -785,6 +786,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-MOUSE-009 | column header click sorts, second click reverses | P1 | |
 | UI-MOUSE-010 | breadcrumb click navigates | P1 | |
 | UI-MOUSE-011 | dragging the divider between the panes resizes them; arrow keys on it move it; double-click evens them; the split survives a reload | P1 | |
+| UI-MOUSE-012 | the Command Palette toolbar button opens the palette; Open Terminal calls `open_terminal` with the active folder | P1 | |
 
 **Flows**
 

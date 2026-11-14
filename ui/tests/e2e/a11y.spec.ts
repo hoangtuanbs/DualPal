@@ -25,7 +25,7 @@ async function violations(page: Page, screenName: string) {
 const MOD = "ControlOrMeta";
 
 /** Toolbar buttons with no palette command and no shortcut yet (BUG, see
- *  the known-gap test below). "Commands" opens the palette itself. */
+ *  the known-gap test below). "Command Palette" opens the palette itself. */
 const NO_KEYBOARD_WAY = ["Auto-sync left to right", "Auto-sync right to left", "Auto-sync both ways"];
 
 /** Labels of toolbar buttons that the palette or a shortcut does not reach. */
@@ -35,7 +35,7 @@ async function unreachable(page: Page) {
     .evaluateAll((els) =>
       els
         .map((e) => ({ label: e.getAttribute("aria-label") ?? "", title: e.getAttribute("title") ?? "" }))
-        .filter((b) => b.label && b.label !== "Commands"),
+        .filter((b) => b.label && b.label !== "Command Palette"),
     );
   expect(buttons.length).toBeGreaterThan(10);
   await page.keyboard.press(`${MOD}+Shift+p`);
