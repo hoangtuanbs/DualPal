@@ -337,4 +337,18 @@ test.describe("UI-MOUSE mouse", () => {
     await expect(page.getByTestId("pane-splitter")).toHaveAttribute("aria-valuenow", "50");
     expect(Math.abs((await width("left")) - (await width("right")))).toBeLessThan(4);
   });
+
+  test("UI-MOUSE-012 toolbar buttons open the Command Palette and a terminal in the active folder", async ({ page }) => {
+    await openApp(page);
+    const toolbar = page.getByTestId("toolbar");
+    await toolbar.getByRole("button", { name: "Command Palette" }).click();
+    await expect(page.getByTestId("palette")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("palette")).toBeHidden();
+
+    await clearCalls(page);
+    await toolbar.getByRole("button", { name: "Open Terminal" }).click();
+    await expect.poll(() => calls(page, "open_terminal")).toHaveLength(1);
+    expect((await calls(page, "open_terminal"))[0].location).toEqual({ fs: "local", path: "/home/user" });
+  });
 });

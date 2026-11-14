@@ -176,6 +176,17 @@ pub fn open_path<R: tauri::Runtime>(app: tauri::AppHandle<R>, location: Location
         })
 }
 
+/// Open the system terminal in a local folder.
+#[tauri::command]
+pub fn open_terminal(location: Location) -> CmdResult<()> {
+    if location.fs != dualpal_core::vfs::LocalFs::ID {
+        return Err(Error::Unsupported(
+            "opening a terminal on a server. Open a local folder first".into(),
+        ));
+    }
+    dualpal_core::terminal::open(std::path::Path::new(&location.path))
+}
+
 fn io_err(path: &str, e: std::io::Error) -> Error {
     Error::Io {
         path: path.into(),

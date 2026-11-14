@@ -12,6 +12,7 @@
 //! * [`compare`] and [`sync`] — folder comparison and one- or two-way sync.
 //! * [`rename`] — Multi Rename rules and presets.
 //! * [`difftools`] — external file compare apps.
+//! * [`terminal`] — open the system terminal in a local folder.
 //! * [`import`] — read saved servers from WinSCP, FileZilla and Cyberduck exports.
 //!
 //! Nothing in this crate depends on Tauri, so it can be tested on any OS and
@@ -33,6 +34,7 @@ pub mod rename;
 pub mod search;
 pub mod settings;
 pub mod sync;
+pub mod terminal;
 pub mod vfs;
 
 pub use activity::{ActivityLog, ActivityRecord};

@@ -650,6 +650,7 @@
       { id: "rename", group: "File", title: "Rename", shortcut: "F2", run: rename },
       { id: "multiRename", group: "File", title: "Multi Rename…", shortcut: "Shift+F2", run: multiRename },
       { id: "edit", group: "File", title: "Edit in Editor", shortcut: "F4", run: editInEditor },
+      { id: "terminal", group: "File", title: "Open Terminal Here", shortcut: `${MOD}Shift+T`, run: openTerminal },
       { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
       { id: "find", group: "File", title: "Find files by name…", shortcut: `${MOD}Shift+F`, run: () => (showFind = true) },
       { id: "trash", group: "File", title: "Move to Trash", shortcut: "F8", run: trash },
@@ -717,6 +718,17 @@
       danger: true,
       onconfirm: () => api.stopEditSession(id),
     };
+  }
+
+  /** Open the system terminal in the active pane's folder. */
+  async function openTerminal() {
+    const loc = active.location;
+    if (!loc) return;
+    if (loc.fs !== "local") {
+      notice = "Terminal opens in local folders only. Open a folder on this computer first.";
+      return;
+    }
+    await api.openTerminal(loc).catch((e) => (notice = errorMessage(e)));
   }
 
   /** Open the marked files, or the file under the cursor, in the preferred editor. */
@@ -1216,6 +1228,10 @@
       compareFolders();
       return handled();
     }
+    if (mod && e.shiftKey && e.key.toLowerCase() === "t") {
+      openTerminal();
+      return handled();
+    }
     if (mod && e.shiftKey && e.key.toLowerCase() === "d") {
       compareFiles();
       return handled();
@@ -1317,7 +1333,10 @@
     <div class="group" inert={frozen}>
       <button onclick={() => active.refresh()} aria-label="Refresh" title="Refresh (Ctrl/⌘ R)"><Icon name="refresh" /></button>
       <button onclick={chooseEditor} aria-label="Editor" title="Choose the editor used by Edit"><Icon name="file-code" /></button>
-      <button onclick={() => (showPalette = true)} aria-label="Commands" title="Find any command ({MOD}Shift P)"><Icon name="command" /></button>
+      <button onclick={() => (showPalette = true)} aria-label="Command Palette" title="Command Palette: find and run any command ({MOD}Shift P)"
+        ><Icon name="command" /></button
+      >
+      <button onclick={openTerminal} aria-label="Open Terminal" title="Open a terminal in this folder ({MOD}Shift T)"><Icon name="terminal" /></button>
       <button
         aria-pressed={active.showHidden}
         onclick={() => (active.showHidden = !active.showHidden)}

@@ -37,6 +37,7 @@ fn tested_commands() -> HashSet<&'static str> {
         "remove_favorite",
         "reorder_favorites",
         "open_path",
+        "open_terminal",
         "about_info",
         "open_url",
         "stat",
@@ -347,6 +348,44 @@ fn open_path_and_open_url_use_the_log() {
     assert!(text.contains("a.txt"), "{text}");
     assert!(text.contains("mailto:hoangtuanbs@proton.me"), "{text}");
     std::env::remove_var("DUALPAL_OPENER_LOG");
+}
+
+/// CMD-038 — `open_terminal` records a local folder to the terminal log and
+/// refuses missing folders and server locations.
+#[test]
+fn open_terminal_uses_the_log_and_refuses_servers() {
+    let _guard = common::ENV_LOCK.lock().unwrap();
+    let TestApp { app, tmp } = app();
+    let log = tmp.path().join("terminal.log");
+    std::env::set_var("DUALPAL_TERMINAL_LOG", &log);
+
+    let dir = tmp.path().join("work");
+    std::fs::create_dir_all(&dir).unwrap();
+    call_ok(
+        &app,
+        "open_terminal",
+        json!({ "location": local(&dir.to_string_lossy()) }),
+    );
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.contains("work"), "{text}");
+
+    let missing = tmp.path().join("missing");
+    let err = call::<Value>(
+        &app,
+        "open_terminal",
+        json!({ "location": local(&missing.to_string_lossy()) }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "notFound", "{err}");
+
+    let err = call::<Value>(
+        &app,
+        "open_terminal",
+        json!({ "location": { "fs": "sftp:example", "path": "/" } }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "unsupported", "{err}");
+    std::env::remove_var("DUALPAL_TERMINAL_LOG");
 }
 
 /// CMD-012 — `about_info` reports the platform.

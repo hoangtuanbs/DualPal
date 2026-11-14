@@ -306,6 +306,7 @@ const handlers: Record<string, Handler> = {
   clear_activity: () => null,
   open_url: () => null,
   open_path: () => null,
+  open_terminal: () => null,
   cancel_compare: () => null,
   folder_size: (a, s) => {
     const loc: Location = a.location;
