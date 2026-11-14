@@ -12,6 +12,7 @@ import type {
   Insights,
   Location,
   OperationInfo,
+  ReleaseInfo,
   Settings,
   SyncPreview,
   Volume,
@@ -159,6 +160,10 @@ export interface MockHandle {
   removeFolder(path: string): void;
   completeAll(): void;
   setSettings(settings: Settings): void;
+  /** The release `latest_release` returns; null makes it fail as if offline. */
+  setLatestRelease(release: ReleaseInfo | null): void;
+  /** What `apply_upgrade` answers. */
+  setUpgradeOutcome(outcome: "restart" | "exit" | "opened"): void;
 }
 
 type Handler = (args: any, state: State) => unknown;
@@ -167,6 +172,9 @@ class State {
   scenario: Scenario;
   operations = new Map<string, OperationInfo>();
   failures = new Map<string, { kind: string; message: string }>();
+  latestRelease: ReleaseInfo | null = null;
+  upgradeOutcome: "restart" | "exit" | "opened" = "restart";
+  upgradeDownloaded: string | null = null;
   listeners = new Map<string, Set<(payload: any) => void>>();
   constructor(scenario: Scenario) {
     this.scenario = scenario;
@@ -259,6 +267,22 @@ const handlers: Record<string, Handler> = {
       failures: [],
     }) as Insights,
   about_info: () => ({ version: "0.1.0", os: "test", arch: "test" }),
+  latest_release: (_a, s) => {
+    if (!s.latestRelease) throw { kind: "connection", message: "could not connect: offline" };
+    return s.latestRelease;
+  },
+  download_upgrade: (a, s) => {
+    if (!s.latestRelease?.installer || s.latestRelease.version !== a.version) {
+      throw { kind: "invalid", message: `no installer for ${a.version}` };
+    }
+    s.upgradeDownloaded = a.version;
+    return s.latestRelease.installer;
+  },
+  apply_upgrade: (_a, s) => {
+    if (!s.upgradeDownloaded) throw { kind: "invalid", message: "no update has been downloaded" };
+    s.upgradeDownloaded = null;
+    return s.upgradeOutcome;
+  },
   rename_preview: (a) => {
     const { rules, inputs } = a;
     // Only enough for the unit tests: apply `replace` rules.
@@ -415,6 +439,12 @@ export function installMockBackend(scenario: Scenario = defaultScenario()): Mock
     completeAll: () => {},
     setSettings: (settings) => {
       state.scenario.settings = settings;
+    },
+    setLatestRelease: (release) => {
+      state.latestRelease = release;
+    },
+    setUpgradeOutcome: (outcome) => {
+      state.upgradeOutcome = outcome;
     },
   };
 }

@@ -159,11 +159,18 @@ To publish a release, set `version` in `src-tauri/tauri.conf.json` and the root 
 
 ## Updates
 
-Dual Pal looks for a new release at most once a day, a few seconds after it starts, and shows a small bar when one is available. **Install and restart** downloads the update, installs it and relaunches the app. Installs wait while file operations are running; you can also choose **Check for Updates…** in the command palette (⇧⌘P) or the **About** window. A failed check at start-up is silent.
+Dual Pal looks for a new release at most once a day, a few seconds after it starts (and again while it stays open), and shows a small bar when one is available. It asks the GitHub API for the newest published release (drafts and pre-releases are ignored) and compares its version with the running one. You can also choose **Check for Updates…** in the command palette (⇧⌘P) or the **About** window. A failed automatic check is silent.
 
-Updates are read from `latest.json` on the newest GitHub release. Each one is verified against the public key built into the app, so only releases signed with the maintainer's key are installed.
+- **Install and restart** upgrades in place. When the release has signed updater files, the Tauri updater downloads, verifies and installs it. Otherwise Dual Pal downloads the installer that matches how it was installed, checks it against the SHA-256 digest GitHub publishes for the file, and runs it:
+  - Windows: the `-setup.exe` (or the `.msi`, for copies installed from the MSI) runs in passive mode, then Dual Pal starts again.
+  - macOS: the app is replaced with the one in the `.dmg`, then restarts. If the app's folder is not writable, the `.dmg` is opened instead.
+  - Linux: an `.AppImage` is replaced in place. A `.deb` or `.rpm` install asks for your password (`pkexec`) to install the new package.
+  Installs wait while file operations are running.
+- When neither is possible (no installer for this platform, or an install Dual Pal does not recognise), the bar offers **Download…**, which opens the release page.
+- **Skip this version** stops the automatic check from announcing that release; a newer one is announced as usual, and a manual check still shows it. **Later** hides the bar until the next check.
+- To turn the automatic check off, untick **Check for updates automatically** in the **About** window, or choose **Stop Checking for Updates Automatically** in the command palette.
 
-On Linux the update replaces the `.AppImage`. Installs from the `.deb` or `.rpm` are told about a new version but update through a new package from the Releases page.
+Signed updates are read from `latest.json` on the newest GitHub release and verified against the public key built into the app, so only releases signed with the maintainer's key are installed that way. Set up signing (below) to use it; installer upgrades rely on GitHub's HTTPS and published digest instead.
 
 ### Release signing setup
 
@@ -175,7 +182,7 @@ For the maintainer, once per signing key:
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the password you entered.
 3. Add this **variable** (the same page, Variables tab): `TAURI_UPDATER_PUBKEY`, set to the contents of the public key file (`~/.tauri/dualpal.key.pub`).
 
-Until the secret and the variable are set, the **Build installers** workflow builds without updater files and publishes no `latest.json`, so releases still publish normally and installed copies simply find no update. Once they are set, push a version tag as usual: the build then signs the installers, and the release gets the `.sig` files and `latest.json`. Versions installed before the updater existed have no update check, so they are updated once by hand.
+Until the secret and the variable are set, the **Build installers** workflow builds without updater files and publishes no `latest.json`, so releases still publish normally and installed copies upgrade with the release's installers instead. Once they are set, push a version tag as usual: the build then signs the installers, and the release gets the `.sig` files and `latest.json`. Versions installed before the updater existed have no update check, so they are updated once by hand.
 
 ## Test builds
 

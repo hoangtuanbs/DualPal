@@ -44,7 +44,7 @@
   import { emailSupport, openProjectPage } from "./lib/about";
   import UpdateBar from "./lib/UpdateBar.svelte";
   import { updates } from "./lib/updates.svelte";
-  import { UPDATE_CHECK_DELAY_MS, activeOperationCount } from "./lib/updates";
+  import { UPDATE_CHECK_DELAY_MS, UPDATE_RECHECK_POLL_MS, activeOperationCount } from "./lib/updates";
   import { SPLIT_DEFAULT, clampSplit, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
@@ -193,14 +193,19 @@
     PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
     const timer = setInterval(() => api.volumes().then((v) => (volumes = v)), 15000);
-    // Look for a new release shortly after start, at most once a day (not in E2E tests).
-    const updateTimer = window.__DUALPAL_TEST__ ? undefined : setTimeout(() => updates.checkOnStartup(), UPDATE_CHECK_DELAY_MS);
+    // The automatic-check switch, so the palette names it correctly from the start.
+    updates.loadPreferences().catch(() => {});
+    // Look for a new release shortly after start, then hourly whether a daily
+    // check is due, so a window left open still hears about one (not in E2E tests).
+    const updateTimer = window.__DUALPAL_TEST__ ? undefined : setTimeout(() => updates.checkAutomatically(), UPDATE_CHECK_DELAY_MS);
+    const updatePoll = window.__DUALPAL_TEST__ ? undefined : setInterval(() => updates.checkAutomatically(), UPDATE_RECHECK_POLL_MS);
     return () => {
       unlisten?.();
       unlistenEdits?.();
       unlistenLive?.();
       clearInterval(timer);
       clearTimeout(updateTimer);
+      clearInterval(updatePoll);
       PaneState.navigated = null;
     };
   });
@@ -688,6 +693,12 @@
       { id: "email", group: "Help", title: "Email Us…", run: () => emailSupport().catch((e) => (notice = errorMessage(e))) },
       { id: "github", group: "Help", title: "Dual Pal on GitHub", run: () => openProjectPage().catch((e) => (notice = errorMessage(e))) },
       { id: "updates", group: "Help", title: "Check for Updates…", run: () => updates.checkNow().catch(() => {}) },
+      {
+        id: "autoUpdates",
+        group: "Settings",
+        title: updates.autoCheck ? "Stop Checking for Updates Automatically" : "Check for Updates Automatically",
+        run: () => updates.setAutoCheck(!updates.autoCheck).catch((e) => (notice = errorMessage(e))),
+      },
       { id: "clearOps", group: "Activity", title: "Clear Finished Operations", run: clearFinished },
       { id: "addServer", group: "Servers", title: "Add Server…", run: () => (editing = null) },
     ];

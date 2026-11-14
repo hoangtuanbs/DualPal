@@ -1,22 +1,46 @@
 // The updater state shown by the update bar, the About dialog and the
-// command palette. Checks and installs use the Tauri updater plugin; the
-// release comes from GitHub Releases (see tauri.conf.json).
+// command palette. A new release is found on GitHub Releases (the GitHub API's
+// latest release), compared with the running version and announced. When the
+// Tauri updater can install it (a signed latest.json is published, see
+// tauri.conf.json), that installs it. Otherwise, when the release has an
+// installer for this copy, the app downloads it, checks GitHub's SHA-256 and
+// runs it (upgrade.rs). Failing both, the bar links to the release page.
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { api, errorMessage } from "./api";
-import { isCheckDue, progressPercent } from "./updates";
+import { exit, relaunch } from "@tauri-apps/plugin-process";
+import { api, errorMessage, type ReleaseInfo, type Settings } from "./api";
+import { isCheckDue, isNewerVersion, progressPercent, releaseNotesUrl } from "./updates";
 
 /** How often an installed update looks again for file work to finish before restarting. */
 const RESTART_POLL_MS = 500;
 
-export type UpdatePhase = "idle" | "checking" | "available" | "downloading" | "installing" | "upToDate" | "error";
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "installing"
+  /** The installer is open for the person to finish (a .dmg or a Linux package). */
+  | "handedOff"
+  | "upToDate"
+  | "error";
 
-export type CheckOutcome = { kind: "available"; version: string } | { kind: "upToDate" };
+export type CheckOutcome = { kind: "available"; version: string; installable: boolean } | { kind: "upToDate" };
+
+/** A newer release: installable in the app when `update` is set, else a download link. */
+type Found = { version: string; update: Update | null; release: ReleaseInfo | null };
 
 class Updates {
   phase = $state<UpdatePhase>("idle");
   /** The release on offer. Raw: the plugin's resource is not app state to proxy. */
   update = $state.raw<Update | null>(null);
+  /** The newest release on GitHub, when it is newer than this version. */
+  release = $state.raw<ReleaseInfo | null>(null);
+  /** The version on offer, from either source. */
+  version = $state<string | null>(null);
+  /** The version running now. */
+  currentVersion = $state<string | null>(null);
+  /** Whether the app looks for a release by itself once a day. */
+  autoCheck = $state(true);
   /** Text for the bar: the result of a manual check, or why an install failed. */
   message = $state<string | null>(null);
   progress = $state<number | null>(null);
@@ -28,46 +52,73 @@ class Updates {
   /** The update whose download finished, so a retry does not fetch it again. */
   #downloaded: Update | null = null;
   #busy: () => number = () => 0;
+  /** The release whose installer is downloaded and waiting to run. */
+  #preparedVersion: string | null = null;
+
+  /** True when the app can install the release on offer itself. */
+  get installable(): boolean {
+    return this.update !== null || !!this.release?.installer;
+  }
 
   /** How many file operations are running; the app sets this once. */
   setBusyCheck(count: () => number) {
     this.#busy = count;
   }
 
+  /** Read the automatic-check switch from the settings. */
+  async loadPreferences(): Promise<Settings> {
+    const settings = await api.settings();
+    this.autoCheck = settings.updateChecks !== false;
+    return settings;
+  }
+
   /**
-   * The check at start-up: at most once a day, and silent. A failure (no
-   * network, no release yet, no signing key) is only logged.
+   * The automatic check, shortly after start-up and then while the app stays
+   * open: at most once a day, silent, and off when the person turned it off.
+   * A release they chose to skip is not announced. A failure (no network,
+   * GitHub unreachable) is only logged.
    */
-  async checkOnStartup(now = Date.now()) {
+  async checkAutomatically(now = Date.now()) {
     try {
-      const settings = await api.settings();
-      if (!isCheckDue(settings.lastUpdateCheck, now)) return;
+      const settings = await this.loadPreferences();
+      if (!this.autoCheck || !isCheckDue(settings.lastUpdateCheck, now)) return;
+      // Leave an offer or an install that is already on screen alone.
+      if (this.#busyWithOffer()) return;
       // Record the attempt first, so a failing check is not retried on every start.
       await api.saveSettings({ ...settings, lastUpdateCheck: now });
-      const update = await check();
-      if (update) this.#offer(update);
+      const found = await this.#find();
+      if (!found) return;
+      // The person may have skipped this release, turned checks off or got an
+      // offer from a manual check while this one ran: decide on what holds now.
+      const latest = await this.loadPreferences();
+      if (!this.autoCheck || found.version === latest.skippedVersion) return;
+      if (this.#busyWithOffer()) return;
+      this.#offer(found);
     } catch (e) {
       console.warn("Update check failed:", errorMessage(e));
     }
   }
 
-  /** A check the person asked for. Throws when the check fails. */
+  /** A check the person asked for. It also shows a skipped release. Throws when the check fails. */
   async checkNow(): Promise<CheckOutcome> {
     // An install is under way: leave it alone and report what it is installing.
     if (this.update && (this.phase === "downloading" || this.phase === "installing")) {
-      return { kind: "available", version: this.update.version };
+      return { kind: "available", version: this.update.version, installable: true };
+    }
+    if (this.phase === "downloading" || this.phase === "installing") {
+      return { kind: "available", version: this.version ?? "", installable: true };
     }
     this.phase = "checking";
     this.message = null;
     try {
-      const update = await check();
-      if (!update) {
+      const found = await this.#find();
+      if (!found) {
         this.phase = "upToDate";
         this.dismissed = false;
         return { kind: "upToDate" };
       }
-      this.#offer(update);
-      return { kind: "available", version: update.version };
+      this.#offer(found);
+      return { kind: "available", version: found.version, installable: this.installable };
     } catch (e) {
       this.phase = "error";
       this.message = `Could not check for updates: ${errorMessage(e)}`;
@@ -76,10 +127,67 @@ class Updates {
     }
   }
 
+  /** Turn the automatic check on or off. */
+  async setAutoCheck(on: boolean) {
+    const settings = await api.settings();
+    await api.saveSettings({ ...settings, updateChecks: on });
+    this.autoCheck = on;
+  }
+
+  /** Do not announce the release on offer again. A newer one is announced as usual. */
+  async skip() {
+    const version = this.version;
+    this.dismiss();
+    if (!version) return;
+    try {
+      const settings = await api.settings();
+      await api.saveSettings({ ...settings, skippedVersion: version });
+    } catch (e) {
+      this.message = `Could not save the choice: ${errorMessage(e)}`;
+      this.phase = "error";
+      this.dismissed = false;
+    }
+  }
+
+  /** Open the release page, where the installers are. */
+  async openReleasePage() {
+    const url = this.release?.url ?? (this.version ? releaseNotesUrl(this.version) : null);
+    if (url) await api.openUrl(url);
+  }
+
+  /**
+   * Look for a release newer than this one. GitHub's latest release decides
+   * whether there is one; the updater plugin then says whether it can be
+   * installed in place. When GitHub cannot be reached, the plugin alone decides.
+   */
+  async #find(): Promise<Found | null> {
+    let release: ReleaseInfo | null = null;
+    let releaseError: unknown = null;
+    try {
+      release = await api.latestRelease();
+    } catch (e) {
+      releaseError = e;
+    }
+    const current = (await api.aboutInfo()).version;
+    this.currentVersion = current;
+    if (release && !isNewerVersion(release.version, current)) return null;
+
+    let update: Update | null = null;
+    try {
+      update = await check();
+    } catch (e) {
+      // No signed latest.json yet: the release page is the way to upgrade.
+      if (!release) throw releaseError ?? e;
+    }
+    if (update) return { version: update.version, update, release };
+    if (release) return { version: release.version, update: null, release };
+    return null;
+  }
+
   dismiss() {
     this.dismissed = true;
     this.waitingForOperations = false;
-    if (this.phase === "upToDate" || this.phase === "error") this.phase = "idle";
+    if (this.phase === "upToDate" || this.phase === "error" || this.phase === "handedOff") this.phase = "idle";
   }
 
   /** Leave the wait for file operations: the update stays on offer. */
@@ -92,8 +200,12 @@ class Updates {
    * operations are running and asks the person first.
    */
   async install(confirmed = false) {
+    if (this.phase === "downloading" || this.phase === "installing") return;
     const update = this.update;
-    if (!update || this.phase === "downloading" || this.phase === "installing") return;
+    if (!update) {
+      if (this.release?.installer) await this.#installFromRelease(this.release, confirmed);
+      return;
+    }
     this.dismissed = false;
     this.message = null;
     try {
@@ -129,14 +241,62 @@ class Updates {
     }
   }
 
-  #offer(update: Update) {
-    this.update = update;
+  /**
+   * Upgrade with the release's own installer: download and verify it, wait
+   * for file work, run it, then restart or quit as the installer needs.
+   */
+  async #installFromRelease(release: ReleaseInfo, confirmed: boolean) {
+    this.dismissed = false;
+    this.message = null;
+    let stop: (() => void) | null = null;
+    try {
+      if (this.#holdForOperations(confirmed)) return;
+      if (this.#preparedVersion !== release.version) {
+        this.phase = "downloading";
+        this.progress = 0;
+        // Progress is a nicety: the download goes ahead without it.
+        stop = await api.onUpgradeProgress((p) => (this.progress = progressPercent(p.downloaded, p.total))).catch(() => null);
+        await api.downloadUpgrade(release.version);
+        this.#preparedVersion = release.version;
+      }
+      if (this.#holdForOperations(confirmed)) return;
+      this.phase = "installing";
+      // Work that began meanwhile finishes before the installer replaces the app.
+      while (!confirmed && this.#busy() > 0) await new Promise((r) => setTimeout(r, RESTART_POLL_MS));
+      this.#preparedVersion = null;
+      const outcome = await api.applyUpgrade();
+      if (outcome === "opened") {
+        this.phase = "handedOff";
+        return;
+      }
+      if (outcome === "exit") await exit(0);
+      else await relaunch();
+      // Only reached if the restart did not happen: do not stay "installing".
+      this.phase = "idle";
+    } catch (e) {
+      this.phase = "error";
+      this.message = `The update failed: ${errorMessage(e)}`;
+    } finally {
+      stop?.();
+    }
+  }
+
+  /** An offer is on screen, or an install is under way. */
+  #busyWithOffer(): boolean {
+    return (this.phase === "available" && !this.dismissed) || this.phase === "downloading" || this.phase === "installing";
+  }
+
+  #offer(found: Found) {
+    this.update = found.update;
+    this.release = found.release;
+    this.version = found.version;
     this.phase = "available";
     this.message = null;
     this.progress = null;
     this.dismissed = false;
     this.waitingForOperations = false;
     this.#downloaded = null;
+    this.#preparedVersion = null;
   }
 
   #holdForOperations(confirmed: boolean): boolean {

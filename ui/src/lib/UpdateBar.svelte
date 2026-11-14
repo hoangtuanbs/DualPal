@@ -1,18 +1,16 @@
 <script lang="ts">
-  import { api, errorMessage } from "./api";
-  import { releaseNotesUrl } from "./updates";
+  import { errorMessage } from "./api";
   import { updates } from "./updates.svelte";
 
   let notesError = $state<string | null>(null);
 
-  const update = $derived(updates.update);
   const visible = $derived(!updates.dismissed && updates.phase !== "idle");
+  const installed = $derived(updates.currentVersion ? ` You have ${updates.currentVersion}.` : "");
 
-  async function openNotes() {
-    if (!update) return;
+  async function openReleasePage() {
     try {
       notesError = null;
-      await api.openUrl(releaseNotesUrl(update.version));
+      await updates.openReleasePage();
     } catch (e) {
       notesError = errorMessage(e);
     }
@@ -30,8 +28,11 @@
       <button class="ghost" onclick={() => updates.dismiss()}>Close</button>
     {:else if updates.phase === "error"}
       <span class="err">{updates.message}</span>
-      {#if update}
+      {#if updates.installable}
         <button onclick={() => updates.install()}>Try again</button>
+      {/if}
+      {#if updates.version}
+        <button class="ghost" onclick={openReleasePage}>Release page</button>
       {/if}
       <button class="ghost" onclick={() => updates.dismiss()}>Close</button>
     {:else if updates.waitingForOperations}
@@ -39,13 +40,23 @@
       <button class="primary" onclick={() => updates.install(true)}>Install anyway</button>
       <button class="ghost" onclick={() => updates.keepWaiting()}>Wait</button>
     {:else if updates.phase === "downloading"}
-      <span>Downloading Dual Pal {update?.version}… {updates.progress === null ? "" : `${updates.progress}%`}</span>
+      <span>Downloading Dual Pal {updates.version}… {updates.progress === null ? "" : `${updates.progress}%`}</span>
     {:else if updates.phase === "installing"}
-      <span>Installing Dual Pal {update?.version}…</span>
-    {:else if update}
-      <span>Dual Pal {update.version} is available.</span>
-      <button class="ghost" onclick={openNotes}>Release notes</button>
+      <span>Installing Dual Pal {updates.version}…</span>
+    {:else if updates.phase === "handedOff"}
+      <span>The Dual Pal {updates.version} installer is open. Follow its steps to finish the upgrade.</span>
+      <button class="ghost" onclick={() => updates.dismiss()}>Close</button>
+    {:else if updates.installable}
+      <span>Dual Pal {updates.version} is available.{installed}</span>
+      <button class="ghost" onclick={openReleasePage}>Release notes</button>
       <button class="primary" onclick={() => updates.install()}>Install and restart</button>
+      <button class="ghost" onclick={() => updates.skip()}>Skip this version</button>
+      <button class="ghost" onclick={() => updates.dismiss()}>Later</button>
+    {:else if updates.version}
+      <!-- No in-app install for this release: send the person to its download page. -->
+      <span>Dual Pal {updates.version} is available.{installed} Download it from the release page to upgrade.</span>
+      <button class="primary" onclick={openReleasePage}>Download…</button>
+      <button class="ghost" onclick={() => updates.skip()}>Skip this version</button>
       <button class="ghost" onclick={() => updates.dismiss()}>Later</button>
     {/if}
     {#if notesError}

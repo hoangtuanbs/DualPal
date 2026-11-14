@@ -40,6 +40,9 @@ fn tested_commands() -> HashSet<&'static str> {
         "open_terminal",
         "about_info",
         "open_url",
+        "latest_release",
+        "download_upgrade",
+        "apply_upgrade",
         "stat",
         "folder_size",
         "cancel_folder_size",
@@ -396,6 +399,92 @@ fn about_info() {
     assert_eq!(info["os"], std::env::consts::OS);
     assert_eq!(info["arch"], std::env::consts::ARCH);
     assert!(info["version"].is_string());
+}
+
+/// `DUALPAL_RELEASES_URL` is process-wide: tests that set it take turns.
+static RELEASES_ENV: Mutex<()> = Mutex::new(());
+
+/// CMD-039 — `latest_release` reads GitHub's release JSON from the given URL.
+#[test]
+fn latest_release() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+        let body = r#"{"tag_name":"v9.1.0","name":"Dual Pal 9.1","html_url":"https://github.com/hoangtuanbs/DualPal/releases/tag/v9.1.0","published_at":"2026-11-13T10:00:00Z",
+            "assets":[{"name":"Dual.Pal_9.1.0_amd64.deb","browser_download_url":"https://github.com/hoangtuanbs/DualPal/releases/download/v9.1.0/Dual.Pal_9.1.0_amd64.deb","size":1},
+                      {"name":"Dual.Pal_9.1.0_arm64.deb","browser_download_url":"https://github.com/hoangtuanbs/DualPal/releases/download/v9.1.0/Dual.Pal_9.1.0_arm64.deb","size":1}]}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        request
+    });
+    let _env = RELEASES_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var(
+        "DUALPAL_RELEASES_URL",
+        format!("http://127.0.0.1:{port}/latest"),
+    );
+    std::env::set_var("DUALPAL_INSTALL_KIND", "deb");
+    let TestApp { app, tmp: _tmp } = app();
+    let release: Value = call(&app, "latest_release", json!({})).unwrap();
+    std::env::remove_var("DUALPAL_RELEASES_URL");
+    std::env::remove_var("DUALPAL_INSTALL_KIND");
+    // The installer for a .deb install on this CPU, never one for another CPU.
+    if std::env::consts::ARCH == "x86_64" {
+        assert_eq!(release["installer"], "Dual.Pal_9.1.0_amd64.deb");
+    }
+    assert_eq!(release["assets"].as_array().unwrap().len(), 2);
+    assert_eq!(release["version"], "9.1.0");
+    assert_eq!(release["tag"], "v9.1.0");
+    assert_eq!(
+        release["url"],
+        "https://github.com/hoangtuanbs/DualPal/releases/tag/v9.1.0"
+    );
+    assert_eq!(release["publishedAt"], "2026-11-13T10:00:00Z");
+    let request = server.join().unwrap();
+    assert!(request.contains("user-agent: dualpal/"), "{request}");
+}
+
+/// CMD-040 — `apply_upgrade` refuses to run before `download_upgrade`, and
+/// `download_upgrade` refuses a version that is not the newest release.
+#[test]
+fn upgrade_needs_a_download_of_the_newest_release() {
+    let TestApp { app, tmp: _tmp } = app();
+    let err = call::<Value>(&app, "apply_upgrade", json!({})).unwrap_err();
+    assert_eq!(err["kind"], "invalid", "{err}");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf).unwrap();
+        let body = r#"{"tag_name":"v9.2.0","html_url":"https://github.com/hoangtuanbs/DualPal/releases/tag/v9.2.0"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    });
+    let _env = RELEASES_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var(
+        "DUALPAL_RELEASES_URL",
+        format!("http://127.0.0.1:{port}/latest"),
+    );
+    let err = call::<Value>(&app, "download_upgrade", json!({ "version": "9.1.0" })).unwrap_err();
+    std::env::remove_var("DUALPAL_RELEASES_URL");
+    server.join().unwrap();
+    assert_eq!(err["kind"], "invalid", "{err}");
+    assert!(err["message"].as_str().unwrap().contains("9.2.0"), "{err}");
 }
 
 /// CMD-013 — stat, read_text, write_text.
@@ -892,7 +981,8 @@ fn capability_permissions_are_reviewed() {
     [
       "core:default",
       "updater:default",
-      "process:allow-restart"
+      "process:allow-restart",
+      "process:allow-exit"
     ]
     "###);
 }
