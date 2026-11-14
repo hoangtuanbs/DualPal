@@ -695,6 +695,7 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-035 | CSP in `tauri.conf.json` has no `unsafe-eval` and no remote origins | P1 | |
 | CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
 | CMD-039 | `latest_release` reads GitHub's latest release (tag, page, date) from `DUALPAL_RELEASES_URL` and sends a User-Agent | P1 | |
+| CMD-040 | `apply_upgrade` needs a finished `download_upgrade`; `download_upgrade` refuses a version that is no longer the newest release | P1 | |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 

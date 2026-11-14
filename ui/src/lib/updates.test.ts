@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { exit, relaunch } from "@tauri-apps/plugin-process";
 import { installMockBackend, type MockHandle } from "../../tests/mock-backend";
 import { ABOUT } from "./about";
 import {
@@ -16,7 +16,7 @@ import {
 import { updates } from "./updates.svelte";
 
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn() }));
-vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(async () => {}) }));
+vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(async () => {}), exit: vi.fn(async () => {}) }));
 
 const DAY = UPDATE_CHECK_INTERVAL_MS;
 const NOW = Date.UTC(2026, 10, 10, 12);
@@ -401,5 +401,86 @@ describe("release notice from GitHub", () => {
 
     await updates.setAutoCheck(true);
     expect(updates.autoCheck).toBe(true);
+  });
+});
+
+describe("installing a release with its own installer", () => {
+  let mock: MockHandle;
+  const RELEASE = {
+    version: "0.3.0",
+    tag: "v0.3.0",
+    name: "Dual Pal 0.3.0",
+    url: "https://github.com/hoangtuanbs/DualPal/releases/tag/v0.3.0",
+    publishedAt: null,
+    installer: "Dual.Pal_0.3.0_x64-setup.exe",
+  };
+
+  beforeEach(async () => {
+    mock = installMockBackend();
+    vi.mocked(check).mockReset();
+    vi.mocked(check).mockRejectedValue(new Error("no latest.json"));
+    vi.mocked(relaunch).mockClear();
+    vi.mocked(exit).mockClear();
+    updates.setBusyCheck(() => 0);
+    updates.dismiss();
+    mock.setLatestRelease(RELEASE);
+    await updates.checkNow();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("offers an install when the release has an installer for this copy", async () => {
+    expect(updates.installable).toBe(true);
+    mock.setLatestRelease({ ...RELEASE, installer: null });
+    await expect(updates.checkNow()).resolves.toMatchObject({ installable: false });
+    expect(updates.installable).toBe(false);
+  });
+
+  it("downloads the installer, runs it and restarts", async () => {
+    await updates.install();
+    expect(mock.calls("download_upgrade")).toEqual([{ version: "0.3.0" }]);
+    expect(mock.calls("apply_upgrade")).toHaveLength(1);
+    expect(relaunch).toHaveBeenCalledOnce();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("quits when the installer replaces the app itself (Windows)", async () => {
+    mock.setUpgradeOutcome("exit");
+    await updates.install();
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(relaunch).not.toHaveBeenCalled();
+  });
+
+  it("says the installer is open when the person has to finish it", async () => {
+    mock.setUpgradeOutcome("opened");
+    await updates.install();
+    expect(updates.phase).toBe("handedOff");
+    expect(relaunch).not.toHaveBeenCalled();
+    updates.dismiss();
+    expect(updates.phase).toBe("idle");
+  });
+
+  it("waits for file operations before downloading, unless confirmed", async () => {
+    updates.setBusyCheck(() => 2);
+    await updates.install();
+    expect(updates.waitingForOperations).toBe(true);
+    expect(mock.calls("download_upgrade")).toHaveLength(0);
+
+    await updates.install(true);
+    expect(mock.calls("apply_upgrade")).toHaveLength(1);
+  });
+
+  it("shows why a download failed and downloads again on retry", async () => {
+    mock.failNext("download_upgrade", { kind: "invalid", message: "does not match the checksum GitHub published" });
+    await updates.install();
+    expect(updates.phase).toBe("error");
+    expect(updates.message).toContain("checksum");
+    expect(mock.calls("apply_upgrade")).toHaveLength(0);
+
+    await updates.install();
+    expect(mock.calls("download_upgrade")).toHaveLength(2);
+    expect(relaunch).toHaveBeenCalledOnce();
   });
 });

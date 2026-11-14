@@ -4,7 +4,6 @@
 
   let notesError = $state<string | null>(null);
 
-  const update = $derived(updates.update);
   const visible = $derived(!updates.dismissed && updates.phase !== "idle");
   const installed = $derived(updates.currentVersion ? ` You have ${updates.currentVersion}.` : "");
 
@@ -29,8 +28,11 @@
       <button class="ghost" onclick={() => updates.dismiss()}>Close</button>
     {:else if updates.phase === "error"}
       <span class="err">{updates.message}</span>
-      {#if update}
+      {#if updates.installable}
         <button onclick={() => updates.install()}>Try again</button>
+      {/if}
+      {#if updates.version}
+        <button class="ghost" onclick={openReleasePage}>Release page</button>
       {/if}
       <button class="ghost" onclick={() => updates.dismiss()}>Close</button>
     {:else if updates.waitingForOperations}
@@ -38,11 +40,14 @@
       <button class="primary" onclick={() => updates.install(true)}>Install anyway</button>
       <button class="ghost" onclick={() => updates.keepWaiting()}>Wait</button>
     {:else if updates.phase === "downloading"}
-      <span>Downloading Dual Pal {update?.version}… {updates.progress === null ? "" : `${updates.progress}%`}</span>
+      <span>Downloading Dual Pal {updates.version}… {updates.progress === null ? "" : `${updates.progress}%`}</span>
     {:else if updates.phase === "installing"}
-      <span>Installing Dual Pal {update?.version}…</span>
-    {:else if update}
-      <span>Dual Pal {update.version} is available.{installed}</span>
+      <span>Installing Dual Pal {updates.version}…</span>
+    {:else if updates.phase === "handedOff"}
+      <span>The Dual Pal {updates.version} installer is open. Follow its steps to finish the upgrade.</span>
+      <button class="ghost" onclick={() => updates.dismiss()}>Close</button>
+    {:else if updates.installable}
+      <span>Dual Pal {updates.version} is available.{installed}</span>
       <button class="ghost" onclick={openReleasePage}>Release notes</button>
       <button class="primary" onclick={() => updates.install()}>Install and restart</button>
       <button class="ghost" onclick={() => updates.skip()}>Skip this version</button>

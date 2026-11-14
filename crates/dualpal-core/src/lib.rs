@@ -14,6 +14,7 @@
 //! * [`difftools`] — external file compare apps.
 //! * [`terminal`] — open the system terminal in a local folder.
 //! * [`releases`] — the newest published release, for the upgrade notice.
+//! * [`upgrade`] — pick, download and verify the installer for an upgrade.
 //! * [`import`] — read saved servers from WinSCP, FileZilla and Cyberduck exports.
 //!
 //! Nothing in this crate depends on Tauri, so it can be tested on any OS and
@@ -37,6 +38,7 @@ pub mod search;
 pub mod settings;
 pub mod sync;
 pub mod terminal;
+pub mod upgrade;
 pub mod vfs;
 
 pub use activity::{ActivityLog, ActivityRecord};

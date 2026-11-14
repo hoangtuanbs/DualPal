@@ -27,6 +27,31 @@ pub struct ReleaseInfo {
     pub url: String,
     /// When it was published (RFC 3339), if GitHub says.
     pub published_at: Option<String>,
+    /// The files attached to the release: installers and updater files.
+    pub assets: Vec<ReleaseAsset>,
+}
+
+/// One file attached to a release.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseAsset {
+    /// As GitHub stores it, e.g. `Dual.Pal_0.2.0_x64-setup.exe`.
+    pub name: String,
+    /// The download link.
+    pub url: String,
+    pub size: u64,
+    /// GitHub's SHA-256 of the file, lowercase hex, when it reports one.
+    pub sha256: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +64,8 @@ struct GithubRelease {
     draft: bool,
     #[serde(default)]
     prerelease: bool,
+    #[serde(default)]
+    assets: Vec<GithubAsset>,
 }
 
 /// Read a release from the JSON of GitHub's `releases/latest` endpoint.
@@ -68,6 +95,22 @@ pub fn parse_latest_release(json: &[u8]) -> Result<ReleaseInfo> {
         name,
         url: r.html_url,
         published_at: r.published_at,
+        assets: r
+            .assets
+            .into_iter()
+            .filter(|a| a.browser_download_url.starts_with("https://"))
+            .map(|a| ReleaseAsset {
+                sha256: a
+                    .digest
+                    .as_deref()
+                    .and_then(|d| d.strip_prefix("sha256:"))
+                    .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .map(|h| h.to_ascii_lowercase()),
+                name: a.name,
+                url: a.browser_download_url,
+                size: a.size,
+            })
+            .collect(),
     })
 }
 
@@ -123,6 +166,23 @@ mod tests {
             "https://github.com/hoangtuanbs/DualPal/releases/tag/v0.3.0"
         );
         assert_eq!(r.published_at.as_deref(), Some("2026-11-13T10:00:00Z"));
+    }
+
+    #[test]
+    fn reads_assets_with_their_digest() {
+        let json = br#"{"tag_name":"v0.3.0","html_url":"https://github.com/x/y/releases/tag/v0.3.0","assets":[
+            {"name":"Dual.Pal_0.3.0_x64-setup.exe","browser_download_url":"https://github.com/x/y/releases/download/v0.3.0/Dual.Pal_0.3.0_x64-setup.exe","size":42,
+             "digest":"sha256:F83F1CBFA7350638EBBF13485B55D86E134112E252018AA09EF2B39E74676899"},
+            {"name":"odd.bin","browser_download_url":"https://github.com/x/y/odd.bin","digest":"md5:abc"},
+            {"name":"plain.bin","browser_download_url":"http://example.com/plain.bin"}]}"#;
+        let r = parse_latest_release(json).unwrap();
+        assert_eq!(r.assets.len(), 2);
+        assert_eq!(r.assets[0].size, 42);
+        assert_eq!(
+            r.assets[0].sha256.as_deref(),
+            Some("f83f1cbfa7350638ebbf13485b55d86e134112e252018aa09ef2b39e74676899")
+        );
+        assert_eq!(r.assets[1].sha256, None);
     }
 
     #[test]

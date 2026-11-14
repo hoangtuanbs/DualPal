@@ -330,18 +330,6 @@ pub fn about_info<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> AboutInfo {
     }
 }
 
-/// The newest published release on GitHub, for the upgrade notice.
-/// `DUALPAL_RELEASES_URL` points it elsewhere in tests.
-#[tauri::command]
-pub async fn latest_release<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-) -> CmdResult<dualpal_core::releases::ReleaseInfo> {
-    let url = std::env::var("DUALPAL_RELEASES_URL")
-        .unwrap_or_else(|_| dualpal_core::releases::LATEST_RELEASE_URL.to_string());
-    let agent = format!("DualPal/{}", app.package_info().version);
-    dualpal_core::releases::latest_release(&url, &agent).await
-}
-
 /// Open a web or email link in the default browser or mail app.
 /// Only https: and mailto: links are allowed.
 #[tauri::command]

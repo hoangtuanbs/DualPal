@@ -2,17 +2,27 @@
 // command palette. A new release is found on GitHub Releases (the GitHub API's
 // latest release), compared with the running version and announced. When the
 // Tauri updater can install it (a signed latest.json is published, see
-// tauri.conf.json) the bar offers "Install and restart"; otherwise it links
-// to the release page to download the installer.
+// tauri.conf.json), that installs it. Otherwise, when the release has an
+// installer for this copy, the app downloads it, checks GitHub's SHA-256 and
+// runs it (upgrade.rs). Failing both, the bar links to the release page.
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { exit, relaunch } from "@tauri-apps/plugin-process";
 import { api, errorMessage, type ReleaseInfo, type Settings } from "./api";
 import { isCheckDue, isNewerVersion, progressPercent, releaseNotesUrl } from "./updates";
 
 /** How often an installed update looks again for file work to finish before restarting. */
 const RESTART_POLL_MS = 500;
 
-export type UpdatePhase = "idle" | "checking" | "available" | "downloading" | "installing" | "upToDate" | "error";
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "installing"
+  /** The installer is open for the person to finish (a .dmg or a Linux package). */
+  | "handedOff"
+  | "upToDate"
+  | "error";
 
 export type CheckOutcome = { kind: "available"; version: string; installable: boolean } | { kind: "upToDate" };
 
@@ -42,6 +52,13 @@ class Updates {
   /** The update whose download finished, so a retry does not fetch it again. */
   #downloaded: Update | null = null;
   #busy: () => number = () => 0;
+  /** The release whose installer is downloaded and waiting to run. */
+  #preparedVersion: string | null = null;
+
+  /** True when the app can install the release on offer itself. */
+  get installable(): boolean {
+    return this.update !== null || !!this.release?.installer;
+  }
 
   /** How many file operations are running; the app sets this once. */
   setBusyCheck(count: () => number) {
@@ -88,6 +105,9 @@ class Updates {
     if (this.update && (this.phase === "downloading" || this.phase === "installing")) {
       return { kind: "available", version: this.update.version, installable: true };
     }
+    if (this.phase === "downloading" || this.phase === "installing") {
+      return { kind: "available", version: this.version ?? "", installable: true };
+    }
     this.phase = "checking";
     this.message = null;
     try {
@@ -98,7 +118,7 @@ class Updates {
         return { kind: "upToDate" };
       }
       this.#offer(found);
-      return { kind: "available", version: found.version, installable: found.update !== null };
+      return { kind: "available", version: found.version, installable: this.installable };
     } catch (e) {
       this.phase = "error";
       this.message = `Could not check for updates: ${errorMessage(e)}`;
@@ -167,7 +187,7 @@ class Updates {
   dismiss() {
     this.dismissed = true;
     this.waitingForOperations = false;
-    if (this.phase === "upToDate" || this.phase === "error") this.phase = "idle";
+    if (this.phase === "upToDate" || this.phase === "error" || this.phase === "handedOff") this.phase = "idle";
   }
 
   /** Leave the wait for file operations: the update stays on offer. */
@@ -180,8 +200,12 @@ class Updates {
    * operations are running and asks the person first.
    */
   async install(confirmed = false) {
+    if (this.phase === "downloading" || this.phase === "installing") return;
     const update = this.update;
-    if (!update || this.phase === "downloading" || this.phase === "installing") return;
+    if (!update) {
+      if (this.release?.installer) await this.#installFromRelease(this.release, confirmed);
+      return;
+    }
     this.dismissed = false;
     this.message = null;
     try {
@@ -217,6 +241,46 @@ class Updates {
     }
   }
 
+  /**
+   * Upgrade with the release's own installer: download and verify it, wait
+   * for file work, run it, then restart or quit as the installer needs.
+   */
+  async #installFromRelease(release: ReleaseInfo, confirmed: boolean) {
+    this.dismissed = false;
+    this.message = null;
+    let stop: (() => void) | null = null;
+    try {
+      if (this.#holdForOperations(confirmed)) return;
+      if (this.#preparedVersion !== release.version) {
+        this.phase = "downloading";
+        this.progress = 0;
+        // Progress is a nicety: the download goes ahead without it.
+        stop = await api.onUpgradeProgress((p) => (this.progress = progressPercent(p.downloaded, p.total))).catch(() => null);
+        await api.downloadUpgrade(release.version);
+        this.#preparedVersion = release.version;
+      }
+      if (this.#holdForOperations(confirmed)) return;
+      this.phase = "installing";
+      // Work that began meanwhile finishes before the installer replaces the app.
+      while (!confirmed && this.#busy() > 0) await new Promise((r) => setTimeout(r, RESTART_POLL_MS));
+      this.#preparedVersion = null;
+      const outcome = await api.applyUpgrade();
+      if (outcome === "opened") {
+        this.phase = "handedOff";
+        return;
+      }
+      if (outcome === "exit") await exit(0);
+      else await relaunch();
+      // Only reached if the restart did not happen: do not stay "installing".
+      this.phase = "idle";
+    } catch (e) {
+      this.phase = "error";
+      this.message = `The update failed: ${errorMessage(e)}`;
+    } finally {
+      stop?.();
+    }
+  }
+
   /** An offer is on screen, or an install is under way. */
   #busyWithOffer(): boolean {
     return (this.phase === "available" && !this.dismissed) || this.phase === "downloading" || this.phase === "installing";
@@ -232,6 +296,7 @@ class Updates {
     this.dismissed = false;
     this.waitingForOperations = false;
     this.#downloaded = null;
+    this.#preparedVersion = null;
   }
 
   #holdForOperations(confirmed: boolean): boolean {

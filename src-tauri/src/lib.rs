@@ -6,6 +6,7 @@
 mod commands;
 mod remote;
 mod tools;
+mod upgrade;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -185,6 +186,8 @@ pub const COMMANDS: &[&str] = &[
     "about_info",
     "open_url",
     "latest_release",
+    "download_upgrade",
+    "apply_upgrade",
     "stat",
     "folder_size",
     "cancel_folder_size",
@@ -252,7 +255,9 @@ macro_rules! all_commands {
             commands::open_terminal,
             commands::about_info,
             commands::open_url,
-            commands::latest_release,
+            upgrade::latest_release,
+            upgrade::download_upgrade,
+            upgrade::apply_upgrade,
             commands::stat,
             commands::folder_size,
             commands::cancel_folder_size,

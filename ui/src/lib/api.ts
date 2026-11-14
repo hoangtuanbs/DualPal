@@ -238,7 +238,12 @@ export interface ReleaseInfo {
   /** The release page on github.com, with the installers. */
   url: string;
   publishedAt: string | null;
+  /** The installer the app can run for this copy, or empty when it cannot install it itself. */
+  installer?: string | null;
 }
+
+/** What to do after the installer ran: restart into the new version, quit for it, or nothing (it is open). */
+export type UpgradeOutcome = "restart" | "exit" | "opened";
 
 // ---- compare and sync ----
 
@@ -453,6 +458,12 @@ export const api = {
   aboutInfo: () => invoke<AboutInfo>("about_info"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   latestRelease: () => invoke<ReleaseInfo>("latest_release"),
+  /** Download and verify the installer of release `version`; returns its file name. */
+  downloadUpgrade: (version: string) => invoke<string>("download_upgrade", { version }),
+  /** Run the downloaded installer. */
+  applyUpgrade: () => invoke<UpgradeOutcome>("apply_upgrade"),
+  onUpgradeProgress: (cb: (p: { downloaded: number; total: number | null }) => void): Promise<UnlistenFn> =>
+    listen<{ downloaded: number; total: number | null }>("upgrade-progress", (e) => cb(e.payload)),
   stat: (location: Location) => invoke<Entry>("stat", { location }),
   /** Size of a folder. `request` names the calculation for `cancelFolderSize`. */
   folderSize: (location: Location, request: number) => invoke<FolderSize>("folder_size", { location, request }),
