@@ -784,6 +784,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-MOUSE-008 | external file drop (simulate Tauri drag-drop event) copies to target folder | P1 | mock emits `tauri://drag-drop` with paths |
 | UI-MOUSE-009 | column header click sorts, second click reverses | P1 | |
 | UI-MOUSE-010 | breadcrumb click navigates | P1 | |
+| UI-MOUSE-011 | dragging the divider between the panes resizes them; arrow keys on it move it; double-click evens them; the split survives a reload | P1 | |
 
 **Flows**
 
@@ -930,6 +931,7 @@ Run after `build.yml` produces artifacts. New workflow `installers-verify.yml` (
 | A11Y-001 | axe scan of main window, each dialog, compare view, multi rename | L6 | P1 | no `serious`/`critical` violations (baseline existing ones in an allow-list file and burn down) |
 | A11Y-002 | full keyboard operability: every toolbar action reachable without mouse | L6 | P1 | |
 | A11Y-003 | focus visible and returned to the pane after dialogs close | L6 | P1 | |
+| A11Y-004 | pane divider: reachable from the palette, arrow keys move it, Tab hands keys back to the panes, narrower window keeps the 160px minimum | L6 | P1 | |
 | VIS-001 | screenshot baselines: main window list/icon view, compare view, connection dialog, about/donate, light and dark | L6 chromium/Linux only | P2 | `toHaveScreenshot({ maxDiffPixelRatio: 0.01 })`; baselines committed under `ui/tests/e2e/__screenshots__`; reference images in the project folder (`main-window.png`, `step3-*.png`) are for humans, not baselines |
 | REL-001 | flake detection | nightly | P1 | nightly runs nextest with `--retries 2` and Playwright `--repeat-each 3`; any test that passed only on retry is listed in the job summary and an issue is opened |
 | REL-002 | remote suite under toxiproxy latency 200 ms | nightly L3 | P2 | whole contract suite passes with latency |

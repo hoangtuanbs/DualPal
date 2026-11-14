@@ -304,4 +304,37 @@ test.describe("UI-MOUSE mouse", () => {
     await crumbs.getByRole("button", { name: "home" }).click();
     await expect(row(page, "left", "user")).toBeVisible();
   });
+
+  test("UI-MOUSE-011 dragging the divider resizes the panes; double-click evens them; the split is kept", async ({ page }) => {
+    await openApp(page);
+    const splitter = page.getByTestId("pane-splitter");
+    const width = async (side: "left" | "right") => (await pane(page, side).boundingBox())!.width;
+    const start = (await splitter.boundingBox())!;
+    expect(Math.abs((await width("left")) - (await width("right")))).toBeLessThan(4);
+
+    const y = start.y + start.height / 2;
+    await page.mouse.move(start.x + start.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(start.x - 150, y, { steps: 5 });
+    await page.mouse.up();
+    expect((await width("right")) - (await width("left"))).toBeGreaterThan(250);
+    await expect(splitter).toHaveAttribute("aria-valuenow", /^(3\d|4[0-2])$/);
+
+    // Arrow keys on the focused divider move it, and leave the file cursor alone.
+    const cursor = await cursorIndex(page, "left");
+    const before = await width("left");
+    await splitter.focus();
+    await page.keyboard.press("ArrowRight");
+    expect(await width("left")).toBeGreaterThan(before);
+    expect(await cursorIndex(page, "left")).toBe(cursor);
+
+    // The split survives a reload.
+    const kept = await splitter.getAttribute("aria-valuenow");
+    await page.reload();
+    await expect(page.getByTestId("pane-splitter")).toHaveAttribute("aria-valuenow", kept!);
+
+    await page.getByTestId("pane-splitter").dblclick();
+    await expect(page.getByTestId("pane-splitter")).toHaveAttribute("aria-valuenow", "50");
+    expect(Math.abs((await width("left")) - (await width("right")))).toBeLessThan(4);
+  });
 });

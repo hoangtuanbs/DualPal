@@ -45,6 +45,7 @@
   import UpdateBar from "./lib/UpdateBar.svelte";
   import { updates } from "./lib/updates.svelte";
   import { UPDATE_CHECK_DELAY_MS, activeOperationCount } from "./lib/updates";
+  import { SPLIT_DEFAULT, clampSplit, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -54,6 +55,53 @@
   const allPanes = () => groups.flatMap((g) => g.tabs);
 
   let showInspector = $state(true);
+  /** The left pane's share of the width; the divider between the panes moves it. */
+  let split = $state(loadSplit());
+  let panesEl = $state<HTMLElement>();
+  let splitterEl = $state<HTMLElement>();
+  let panesWidth = $state(0);
+  /** The split as drawn: the saved one, kept within the minimum pane width as the window or Info panel changes. */
+  const shownSplit = $derived(clampSplit(split, panesWidth));
+  let resizing = $state(false);
+
+  function splitDown(e: PointerEvent) {
+    if (e.button !== 0 || !panesEl) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    resizing = true;
+  }
+  function splitMove(e: PointerEvent) {
+    if (!resizing || !panesEl) return;
+    const box = panesEl.getBoundingClientRect();
+    split = splitAt(e.clientX, box.left, box.width);
+  }
+  function splitUp(e: PointerEvent) {
+    if (!resizing) return;
+    resizing = false;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    saveSplit(split);
+  }
+  function splitKey(e: KeyboardEvent) {
+    // Tab and Esc hand the keyboard back to the panes. Tab switches panes
+    // everywhere else, so without this focus would stay on the divider.
+    if (e.key === "Tab" || e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      splitterEl?.blur();
+      return;
+    }
+    const next = splitForKey(shownSplit, e.key, e.shiftKey, panesWidth);
+    if (next === null) return;
+    // The divider's own keys: the panes' arrow-key handling must not see them.
+    e.preventDefault();
+    e.stopPropagation();
+    split = next;
+    saveSplit(split);
+  }
+  function splitReset() {
+    split = SPLIT_DEFAULT;
+    saveSplit(split);
+  }
   /** The open right-click menu. */
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
   let volumes = $state<Volume[]>([]);
@@ -604,6 +652,8 @@
       { id: "closeTab", group: "View", title: "Close Tab", shortcut: `${MOD}W`, run: () => groups[activeIndex].closeTab() },
       { id: "switch", group: "View", title: "Switch to Other Pane", shortcut: "Tab", run: () => (activeIndex = 1 - activeIndex) },
       { id: "swap", group: "View", title: "Swap Panes", run: swapPanes },
+      { id: "resizePanes", group: "View", title: "Resize Panes (← → to move, Tab when done)", run: () => splitterEl?.focus() },
+      { id: "evenPanes", group: "View", title: "Make Panes Equal Width", run: splitReset },
       { id: "same", group: "View", title: "Same Folder in Other Pane", run: sameFolderInOther },
       { id: "favorite", group: "Go", title: isFavorite ? "Remove Folder from Favorites" : "Add Folder to Favorites", run: toggleFavorite },
       { id: "back", group: "Go", title: "Back", run: () => active.back() },
@@ -1295,8 +1345,37 @@
       onopensync={openSync}
       onremovesync={removeSync}
     />
-    <main class="panes">
+    <main
+      class="panes"
+      class:resizing
+      bind:this={panesEl}
+      bind:clientWidth={panesWidth}
+      style:grid-template-columns={`minmax(0, ${shownSplit}fr) 1px minmax(0, ${1 - shownSplit}fr)`}
+    >
       {#each groups as group, i}
+        {#if i === 1}
+          <!-- A focusable separator is interactive under ARIA; the lint does not know that. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div
+            class="splitter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize panes"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(shownSplit * 100)}
+            tabindex="0"
+            title="Drag to resize the panes, double-click to make them equal"
+            data-testid="pane-splitter"
+            bind:this={splitterEl}
+            onpointerdown={splitDown}
+            onpointermove={splitMove}
+            onpointerup={splitUp}
+            onpointercancel={splitUp}
+            ondblclick={splitReset}
+            onkeydown={splitKey}
+          ></div>
+        {/if}
         <Pane
           {group}
           index={i}
@@ -1597,9 +1676,30 @@
   }
   .panes {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1px;
-    background: var(--border);
+    grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
     min-height: 0;
+  }
+  .panes.resizing {
+    cursor: col-resize;
+    user-select: none;
+  }
+  .splitter {
+    position: relative;
+    background: var(--border);
+    cursor: col-resize;
+    touch-action: none;
+    outline: none;
+  }
+  /* A wider grab area than the 1px line it draws. */
+  .splitter::before {
+    content: "";
+    position: absolute;
+    inset: 0 -4px;
+    z-index: 2;
+  }
+  .splitter:hover,
+  .splitter:focus-visible,
+  .panes.resizing .splitter {
+    background: var(--accent);
   }
 </style>
