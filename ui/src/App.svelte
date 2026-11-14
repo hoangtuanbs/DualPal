@@ -193,6 +193,8 @@
     PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
     const timer = setInterval(() => api.volumes().then((v) => (volumes = v)), 15000);
+    // The automatic-check switch, so the palette names it correctly from the start.
+    updates.loadPreferences().catch(() => {});
     // Look for a new release shortly after start, then hourly whether a daily
     // check is due, so a window left open still hears about one (not in E2E tests).
     const updateTimer = window.__DUALPAL_TEST__ ? undefined : setTimeout(() => updates.checkAutomatically(), UPDATE_CHECK_DELAY_MS);

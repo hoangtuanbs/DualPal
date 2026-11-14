@@ -376,6 +376,22 @@ describe("release notice from GitHub", () => {
     expect(updates.dismissed).toBe(false);
   });
 
+  it("does not announce a release skipped while the automatic check ran", async () => {
+    mock.setSettings({ editor: null, diffTool: null, lastUpdateCheck: null });
+    let answer: (r: Update | null) => void = () => {};
+    vi.mocked(check).mockImplementationOnce(() => new Promise((r) => (answer = r)));
+    mock.setLatestRelease({ ...RELEASE, version: "0.4.0", tag: "v0.4.0" });
+
+    const running = updates.checkAutomatically(NOW);
+    await vi.waitFor(() => expect(check).toHaveBeenCalled());
+    mock.setSettings({ editor: null, diffTool: null, lastUpdateCheck: NOW, skippedVersion: "0.4.0" });
+    answer(null);
+    await running;
+
+    expect(updates.version).not.toBe("0.4.0");
+    expect(updates.dismissed).toBe(true);
+  });
+
   it("saves the automatic check switch", async () => {
     mock.setSettings({ editor: "/bin/ed", diffTool: null });
 

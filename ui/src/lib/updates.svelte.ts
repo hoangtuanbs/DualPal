@@ -66,11 +66,17 @@ class Updates {
       const settings = await this.loadPreferences();
       if (!this.autoCheck || !isCheckDue(settings.lastUpdateCheck, now)) return;
       // Leave an offer or an install that is already on screen alone.
-      if ((this.phase === "available" && !this.dismissed) || this.phase === "downloading" || this.phase === "installing") return;
+      if (this.#busyWithOffer()) return;
       // Record the attempt first, so a failing check is not retried on every start.
       await api.saveSettings({ ...settings, lastUpdateCheck: now });
       const found = await this.#find();
-      if (found && found.version !== settings.skippedVersion) this.#offer(found);
+      if (!found) return;
+      // The person may have skipped this release, turned checks off or got an
+      // offer from a manual check while this one ran: decide on what holds now.
+      const latest = await this.loadPreferences();
+      if (!this.autoCheck || found.version === latest.skippedVersion) return;
+      if (this.#busyWithOffer()) return;
+      this.#offer(found);
     } catch (e) {
       console.warn("Update check failed:", errorMessage(e));
     }
@@ -209,6 +215,11 @@ class Updates {
       this.phase = "error";
       this.message = `The update failed: ${errorMessage(e)}`;
     }
+  }
+
+  /** An offer is on screen, or an install is under way. */
+  #busyWithOffer(): boolean {
+    return (this.phase === "available" && !this.dismissed) || this.phase === "downloading" || this.phase === "installing";
   }
 
   #offer(found: Found) {
