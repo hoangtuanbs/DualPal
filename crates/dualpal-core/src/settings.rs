@@ -20,6 +20,12 @@ pub struct Settings {
     /// When the app last looked for an update, in milliseconds since the Unix
     /// epoch. The UI checks at most once a day.
     pub last_update_check: Option<i64>,
+    /// `Some(false)` turns off the automatic daily check for a new release.
+    /// Empty means on. A check from the About window still works.
+    pub update_checks: Option<bool>,
+    /// A release the person chose to skip, e.g. `0.3.0`. The automatic check
+    /// does not announce it again; a newer release is announced as usual.
+    pub skipped_version: Option<String>,
 }
 
 pub struct SettingsStore {

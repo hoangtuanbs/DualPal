@@ -419,6 +419,9 @@ export function installBrowserMock(scenario: BrowserScenario) {
     activity: () => activity,
     activity_insights: () => ({ days: [], operations: 0, completed: 0, failed: 0, cancelled: 0, files: 0, bytes: 0, busyMs: 0, throughput: null, byKind: [], byPlace: [], largest: [], failures: [] }),
     about_info: () => ({ version: "0.1.0", os: "test", arch: "test" }),
+    latest_release: () => {
+      throw { kind: "connection", message: "could not connect: offline" };
+    },
 
     // Remote edit: F4 on a server file starts a session.
     edit_sessions: () => editSessions,

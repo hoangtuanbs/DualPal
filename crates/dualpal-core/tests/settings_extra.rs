@@ -20,7 +20,7 @@ fn round_trip_editor_and_diff_tool() {
         .set(Settings {
             editor: Some("/usr/bin/emacs".into()),
             diff_tool: Some("meld {left} {right}".into()),
-            last_update_check: None,
+            ..Settings::default()
         })
         .unwrap();
     let reopened = SettingsStore::open(&path);
@@ -49,6 +49,31 @@ fn last_update_check_round_trips() {
     let reopened = SettingsStore::open(&path);
     assert_eq!(reopened.get().last_update_check, Some(1_794_328_406_642));
     assert_eq!(reopened.get().editor.as_deref(), Some("/v"));
+}
+
+/// SET-006 — the update check switch and the skipped release round-trip.
+#[test]
+fn update_check_preferences_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, r#"{ "editor": "/v" }"#).unwrap();
+    let old = SettingsStore::open(&path).get();
+    assert_eq!(old.update_checks, None);
+    assert_eq!(old.skipped_version, None);
+
+    SettingsStore::open(&path)
+        .set(Settings {
+            update_checks: Some(false),
+            skipped_version: Some("0.3.0".into()),
+            ..old
+        })
+        .unwrap();
+    let json = std::fs::read_to_string(&path).unwrap();
+    assert!(json.contains("\"updateChecks\": false"), "{json}");
+    assert!(json.contains("\"skippedVersion\": \"0.3.0\""), "{json}");
+    let reopened = SettingsStore::open(&path).get();
+    assert_eq!(reopened.update_checks, Some(false));
+    assert_eq!(reopened.skipped_version.as_deref(), Some("0.3.0"));
 }
 
 /// SET-003 — a corrupt file yields the defaults.

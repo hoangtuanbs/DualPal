@@ -40,6 +40,7 @@ fn tested_commands() -> HashSet<&'static str> {
         "open_terminal",
         "about_info",
         "open_url",
+        "latest_release",
         "stat",
         "folder_size",
         "cancel_folder_size",
@@ -396,6 +397,44 @@ fn about_info() {
     assert_eq!(info["os"], std::env::consts::OS);
     assert_eq!(info["arch"], std::env::consts::ARCH);
     assert!(info["version"].is_string());
+}
+
+/// CMD-039 — `latest_release` reads GitHub's release JSON from the given URL.
+#[test]
+fn latest_release() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+        let body = r#"{"tag_name":"v9.1.0","name":"Dual Pal 9.1","html_url":"https://github.com/hoangtuanbs/DualPal/releases/tag/v9.1.0","published_at":"2026-11-13T10:00:00Z"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        request
+    });
+    std::env::set_var(
+        "DUALPAL_RELEASES_URL",
+        format!("http://127.0.0.1:{port}/latest"),
+    );
+    let TestApp { app, tmp: _tmp } = app();
+    let release: Value = call(&app, "latest_release", json!({})).unwrap();
+    std::env::remove_var("DUALPAL_RELEASES_URL");
+    assert_eq!(release["version"], "9.1.0");
+    assert_eq!(release["tag"], "v9.1.0");
+    assert_eq!(
+        release["url"],
+        "https://github.com/hoangtuanbs/DualPal/releases/tag/v9.1.0"
+    );
+    assert_eq!(release["publishedAt"], "2026-11-13T10:00:00Z");
+    let request = server.join().unwrap();
+    assert!(request.contains("user-agent: dualpal/"), "{request}");
 }
 
 /// CMD-013 — stat, read_text, write_text.

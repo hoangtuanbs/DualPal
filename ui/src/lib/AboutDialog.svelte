@@ -19,6 +19,18 @@
   let updateNote = $state<{ text: string; bad: boolean } | null>(null);
 
   api.aboutInfo().then((i) => (info = i));
+  updates.loadPreferences().catch(() => {});
+
+  async function toggleAutoCheck(e: Event) {
+    const box = e.currentTarget as HTMLInputElement;
+    try {
+      error = null;
+      await updates.setAutoCheck(box.checked);
+    } catch (err) {
+      box.checked = updates.autoCheck;
+      error = errorMessage(err);
+    }
+  }
 
   async function open(url: string) {
     try {
@@ -35,7 +47,12 @@
     try {
       const result = await updates.checkNow();
       updateNote = {
-        text: result.kind === "available" ? `Dual Pal ${result.version} is available. Install it from the bar at the bottom right.` : "You're up to date.",
+        text:
+          result.kind === "upToDate"
+            ? "You're up to date."
+            : result.installable
+              ? `Dual Pal ${result.version} is available. Install it from the bar at the bottom right.`
+              : `Dual Pal ${result.version} is available. Download it from the bar at the bottom right.`,
         bad: false,
       };
     } catch (e) {
@@ -94,6 +111,10 @@
         Help: <span class="select">{ABOUT.supportEmail}</span>
         <button class="link" onclick={() => copy("email")}>{copied === "email" ? "Copied" : "Copy"}</button>
       </p>
+      <label class="small auto-check">
+        <input type="checkbox" checked={updates.autoCheck} onchange={toggleAutoCheck} data-testid="auto-update-check" />
+        Check for updates automatically
+      </label>
       {#if updateNote}
         <p class="small center" class:err={updateNote.bad} role="status">{updateNote.text}</p>
       {/if}
@@ -226,6 +247,12 @@
   .small {
     font-size: 11.5px;
     color: var(--muted);
+  }
+  .auto-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
   }
   .select {
     user-select: text;

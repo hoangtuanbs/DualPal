@@ -159,9 +159,14 @@ To publish a release, set `version` in `src-tauri/tauri.conf.json` and the root 
 
 ## Updates
 
-Dual Pal looks for a new release at most once a day, a few seconds after it starts, and shows a small bar when one is available. **Install and restart** downloads the update, installs it and relaunches the app. Installs wait while file operations are running; you can also choose **Check for Updates…** in the command palette (⇧⌘P) or the **About** window. A failed check at start-up is silent.
+Dual Pal looks for a new release at most once a day, a few seconds after it starts (and again while it stays open), and shows a small bar when one is available. It asks the GitHub API for the newest published release (drafts and pre-releases are ignored) and compares its version with the running one. You can also choose **Check for Updates…** in the command palette (⇧⌘P) or the **About** window. A failed automatic check is silent.
 
-Updates are read from `latest.json` on the newest GitHub release. Each one is verified against the public key built into the app, so only releases signed with the maintainer's key are installed.
+- When the release has signed updater files, the bar offers **Install and restart**: it downloads the update, installs it and relaunches the app. Installs wait while file operations are running.
+- Otherwise the bar offers **Download…**, which opens the release page with the installers.
+- **Skip this version** stops the automatic check from announcing that release; a newer one is announced as usual, and a manual check still shows it. **Later** hides the bar until the next check.
+- To turn the automatic check off, untick **Check for updates automatically** in the **About** window, or choose **Stop Checking for Updates Automatically** in the command palette.
+
+In-app installs are read from `latest.json` on the newest GitHub release. Each one is verified against the public key built into the app, so only releases signed with the maintainer's key are installed.
 
 On Linux the update replaces the `.AppImage`. Installs from the `.deb` or `.rpm` are told about a new version but update through a new package from the Releases page.
 
@@ -175,7 +180,7 @@ For the maintainer, once per signing key:
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the password you entered.
 3. Add this **variable** (the same page, Variables tab): `TAURI_UPDATER_PUBKEY`, set to the contents of the public key file (`~/.tauri/dualpal.key.pub`).
 
-Until the secret and the variable are set, the **Build installers** workflow builds without updater files and publishes no `latest.json`, so releases still publish normally and installed copies simply find no update. Once they are set, push a version tag as usual: the build then signs the installers, and the release gets the `.sig` files and `latest.json`. Versions installed before the updater existed have no update check, so they are updated once by hand.
+Until the secret and the variable are set, the **Build installers** workflow builds without updater files and publishes no `latest.json`, so releases still publish normally and installed copies announce them with a link to the release page. Once they are set, push a version tag as usual: the build then signs the installers, and the release gets the `.sig` files and `latest.json`. Versions installed before the updater existed have no update check, so they are updated once by hand.
 
 ## Test builds
 

@@ -1,18 +1,17 @@
 <script lang="ts">
-  import { api, errorMessage } from "./api";
-  import { releaseNotesUrl } from "./updates";
+  import { errorMessage } from "./api";
   import { updates } from "./updates.svelte";
 
   let notesError = $state<string | null>(null);
 
   const update = $derived(updates.update);
   const visible = $derived(!updates.dismissed && updates.phase !== "idle");
+  const installed = $derived(updates.currentVersion ? ` You have ${updates.currentVersion}.` : "");
 
-  async function openNotes() {
-    if (!update) return;
+  async function openReleasePage() {
     try {
       notesError = null;
-      await api.openUrl(releaseNotesUrl(update.version));
+      await updates.openReleasePage();
     } catch (e) {
       notesError = errorMessage(e);
     }
@@ -43,9 +42,16 @@
     {:else if updates.phase === "installing"}
       <span>Installing Dual Pal {update?.version}…</span>
     {:else if update}
-      <span>Dual Pal {update.version} is available.</span>
-      <button class="ghost" onclick={openNotes}>Release notes</button>
+      <span>Dual Pal {update.version} is available.{installed}</span>
+      <button class="ghost" onclick={openReleasePage}>Release notes</button>
       <button class="primary" onclick={() => updates.install()}>Install and restart</button>
+      <button class="ghost" onclick={() => updates.skip()}>Skip this version</button>
+      <button class="ghost" onclick={() => updates.dismiss()}>Later</button>
+    {:else if updates.version}
+      <!-- No in-app install for this release: send the person to its download page. -->
+      <span>Dual Pal {updates.version} is available.{installed} Download it from the release page to upgrade.</span>
+      <button class="primary" onclick={openReleasePage}>Download…</button>
+      <button class="ghost" onclick={() => updates.skip()}>Skip this version</button>
       <button class="ghost" onclick={() => updates.dismiss()}>Later</button>
     {/if}
     {#if notesError}

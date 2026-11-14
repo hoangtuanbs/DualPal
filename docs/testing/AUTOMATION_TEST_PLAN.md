@@ -497,6 +497,7 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | SET-002 | round trip editor + diff_tool | L2 | P1 | NEW | |
 | SET-003 | corrupt settings.json → defaults | L2 | P1 | NEW | |
 | SET-004 | unknown fields ignored (forward compatible) | L2 | P2 | NEW | |
+| SET-006 | update check switch and skipped release round-trip; older files load with both empty | L2 | P1 | NEW | |
 
 ### 8.5 Connections, secrets, sign-in — `CON`
 
@@ -693,6 +694,7 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-034 | capabilities file grants only what the UI needs | P1 | parse `src-tauri/capabilities/default.json`; snapshot permissions list so additions are reviewed |
 | CMD-035 | CSP in `tauri.conf.json` has no `unsafe-eval` and no remote origins | P1 | |
 | CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
+| CMD-039 | `latest_release` reads GitHub's latest release (tag, page, date) from `DUALPAL_RELEASES_URL` and sends a User-Agent | P1 | |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
