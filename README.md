@@ -101,7 +101,7 @@ npm run test:unit                    # L5 UI unit/component tests
 
 ## Servers (SFTP, FTP, WebDAV and S3)
 
-Add servers with **+** next to *Servers* in the sidebar.
+Add servers with **+** next to *Servers* in the sidebar. Double-click a server (or select it and press Enter) to connect; it opens in the active pane, and shows a spinner while it connects.
 
 - **SFTP / SSH** signs in with a password, a private key file (with or without a passphrase), or the running SSH agent plus your default keys in `~/.ssh`. Hosts from `~/.ssh/config` can be picked in the dialog. Host keys are checked against `~/.ssh/known_hosts` like the `ssh` command; a new server asks you to confirm its key fingerprint first, and a changed key is refused.
 - **FTP / FTPS** connects with FTPS over TLS by default, either *explicit* (port 21, the usual kind) or *implicit* (port 990); plain unencrypted FTP is there for old devices on a trusted network. Leave the user empty to sign in anonymously. Certificates signed by an authority your computer trusts are accepted as they are; a self-signed one (common on routers and NAS boxes) asks you to confirm its fingerprint once, and Dual Pal remembers it for that server.

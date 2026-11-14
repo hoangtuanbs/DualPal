@@ -10,6 +10,7 @@
     onremovefavorite,
     onreorder,
     connections,
+    connecting = {},
     onconnect,
     onaddserver,
     oneditserver,
@@ -28,6 +29,8 @@
     onremovefavorite: (location: Location) => void;
     onreorder: (from: number, to: number) => void;
     connections: ConnectionView[];
+    /** Ids of servers that are connecting right now. */
+    connecting?: Record<string, boolean>;
     /** Connect if needed and open `path` (or the start folder). */
     onconnect: (c: ConnectionView, path?: string) => void;
     onaddserver: () => void;
@@ -42,6 +45,9 @@
   } = $props();
 
   const MODE: Record<string, string> = { update: "→", mirror: "⇥", twoWay: "⇄" };
+
+  /** The server row picked with a single click; a double-click connects. */
+  let selectedServer = $state<string | null>(null);
 
   /** Connections whose favorites are folded away. */
   let collapsed = $state<Record<string, boolean>>({});
@@ -164,8 +170,17 @@
       class:current={current?.fs === c.fsId}
       role="button"
       tabindex="0"
-      title={serverTitle(c)}
-      onclick={() => onconnect(c)}
+      aria-busy={connecting[c.id] ? "true" : undefined}
+      class:selected={selectedServer === c.id}
+      title={connecting[c.id] ? `Connecting to ${serverTitle(c)}…` : `${serverTitle(c)}\nDouble-click to connect`}
+      onclick={() => (selectedServer = c.id)}
+      ondblclick={(e) => {
+        // A quick second click on Edit or Disconnect is not a request to connect.
+        if ((e.target as Element).closest("button")) return;
+        // Already connecting: the pane opens when it is done.
+        if (connecting[c.id]) return;
+        onconnect(c);
+      }}
       onkeydown={(e) => e.key === "Enter" && onconnect(c)}
     >
       {#if c.favorites.length > 0}
@@ -181,7 +196,9 @@
       {/if}
       <span class="icon" aria-hidden="true">{serverIcon(c)}</span>
       <span class="name">{c.name}</span>
-      {#if c.connected}<span class="dot" title="Connected" aria-label="Connected"></span>{/if}
+      {#if connecting[c.id]}
+        <span class="spinner" role="status" aria-label="Connecting"></span>
+      {:else if c.connected}<span class="dot" title="Connected" aria-label="Connected"></span>{/if}
       <span class="actions">
         <button
           title="Edit server"
@@ -302,6 +319,9 @@
     background: var(--control-hover);
     font-weight: 500;
   }
+  .item.selected:not(.current) {
+    background: var(--control);
+  }
   .item.drag-over {
     box-shadow: inset 0 2px 0 var(--accent);
   }
@@ -369,6 +389,27 @@
     border-radius: 50%;
     background: var(--success);
     flex-shrink: 0;
+  }
+  .spinner {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid var(--muted);
+    border-top-color: transparent;
+    flex-shrink: 0;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+      border-top-color: var(--muted);
+      opacity: 0.6;
+    }
   }
   .actions {
     display: none;

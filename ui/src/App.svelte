@@ -323,6 +323,11 @@
 
   // ---- servers --------------------------------------------------------------
 
+  /** Servers with a connection attempt in flight, shown as "Connecting…". */
+  let connecting = $state<Record<string, boolean>>({});
+  /** The connection attempt under way for each server, resolving to its start folder. */
+  const inFlight = new Map<string, Promise<Location | null>>();
+
   async function loadConnections() {
     connections = await api.connections();
     for (const c of connections) fsNames[c.fsId] = c.name;
@@ -346,11 +351,23 @@
     after: (start: Location) => Promise<void> | void,
     opts: { secret?: string; remember?: boolean; trust?: string } = {},
   ) {
+    // Already connecting: a second handshake would stack up password prompts,
+    // so wait for the one under way and then run this request's own step.
+    const waiting = inFlight.get(c.id);
+    if (waiting) {
+      const start = await waiting;
+      if (start) await Promise.resolve(after(start)).catch((e) => (notice = errorMessage(e)));
+      return;
+    }
     notice = null;
+    connecting[c.id] = true;
+    let settle: (start: Location | null) => void = () => {};
+    inFlight.set(c.id, new Promise((resolve) => (settle = resolve)));
     try {
       const r = await api.connect(c.id, opts);
       fsNames[c.fsId] = c.name;
       await loadConnections();
+      settle(r.location);
       await after(r.location);
     } catch (e) {
       const kind = errorKind(e);
@@ -404,6 +421,11 @@
       } else {
         notice = errorMessage(e);
       }
+    } finally {
+      delete connecting[c.id];
+      inFlight.delete(c.id);
+      // Requests that waited on a failed attempt do nothing; this one shows the error.
+      settle(null);
     }
   }
 
@@ -1332,6 +1354,7 @@
       onremovefavorite={async (loc) => (favorites = await api.removeFavorite(loc))}
       onreorder={async (from, to) => (favorites = await api.reorderFavorites(from, to))}
       {connections}
+      {connecting}
       onconnect={(c, path) => connectTo(c, path)}
       onaddserver={() => (editing = null)}
       oneditserver={(c) => (editing = c)}

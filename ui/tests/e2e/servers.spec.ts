@@ -58,7 +58,7 @@ test.describe("UI-E2E servers", () => {
 
   test("UI-E2E-009 a wrong password asks again; the right one with Remember connects", async ({ page }) => {
     await withServers(page, sftp({ password: "hunter2" }));
-    await serverItem(page, "Build box").click();
+    await serverItem(page, "Build box").dblclick();
     await expect(dialog(page)).toContainText("Enter the password for deploy@build.example");
     const input = dialog(page).getByTestId("dialog-input");
     await expect(input).toHaveAttribute("type", "password");
@@ -75,7 +75,7 @@ test.describe("UI-E2E servers", () => {
 
   test("UI-E2E-010 a changed host key blocks the connection with no way to trust it", async ({ page }) => {
     await withServers(page, sftp({ hostKeyChanged: true, fingerprint: FP }));
-    await serverItem(page, "Build box").click();
+    await serverItem(page, "Build box").dblclick();
     await expect(page.locator(".notice")).toContainText("could be an attack");
     await expect(dialog(page)).toBeHidden();
     await expect(page.getByRole("button", { name: /Trust/ })).toHaveCount(0);
@@ -97,7 +97,7 @@ test.describe("UI-E2E servers", () => {
         },
       }),
     );
-    await serverItem(page, "NAS").click();
+    await serverItem(page, "NAS").dblclick();
     await expect(dialog(page)).toContainText("certificate");
     await expect(dialog(page)).toContainText(FP);
     await dialog(page).getByTestId("dialog-ok").click();
@@ -151,9 +151,37 @@ test.describe("UI-E2E servers", () => {
     await expect(form.getByLabel("User")).toHaveValue("me");
   });
 
-  test("UI-E2E-013 ★ on a server folder saves it under the server; disconnect sends panes home", async ({ page }) => {
+  test("a double-click on a server connects it in the active pane; a single click only selects it", async ({ page }) => {
     await withServers(page, sftp());
     await serverItem(page, "Build box").click();
+    await expect(serverItem(page, "Build box")).toHaveClass(/selected/);
+    expect(await calls(page, "connect")).toHaveLength(0);
+
+    // Make the right pane active, then double-click: the server opens there.
+    await pane(page, "right").click({ position: { x: 200, y: 300 } });
+    await serverItem(page, "Build box").dblclick();
+    await expect(row(page, "right", "app")).toBeVisible();
+    await expect(row(page, "left", "app")).toHaveCount(0);
+  });
+
+  test("a server shows it is connecting, and another double-click does not connect again", async ({ page }) => {
+    await withServers(page, sftp());
+    await control(page, { holdConnect: true });
+    await serverItem(page, "Build box").dblclick();
+    await expect(serverItem(page, "Build box")).toHaveAttribute("aria-busy", "true");
+    await expect(serverItem(page, "Build box").getByRole("status", { name: "Connecting" })).toBeVisible();
+    await serverItem(page, "Build box").dblclick();
+    expect(await calls(page, "connect")).toHaveLength(1);
+
+    await page.evaluate(() => (window as any).__mock.releaseConnects());
+    await expect(row(page, "left", "app")).toBeVisible();
+    await expect(serverItem(page, "Build box")).not.toHaveAttribute("aria-busy");
+    await expect(serverItem(page, "Build box").getByLabel("Connected")).toBeVisible();
+  });
+
+  test("UI-E2E-013 ★ on a server folder saves it under the server; disconnect sends panes home", async ({ page }) => {
+    await withServers(page, sftp());
+    await serverItem(page, "Build box").dblclick();
     await row(page, "left", "app").dblclick();
     await expect(row(page, "left", "readme.txt")).toBeVisible();
     await toolbar(page).getByRole("button", { name: "Favorite" }).click();
@@ -171,7 +199,7 @@ test.describe("UI-E2E servers", () => {
 
   test("UI-E2E-014 F4 on a server file shows the editing bar and follows its status", async ({ page }) => {
     await withServers(page, sftp());
-    await serverItem(page, "Build box").click();
+    await serverItem(page, "Build box").dblclick();
     await row(page, "left", "app").dblclick();
     await point(page, "left", "readme.txt");
     await page.keyboard.press("F4");
@@ -199,7 +227,7 @@ test.describe("UI-E2E servers", () => {
 
   test("UI-E2E-017 a sync saved as a favorite reconnects its server and opens Compare", async ({ page }) => {
     await withServers(page, sftp());
-    await serverItem(page, "Build box").click();
+    await serverItem(page, "Build box").dblclick();
     await expect(row(page, "left", "app")).toBeVisible();
     await page.keyboard.press("Tab"); // right pane stays local
     await toolbar(page).getByRole("button", { name: "Compare & Sync" }).click();
@@ -223,6 +251,30 @@ test.describe("UI-E2E servers", () => {
     await expect(view).toBeVisible();
     expect((await calls(page, "connect")).map((c) => c.id)).toEqual(["build"]);
     await expect.poll(async () => (await calls(page, "sync_plan"))[0]?.left).toEqual({ fs: "conn:build", path: "/srv" });
+  });
+
+  test("a saved sync opened while its server is still connecting waits for it and opens Compare", async ({ page }) => {
+    const deploy = {
+      id: "s1",
+      name: "Deploy",
+      left: { fs: "conn:build", path: "/srv" },
+      right: { fs: "local", path: "/home/user" },
+      mode: "update",
+      options: { by: "sizeAndDate", toleranceMs: 2000, exclude: [], includeHidden: true },
+    };
+    await openApp(page, {
+      ...defaultScenario,
+      servers: { build: sftp() },
+      results: { ...defaultScenario.results, sync_favorites: [deploy] },
+    });
+    await control(page, { holdConnect: true });
+    await serverItem(page, "Build box").dblclick();
+    await expect(serverItem(page, "Build box")).toHaveAttribute("aria-busy", "true");
+    await sidebar(page).locator(".item", { hasText: "Deploy" }).click();
+
+    await page.evaluate(() => (window as any).__mock.releaseConnects());
+    await expect(page.getByTestId("compare-view")).toBeVisible();
+    expect(await calls(page, "connect")).toHaveLength(1);
   });
 });
 
