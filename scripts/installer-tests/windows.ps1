@@ -98,7 +98,14 @@ if ($PreviousMsi) {
 
 # INS-WIN-004: silent machine-wide install.
 Invoke-Msi "/i `"$msi`"" (Join-Path $logs "install.txt")
-if (-not (Test-Path $msiExe)) { throw "MSI did not install $msiExe" }
+if (-not (Test-Path $msiExe)) {
+    # Show what the install left and how msiexec ended, to tell where it went.
+    Get-ChildItem (Split-Path $msiExe) -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName | Write-Host
+    Get-ArpEntries | Format-List PSPath, DisplayVersion, InstallLocation | Out-String | Write-Host
+    Select-String -Path (Join-Path $logs "install.txt") -Pattern "Return value 3|RemoveExistingProducts|Product: |Installation success|error" |
+        Select-Object -Last 30 | ForEach-Object { Write-Host $_.Line }
+    throw "MSI did not install $msiExe"
+}
 Test-Version $msiExe
 $entries = Get-ArpEntries
 # INS-WIN-006: an upgrade replaces the old entry instead of adding one.
