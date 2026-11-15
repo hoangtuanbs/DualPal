@@ -11,6 +11,13 @@ dir="${1:?artifact dir}"
 version="$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' package.json | head -n 1)"
 test -n "$version"
 
+# The bundler names files "Dual Pal_<version>_..." with a space; GitHub release
+# assets turn the space into a dot. Use the release names, so CI build
+# artifacts and release downloads look the same here.
+for f in "$dir"/Dual\ Pal[_-]*; do
+  if [ -e "$f" ]; then mv "$f" "$dir/$(basename "$f" | tr ' ' .)"; fi
+done
+
 # INS-000: artifact names match the README patterns.
 test -f "$dir/Dual.Pal_${version}_amd64.deb"
 test -f "$dir/Dual.Pal-${version}-1.x86_64.rpm"

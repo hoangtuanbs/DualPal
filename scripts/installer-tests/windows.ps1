@@ -9,6 +9,12 @@ param(
 $ErrorActionPreference = "Stop"
 $version = (Get-Content package.json | ConvertFrom-Json).version
 
+# The bundler writes "Dual Pal_..." with a space; GitHub release assets use a
+# dot. Use the release names, so CI build artifacts and release downloads match.
+Get-ChildItem -Path $ArtifactDir -File -Filter "Dual Pal*" | ForEach-Object {
+    Rename-Item -LiteralPath $_.FullName -NewName ($_.Name -replace ' ', '.')
+}
+
 # INS-000: artifact names.
 $setup = Join-Path $ArtifactDir "Dual.Pal_${version}_x64-setup.exe"
 $msi = Join-Path $ArtifactDir "Dual.Pal_${version}_x64_en-US.msi"
