@@ -83,7 +83,14 @@ $msiExe = Join-Path $env:ProgramFiles "Dual Pal\dualpal.exe"
 # INS-WIN-006 (first half): install the previous release, if given.
 if ($PreviousMsi) {
     Invoke-Msi "/i `"$PreviousMsi`"" (Join-Path $logs "previous.txt")
-    if ((Get-ArpEntries).Count -ne 1) { throw "the previous release did not register once" }
+    $prevEntries = Get-ArpEntries
+    if ($prevEntries.Count -ne 1) {
+        # Show what is registered, to tell a missing entry from a duplicate.
+        Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*", "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*", "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like "*Dual*" } |
+            Format-List PSPath, DisplayName, DisplayVersion, WindowsInstaller | Out-String | Write-Host
+        throw "the previous release registered $($prevEntries.Count) times, expected once"
+    }
 }
 
 # INS-WIN-004: silent machine-wide install.
