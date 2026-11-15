@@ -47,7 +47,10 @@ function Get-ArpEntries {
         "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
         "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
     )
-    @(Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq "Dual Pal" })
+    # The leading comma keeps a one-entry result an array. Without it PowerShell
+    # unrolls it to the bare entry, and in Windows PowerShell 5.1 (which runs
+    # this script) a single entry's .Count is empty, so "exactly one" never held.
+    , @(Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq "Dual Pal" })
 }
 
 # Run msiexec and fail on a non-zero exit code (3010 = reboot needed, fine).
