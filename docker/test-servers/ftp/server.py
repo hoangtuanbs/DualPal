@@ -36,6 +36,11 @@ users.add_user("tester", "dualpal", ROOT, perm="elradfmwMT")
 class Plain(FTPHandler):
     authorizer = users
     passive_ports = range(30000, 30010)
+    # The nightly latency job (REL-002) routes the control connection through
+    # Toxiproxy while data connections go straight to the server, so the two
+    # arrive from different addresses. pyftpdlib refuses that by default
+    # ("425 Rejected data connection from foreign address").
+    permit_foreign_addresses = True
 
 
 class Explicit(TLS_FTPHandler):

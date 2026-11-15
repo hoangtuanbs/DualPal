@@ -11,33 +11,54 @@ dir="${1:?artifact dir}"
 version="$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' package.json | head -n 1)"
 test -n "$version"
 
+# The bundler names files "Dual Pal_<version>_..." with a space; GitHub release
+# assets turn the space into a dot. Use the release names, so CI build
+# artifacts and release downloads look the same here.
+for f in "$dir"/Dual\ Pal[_-]*; do
+  if [ -e "$f" ]; then mv "$f" "$dir/$(basename "$f" | tr ' ' .)"; fi
+done
+
 # INS-000: artifact names match the README patterns.
 test -f "$dir/Dual.Pal_${version}_amd64.deb"
 test -f "$dir/Dual.Pal-${version}-1.x86_64.rpm"
 test -n "$(find "$dir" -maxdepth 1 -name '*.AppImage' -print -quit)"
 
+# The Debian package name comes from the product name ("dual-pal"), not the
+# binary name ("dualpal"); read it from the .deb.
+pkg=dual-pal
 # INS-002: the package reports the app version.
 if command -v dpkg-deb >/dev/null; then
+  pkg="$(dpkg-deb -f "$dir/Dual.Pal_${version}_amd64.deb" Package)"
   test "$(dpkg-deb -f "$dir/Dual.Pal_${version}_amd64.deb" Version)" = "$version"
+fi
+
+# Run as root: through sudo on a runner, directly in a distro container
+# (which has no sudo).
+as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
+
+# Bare Debian/Ubuntu containers start with empty package lists, so the .deb's
+# dependencies (WebKitGTK, GTK) cannot be resolved until they are fetched.
+if command -v apt-get >/dev/null; then
+  as_root apt-get update -qq
 fi
 
 # INS-LNX-004: upgrading from the previous release .deb replaces the program
 # and keeps the user's data folder.
 if [ -n "${DUALPAL_PREVIOUS_DEB:-}" ] && command -v apt-get >/dev/null; then
-  sudo apt-get install -y "$DUALPAL_PREVIOUS_DEB"
+  as_root apt-get install -y "$DUALPAL_PREVIOUS_DEB"
   data="$HOME/.local/share/com.hoangtuanbs.dualpal"
   mkdir -p "$data"
   echo '[{"name":"kept","location":{"fs":"local","path":"/tmp"},"icon":"folder"}]' >"$data/favorites.json"
-  sudo apt-get install -y "./$dir/Dual.Pal_${version}_amd64.deb"
-  test "$(dpkg-query -W -f '${Version}' dualpal)" = "$version"
+  as_root apt-get install -y "./$dir/Dual.Pal_${version}_amd64.deb"
+  test "$(dpkg-query -W -f '${Version}' "$pkg")" = "$version"
   grep -q '"kept"' "$data/favorites.json"
-  test "$(dpkg -L dualpal | grep -c '/usr/bin/dualpal$')" = 1
+  test "$(dpkg -L "$pkg" | grep -c '/usr/bin/dualpal$')" = 1
 fi
 
 # INS-LNX-001/002: .deb installs on Debian/Ubuntu.
 if command -v apt-get >/dev/null; then
-  sudo apt-get install -y "./$dir/Dual.Pal_${version}_amd64.deb" 2>/dev/null || apt-get install -y "./$dir/Dual.Pal_${version}_amd64.deb"
-  dpkg -L dualpal | grep -E '/usr/bin/|\.desktop'
+  as_root apt-get install -y "./$dir/Dual.Pal_${version}_amd64.deb"
+  dpkg -L "$pkg" | grep -E '/usr/bin/|\.desktop'
   desktop-file-validate /usr/share/applications/*dualpal*.desktop || true
 fi
 
@@ -53,9 +74,9 @@ if command -v xvfb-run >/dev/null; then
 fi
 
 # INS-LNX-005: removing (and purging) the .deb leaves no binary behind.
-if command -v apt-get >/dev/null && dpkg -s dualpal >/dev/null 2>&1; then
-  sudo apt-get purge -y dualpal 2>/dev/null || apt-get purge -y dualpal
-  if dpkg -s dualpal >/dev/null 2>&1; then echo "dualpal is still installed"; exit 1; fi
+if command -v apt-get >/dev/null && dpkg -s "$pkg" >/dev/null 2>&1; then
+  as_root apt-get purge -y "$pkg"
+  if dpkg -s "$pkg" >/dev/null 2>&1; then echo "$pkg is still installed"; exit 1; fi
   if command -v dualpal >/dev/null || [ -e /usr/bin/dualpal ]; then echo "the binary is left behind"; exit 1; fi
   test -z "$(find /usr/share/applications -name '*dualpal*' -print -quit 2>/dev/null)"
 fi

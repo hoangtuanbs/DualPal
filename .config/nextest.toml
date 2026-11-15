@@ -26,3 +26,11 @@ test-group = "remote"
 
 [test-groups]
 remote = { max-threads = 4 }
+
+# REL-002: the nightly job adds 200 ms to every FTP, WebDAV and S3 round trip.
+# A full contract run then takes about 5 minutes on WebDAV and S3, and far
+# longer on plain FTP, which opens a new connection for every file it writes
+# (VFS-CON-025 writes 1000). Allow an hour instead of the default 2 minutes.
+[[profile.nightly.overrides]]
+filter = "binary(contract_remote)"
+slow-timeout = { period = "60s", terminate-after = 60 }

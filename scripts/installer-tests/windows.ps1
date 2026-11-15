@@ -9,6 +9,12 @@ param(
 $ErrorActionPreference = "Stop"
 $version = (Get-Content package.json | ConvertFrom-Json).version
 
+# The bundler writes "Dual Pal_..." with a space; GitHub release assets use a
+# dot. Use the release names, so CI build artifacts and release downloads match.
+Get-ChildItem -Path $ArtifactDir -File -Filter "Dual Pal*" | ForEach-Object {
+    Rename-Item -LiteralPath $_.FullName -NewName ($_.Name -replace ' ', '.')
+}
+
 # INS-000: artifact names.
 $setup = Join-Path $ArtifactDir "Dual.Pal_${version}_x64-setup.exe"
 $msi = Join-Path $ArtifactDir "Dual.Pal_${version}_x64_en-US.msi"
@@ -41,7 +47,10 @@ function Get-ArpEntries {
         "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
         "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
     )
-    @(Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq "Dual Pal" })
+    # The leading comma keeps a one-entry result an array. Without it PowerShell
+    # unrolls it to the bare entry, and in Windows PowerShell 5.1 (which runs
+    # this script) a single entry's .Count is empty, so "exactly one" never held.
+    , @(Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq "Dual Pal" })
 }
 
 # Run msiexec and fail on a non-zero exit code (3010 = reboot needed, fine).
@@ -67,6 +76,10 @@ Test-Launch $exe
 # INS-WIN-003: NSIS silent uninstall.
 Start-Process -FilePath (Join-Path $env:LOCALAPPDATA "Dual Pal\uninstall.exe") -ArgumentList "/S" -Wait
 if (Test-Path $exe) { throw "uninstall left $exe" }
+# The NSIS uninstaller leaves its install folder in HKCU, and the MSI reads that
+# key to pick its own folder, so the MSI steps below would land in
+# %LOCALAPPDATA% instead of Program Files. Clear it so they start clean.
+Remove-Item -Path "HKCU:\Software\hoangtuanbs\Dual Pal" -Recurse -ErrorAction SilentlyContinue
 
 # ---- MSI ------------------------------------------------------------------------
 
@@ -77,12 +90,26 @@ $msiExe = Join-Path $env:ProgramFiles "Dual Pal\dualpal.exe"
 # INS-WIN-006 (first half): install the previous release, if given.
 if ($PreviousMsi) {
     Invoke-Msi "/i `"$PreviousMsi`"" (Join-Path $logs "previous.txt")
-    if ((Get-ArpEntries).Count -ne 1) { throw "the previous release did not register once" }
+    $prevEntries = Get-ArpEntries
+    if ($prevEntries.Count -ne 1) {
+        # Show what is registered, to tell a missing entry from a duplicate.
+        Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*", "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*", "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like "*Dual*" } |
+            Format-List PSPath, DisplayName, DisplayVersion, WindowsInstaller | Out-String | Write-Host
+        throw "the previous release registered $($prevEntries.Count) times, expected once"
+    }
 }
 
 # INS-WIN-004: silent machine-wide install.
 Invoke-Msi "/i `"$msi`"" (Join-Path $logs "install.txt")
-if (-not (Test-Path $msiExe)) { throw "MSI did not install $msiExe" }
+if (-not (Test-Path $msiExe)) {
+    # Show what the install left and how msiexec ended, to tell where it went.
+    Get-ChildItem (Split-Path $msiExe) -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName | Write-Host
+    Get-ArpEntries | Format-List PSPath, DisplayVersion, InstallLocation | Out-String | Write-Host
+    Select-String -Path (Join-Path $logs "install.txt") -Pattern "Return value 3|RemoveExistingProducts|Product: |Installation success|error" |
+        Select-Object -Last 30 | ForEach-Object { Write-Host $_.Line }
+    throw "MSI did not install $msiExe"
+}
 Test-Version $msiExe
 $entries = Get-ArpEntries
 # INS-WIN-006: an upgrade replaces the old entry instead of adding one.

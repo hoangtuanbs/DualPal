@@ -39,6 +39,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+      # The openSUSE image has no `find`, which the steps below and
+      # linux.sh use.
+      - name: Container tools
+        run: command -v find >/dev/null || zypper --non-interactive install findutils
       - name: Download installers
         uses: actions/download-artifact@v4
         with:

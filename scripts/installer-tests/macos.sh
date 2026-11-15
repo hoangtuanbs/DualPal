@@ -8,6 +8,11 @@ dir="${1:?artifact dir}"
 version="$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' package.json | head -n 1)"
 test -n "$version"
 
+# The bundler writes "Dual Pal_..." with a space; release assets use a dot.
+for f in "$dir"/Dual\ Pal[_-]*; do
+  if [ -e "$f" ]; then mv "$f" "$dir/$(basename "$f" | tr ' ' .)"; fi
+done
+
 dmg="$dir/Dual.Pal_${version}_universal.dmg"
 test -f "$dmg"
 
