@@ -76,6 +76,10 @@ Test-Launch $exe
 # INS-WIN-003: NSIS silent uninstall.
 Start-Process -FilePath (Join-Path $env:LOCALAPPDATA "Dual Pal\uninstall.exe") -ArgumentList "/S" -Wait
 if (Test-Path $exe) { throw "uninstall left $exe" }
+# The NSIS uninstaller leaves its install folder in HKCU, and the MSI reads that
+# key to pick its own folder, so the MSI steps below would land in
+# %LOCALAPPDATA% instead of Program Files. Clear it so they start clean.
+Remove-Item -Path "HKCU:\Software\hoangtuanbs\Dual Pal" -Recurse -ErrorAction SilentlyContinue
 
 # ---- MSI ------------------------------------------------------------------------
 
