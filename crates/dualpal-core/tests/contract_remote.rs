@@ -140,6 +140,11 @@ async fn compare_identical_trees(#[case] backend: &str) {
     let r = fs.join(base.path(), "right");
     fs.create_dir(&l).await.unwrap();
     fs.create_dir(&r).await.unwrap();
+    // Backends that cannot set modification times (FTP) stamp each file when
+    // it is written, so the right side ends up newer by however long the
+    // writes took. That is seconds under the nightly 200 ms latency (REL-002),
+    // past the default 2 s tolerance. Widen the tolerance by that time.
+    let started = std::time::Instant::now();
     for (dir, name, content) in [
         (&l, "a.txt", "alpha"),
         (&l, "b.txt", "bravo"),
@@ -152,13 +157,19 @@ async fn compare_identical_trees(#[case] backend: &str) {
             .unwrap();
         tokio::io::AsyncWriteExt::shutdown(&mut w).await.unwrap();
     }
+    // Rounded up to the next second: servers report times in whole seconds.
+    let written_in_ms = (started.elapsed().as_millis() as i64 / 1000 + 1) * 1000;
+    let defaults = dualpal_core::compare::CompareOptions::default();
     let registry = Arc::new(dualpal_core::Registry::with_local());
     registry.register(fs.clone());
     let c = dualpal_core::compare::compare(
         &registry,
         &dualpal_core::Location::new(fs.id(), l),
         &dualpal_core::Location::new(fs.id(), r),
-        dualpal_core::compare::CompareOptions::default(),
+        dualpal_core::compare::CompareOptions {
+            tolerance_ms: defaults.tolerance_ms + written_in_ms,
+            ..defaults
+        },
         tokio_util::sync::CancellationToken::new(),
         None,
     )
