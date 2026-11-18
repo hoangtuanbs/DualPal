@@ -152,7 +152,7 @@ Folders on this computer are watched, so a change is synced within a couple of s
 Installers for each version are on the [Releases](https://github.com/hoangtuanbs/DualPal/releases) page:
 
 - **Windows** — `Dual.Pal_<version>_x64-setup.exe` (installs for the current user, no admin needed) or `Dual.Pal_<version>_x64_en-US.msi` (for managed installs). SmartScreen may warn about an unknown publisher; choose *More info → Run anyway*.
-- **Linux** — `.deb` for Debian and Ubuntu (`sudo apt install ./Dual.Pal_<version>_amd64.deb`), `.rpm` for Fedora and openSUSE (`sudo dnf install ./Dual.Pal-<version>-1.x86_64.rpm`), or the `.AppImage`, which runs on most distributions after `chmod +x`.
+- **Linux** — `.deb` for Debian and Ubuntu (`sudo apt install ./Dual.Pal_<version>_amd64.deb`), `.rpm` for Fedora and openSUSE (`sudo dnf install ./Dual.Pal-<version>-1.x86_64.rpm`), or the `.AppImage`, which runs on most distributions after `chmod +x`. They need Ubuntu 22.04, Debian 12, Fedora 36 or newer. The AppImage also needs FUSE 2 (`sudo apt install libfuse2` on Ubuntu 22.04, `libfuse2t64` on 24.04). Saved server passwords go to the system keyring (GNOME Keyring or KWallet); without one they are kept until the app closes.
 - **macOS** — the `.dmg` runs on Apple Silicon and Intel. The app is not notarized yet, so after dragging it to Applications run `xattr -cr "/Applications/Dual Pal.app"` once.
 
 To publish a release, set `version` in `src-tauri/tauri.conf.json` and the root `Cargo.toml`, merge to `main`, then push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`. The **Build installers** workflow builds all platforms and creates the release.

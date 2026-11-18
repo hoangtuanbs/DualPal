@@ -369,8 +369,21 @@ fn desktop_plugins<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Buil
         .plugin(tauri_plugin_process::init())
 }
 
+/// WebKitGTK's DMA-BUF renderer leaves the window blank or white on many
+/// Linux setups (NVIDIA drivers, some Wayland compositors, AppImages on newer
+/// distros). Turn it off unless the user chose otherwise. Must run before
+/// any other thread starts, since it changes the environment.
+#[cfg(target_os = "linux")]
+fn linux_webview_workarounds() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    linux_webview_workarounds();
     let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = desktop_plugins(builder);
