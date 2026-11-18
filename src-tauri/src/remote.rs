@@ -17,9 +17,10 @@ use crate::AppState;
 
 type CmdResult<T> = Result<T, Error>;
 
-/// Secrets in the macOS Keychain / Windows Credential Manager. When the
-/// system store is unavailable (or refuses), secrets are kept in memory for
-/// this run only, so connecting still works.
+/// Secrets in the macOS Keychain, Windows Credential Manager or the Linux
+/// Secret Service (GNOME Keyring, KWallet). When the system store is
+/// unavailable (or refuses), secrets are kept in memory for this run only, so
+/// connecting still works.
 #[derive(Default)]
 pub struct KeychainSecrets {
     fallback: Mutex<HashMap<String, String>>,

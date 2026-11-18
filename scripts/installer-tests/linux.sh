@@ -36,6 +36,38 @@ fi
 # (which has no sudo).
 as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 
+# The launch check needs a virtual display; bare distro containers have none.
+if ! command -v xvfb-run >/dev/null; then
+  if command -v apt-get >/dev/null; then
+    as_root apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive as_root apt-get install -y -qq xvfb xauth
+  elif command -v dnf >/dev/null; then
+    dnf install -y xorg-x11-server-Xvfb xorg-x11-xauth which
+  elif command -v zypper >/dev/null; then
+    zypper --non-interactive install xvfb-run
+  fi
+fi
+
+# Fails when a library or glibc version the binary needs is missing (a build
+# made on a newer distro than this one), then starts the app under xvfb and
+# checks it is still running after 10 seconds.
+check_launch() {
+  local bin
+  bin="$(command -v dualpal)"
+  if ldd "$bin" 2>&1 | grep -E 'not found'; then
+    echo "dualpal cannot load on this system"; exit 1
+  fi
+  local tmp
+  tmp="$(mktemp -d)"
+  DUALPAL_DATA_DIR="$tmp/data" DUALPAL_CACHE_DIR="$tmp/cache" DUALPAL_HOME="$tmp/home" \
+    DUALPAL_SECRETS=memory xvfb-run -a timeout 20 "$bin" &
+  local pid=$!
+  sleep 10
+  kill -0 "$pid" || { echo "app exited early"; exit 1; }
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 # Bare Debian/Ubuntu containers start with empty package lists, so the .deb's
 # dependencies (WebKitGTK, GTK) cannot be resolved until they are fetched.
 if command -v apt-get >/dev/null; then
@@ -62,16 +94,8 @@ if command -v apt-get >/dev/null; then
   desktop-file-validate /usr/share/applications/*dualpal*.desktop || true
 fi
 
-# INS-LNX-003: launch smoke under xvfb.
-if command -v xvfb-run >/dev/null; then
-  tmp="$(mktemp -d)"
-  DUALPAL_DATA_DIR="$tmp/data" DUALPAL_CACHE_DIR="$tmp/cache" DUALPAL_HOME="$tmp/home" \
-    DUALPAL_SECRETS=memory xvfb-run -a timeout 20 dualpal &
-  pid=$!
-  sleep 10
-  kill -0 "$pid" || { echo "app exited early"; exit 1; }
-  kill "$pid" 2>/dev/null || true
-fi
+# INS-LNX-003: the installed app starts. Run after each package install.
+check_launch
 
 # INS-LNX-005: removing (and purging) the .deb leaves no binary behind.
 if command -v apt-get >/dev/null && dpkg -s "$pkg" >/dev/null 2>&1; then
@@ -87,12 +111,18 @@ if command -v dnf >/dev/null; then
 elif command -v zypper >/dev/null; then
   zypper --no-gpg-checks in -y "./$dir/Dual.Pal-${version}-1.x86_64.rpm"
 fi
+if command -v dnf >/dev/null || command -v zypper >/dev/null; then
+  check_launch
+fi
 
 # INS-LNX-008: AppImage runs (without FUSE in containers).
 appimage="$(find "$dir" -maxdepth 1 -name '*.AppImage' -print -quit)"
 if [ -n "$appimage" ]; then
   chmod +x "$appimage"
-  APPIMAGE_EXTRACT_AND_RUN=1 timeout 15 "$appimage" --appimage-extract-and-run 2>/dev/null || true
+  # Still running when the timeout stops it (124) means it started.
+  status=0
+  APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a timeout 15 "$appimage" --appimage-extract-and-run || status=$?
+  if [ "$status" != 124 ]; then echo "AppImage exited early ($status)"; exit 1; fi
 
   # INS-LNX-009: the AppImage has a .desktop file and an icon at its root.
   ex="$(mktemp -d)"

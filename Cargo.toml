@@ -36,4 +36,6 @@ sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
 bytes = "1"
 opendal = { version = "0.55", features = ["services-s3", "services-webdav"] }
-keyring = { version = "3.6", features = ["apple-native", "windows-native", "linux-native"] }
+# Linux: the Secret Service (GNOME Keyring, KWallet) keeps passwords across
+# logins; the kernel keyring alone forgets them at logout.
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
