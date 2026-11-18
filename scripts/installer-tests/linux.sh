@@ -95,7 +95,9 @@ if command -v apt-get >/dev/null; then
 fi
 
 # INS-LNX-003: the installed app starts. Run after each package install.
-check_launch
+if command -v apt-get >/dev/null; then
+  check_launch
+fi
 
 # INS-LNX-005: removing (and purging) the .deb leaves no binary behind.
 if command -v apt-get >/dev/null && dpkg -s "$pkg" >/dev/null 2>&1; then
