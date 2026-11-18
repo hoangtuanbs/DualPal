@@ -10,6 +10,7 @@
     onimport,
     unlock,
     masterPassword = false,
+    onmasterpassword,
   }: {
     /** The connection to edit, or null to add a new one. */
     connection: Connection | null;
@@ -22,7 +23,28 @@
     unlock?: () => Promise<boolean>;
     /** A master password protects saved passwords. */
     masterPassword?: boolean;
+    /** Turn the master password on or off (for every saved server);
+     *  resolves once done or cancelled. */
+    onmasterpassword?: (on: boolean) => Promise<unknown>;
   } = $props();
+
+  let switchingMaster = $state(false);
+
+  /** The checkbox follows the real setting: it changes only once the master
+   *  password was set or removed, not when the prompt is cancelled. */
+  async function toggleMaster(e: Event & { currentTarget: HTMLInputElement }) {
+    const box = e.currentTarget;
+    const on = box.checked;
+    box.checked = masterPassword;
+    if (!onmasterpassword) return;
+    switchingMaster = true;
+    try {
+      await onmasterpassword(on);
+    } finally {
+      switchingMaster = false;
+      box.checked = masterPassword;
+    }
+  }
 
   const systemStore = navigator.userAgent.includes("Windows")
     ? "Windows Credential Manager"
@@ -319,6 +341,13 @@
           placeholder={start ? "Unchanged" : method === "keyFile" ? "If the key has one" : ""}
           autocomplete="off"
         />
+      </label>
+    {/if}
+
+    {#if secretLabel && onmasterpassword}
+      <label class="check" title="Applies to the saved passwords of every server">
+        <input type="checkbox" data-testid="master-password" checked={masterPassword} disabled={switchingMaster} onchange={toggleMaster} />
+        Protect saved passwords with a master password
       </label>
     {/if}
 

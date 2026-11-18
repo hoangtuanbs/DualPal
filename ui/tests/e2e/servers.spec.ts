@@ -124,6 +124,37 @@ test.describe("UI-E2E servers", () => {
     expect(titles).toEqual(expect.arrayContaining(["Change Master Password…", "Stop Using a Master Password…", "Reset Forgotten Master Password…"]));
   });
 
+  test("the master password is turned on and off from the server dialog", async ({ page }) => {
+    await openApp(page);
+    await sidebar(page).getByRole("button", { name: "Add server" }).click();
+    const form = page.getByTestId("connection-dialog");
+    const box = form.getByTestId("master-password");
+    await expect(box).not.toBeChecked();
+
+    // Cancelling the prompt leaves it off.
+    await box.click();
+    await expect(dialog(page)).toContainText("cannot be recovered");
+    await dialog(page).getByRole("button", { name: "Cancel" }).click();
+    await expect(box).not.toBeChecked();
+    expect(await calls(page, "protect_secrets")).toEqual([]);
+
+    await box.click();
+    await dialog(page).getByTestId("dialog-input").fill("long enough pw");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await dialog(page).getByTestId("dialog-input").fill("long enough pw");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(box).toBeChecked();
+    await expect(form).toContainText("encrypted with your master password");
+    expect(await calls(page, "protect_secrets")).toEqual([{ password: "long enough pw" }]);
+
+    await box.click();
+    await expect(dialog(page)).toContainText("Stop using a master password");
+    await dialog(page).getByTestId("dialog-input").fill("long enough pw");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(box).not.toBeChecked();
+    expect(await calls(page, "unprotect_secrets")).toEqual([{ password: "long enough pw" }]);
+  });
+
   test("saving a server password while locked asks for the master password, then saves", async ({ page }) => {
     await openApp(page, { ...defaultScenario, masterPassword: "open sesame", servers: { build: sftp() } });
     await serverItem(page, "Build box").hover();
@@ -182,7 +213,7 @@ test.describe("UI-E2E servers", () => {
     await form.getByLabel("Bucket").fill("photos");
     await form.getByLabel("Endpoint").fill("http://127.0.0.1:9000");
     await form.getByLabel("Access key ID").fill("AKIA1");
-    await form.getByRole("checkbox").check();
+    await form.getByRole("checkbox", { name: /Path-style/ }).check();
     await form.getByRole("button", { name: "Save" }).click();
     await expect(serverItem(page, "Photos bucket")).toBeVisible();
 
@@ -198,7 +229,7 @@ test.describe("UI-E2E servers", () => {
     await sidebar(page).getByRole("button", { name: "Edit Photos bucket", exact: true }).click();
     await expect(form.getByLabel("Bucket")).toHaveValue("photos");
     await expect(form.getByLabel("Endpoint")).toHaveValue("http://127.0.0.1:9000");
-    await expect(form.getByRole("checkbox")).toBeChecked();
+    await expect(form.getByRole("checkbox", { name: /Path-style/ })).toBeChecked();
     await clearCalls(page);
     await form.getByRole("button", { name: "Save" }).click();
     const saved = (await calls(page, "save_connection"))[0];

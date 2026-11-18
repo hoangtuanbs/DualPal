@@ -529,12 +529,14 @@
       "Set a master password",
       `Saved server passwords, key passphrases and S3 secret keys move out of the ${store} into a file encrypted with this password. Dual Pal asks for it the first time a server needs it after starting. It cannot be recovered: if you forget it, you will have to enter the server passwords again.`,
     );
-    if (pw === null) return;
+    if (pw === null) return false;
     try {
       vault = await api.protectSecrets(pw);
       notice = "Saved passwords are now protected by your master password.";
+      return true;
     } catch (e) {
       notice = errorMessage(e);
+      return false;
     }
   }
 
@@ -566,6 +568,7 @@
       (pw) => api.unprotectSecrets(pw),
     );
     if (ok) notice = `Saved passwords are back in the ${store}.`;
+    return ok;
   }
 
   function lockSecrets() {
@@ -1739,6 +1742,7 @@
     }}
     unlock={unlockSecrets}
     masterPassword={vault.protected}
+    onmasterpassword={(on) => (on ? protectSecrets() : unprotectSecrets())}
   />
 {/if}
 
