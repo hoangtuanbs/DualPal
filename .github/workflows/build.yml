@@ -81,7 +81,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: bundle
+          # Per runner image: objects built against a newer glibc's headers
+          # (e.g. __isoc23_sscanf on 24.04) do not link on an older one.
+          key: bundle-${{ matrix.os }}
 
       - run: npm ci
 
