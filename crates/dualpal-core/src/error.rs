@@ -27,6 +27,10 @@ pub enum Error {
     /// The server's host key differs from the one in known_hosts.
     #[error("the host key of {host} has changed (now {fingerprint}); this could be an attack")]
     HostKeyChanged { host: String, fingerprint: String },
+    /// Saved passwords are protected by a master password that has not been
+    /// entered yet in this run of the app.
+    #[error("saved passwords are locked; enter the master password to unlock them")]
+    Locked,
     #[error("I/O error on {path}: {source}")]
     Io {
         path: String,
@@ -63,6 +67,7 @@ impl Error {
             Error::AuthFailed(_) => "authFailed",
             Error::UnknownHost { .. } => "unknownHost",
             Error::HostKeyChanged { .. } => "hostKeyChanged",
+            Error::Locked => "locked",
             Error::Io { .. } => "io",
         }
     }

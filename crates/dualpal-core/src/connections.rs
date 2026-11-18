@@ -5,7 +5,9 @@
 //! own list of favorite paths on that server: favorites within favorites.
 //! Secrets (passwords, key passphrases, S3 secret keys) are never written to
 //! the JSON file; they live in a [`SecretStore`], which the app backs with
-//! the macOS Keychain or the Windows Credential Manager.
+//! the macOS Keychain, the Windows Credential Manager or the Linux Secret
+//! Service, or with a vault encrypted by a master password
+//! ([`crate::vault`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -294,6 +296,16 @@ impl Connections {
         let out = conn.clone();
         self.persist(&items)?;
         Ok(out)
+    }
+
+    /// Ids of every saved connection.
+    pub fn ids(&self) -> Vec<String> {
+        self.items
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.id.clone())
+            .collect()
     }
 
     pub fn secret(&self, id: &str) -> Result<Option<String>> {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
-  import { api, errorMessage, type Connection, type FtpSecurity, type SshConfigHost } from "./api";
+  import { api, errorMessage, withUnlock, type Connection, type FtpSecurity, type SshConfigHost } from "./api";
 
   /** Add or edit an SFTP, FTP/FTPS, WebDAV or S3 connection. */
   let {
@@ -8,6 +8,8 @@
     onsave,
     oncancel,
     onimport,
+    unlock,
+    masterPassword = false,
   }: {
     /** The connection to edit, or null to add a new one. */
     connection: Connection | null;
@@ -16,7 +18,17 @@
     oncancel: () => void;
     /** Open the import dialog instead (add mode only). */
     onimport?: () => void;
+    /** Ask for the master password when saved passwords are locked. */
+    unlock?: () => Promise<boolean>;
+    /** A master password protects saved passwords. */
+    masterPassword?: boolean;
   } = $props();
+
+  const systemStore = navigator.userAgent.includes("Windows")
+    ? "Windows Credential Manager"
+    : navigator.userAgent.includes("Mac")
+      ? "macOS Keychain"
+      : "system keyring";
 
   // svelte-ignore state_referenced_locally
   const start = connection;
@@ -155,7 +167,8 @@
     try {
       // An agent sign-in has no secret; clear any old one.
       const s = secretLabel === null ? "" : secret ? secret : null;
-      const saved = await api.saveConnection(build(), s);
+      const conn = build();
+      const saved = await withUnlock(() => api.saveConnection(conn, s), unlock);
       onsave(saved, connect);
     } catch (e) {
       error = errorMessage(e);
@@ -329,17 +342,15 @@
       {#if type === "ftp" && security === "none"}
         Plain FTP sends the password and files unencrypted. Use it only on a network you trust.
       {:else if type !== "s3"}
-        Passwords and passphrases are kept in the {navigator.userAgent.includes("Windows")
-          ? "Windows Credential Manager"
-          : navigator.userAgent.includes("Mac")
-            ? "macOS Keychain"
-            : "system keyring"}, never in Dual Pal's settings.
+        {#if masterPassword}
+          Passwords and passphrases are kept encrypted with your master password, never in Dual Pal's settings.
+        {:else}
+          Passwords and passphrases are kept in the {systemStore}, never in Dual Pal's settings.
+        {/if}
+      {:else if masterPassword}
+        The secret key is kept encrypted with your master password.
       {:else}
-        The secret key is kept in the {navigator.userAgent.includes("Windows")
-          ? "Windows Credential Manager"
-          : navigator.userAgent.includes("Mac")
-            ? "macOS Keychain"
-            : "system keyring"}.
+        The secret key is kept in the {systemStore}.
       {/if}
     </p>
 

@@ -164,15 +164,23 @@ export interface MockHandle {
   setLatestRelease(release: ReleaseInfo | null): void;
   /** What `apply_upgrade` answers. */
   setUpgradeOutcome(outcome: "restart" | "exit" | "opened"): void;
+  /** Start with saved passwords protected (and locked) by `password`. */
+  setMasterPassword(password: string | null, unlocked?: boolean): void;
 }
 
 type Handler = (args: any, state: State) => unknown;
+
+const vaultStatus = (s: State) => ({ protected: s.masterPassword !== null, unlocked: s.masterPassword === null || s.unlocked });
+const wrongMaster = () => ({ kind: "authFailed", message: "sign-in failed: the master password is not correct" });
 
 class State {
   scenario: Scenario;
   operations = new Map<string, OperationInfo>();
   failures = new Map<string, { kind: string; message: string }>();
   latestRelease: ReleaseInfo | null = null;
+  /** The master password; null when none is set. */
+  masterPassword: string | null = null;
+  unlocked = true;
   upgradeOutcome: "restart" | "exit" | "opened" = "restart";
   upgradeDownloaded: string | null = null;
   listeners = new Map<string, Set<(payload: any) => void>>();
@@ -389,7 +397,43 @@ const handlers: Record<string, Handler> = {
   save_connection: (a) => ({ ...a.connection, connected: false, fsId: `conn:${a.connection.id}` }),
   remove_connection: () => null,
   reorder_connections: () => null,
-  connect: (a) => ({ location: { fs: "local", path: "/" }, name: "test" }),
+  connect: (a, s) => {
+    if (s.masterPassword !== null && !s.unlocked && !a.secret) throw { kind: "locked", message: "saved passwords are locked" };
+    return { location: { fs: "local", path: "/" }, name: "test" };
+  },
+  secrets_status: (_a, s) => vaultStatus(s),
+  protect_secrets: (a, s) => {
+    if (a.password.length < 8) throw { kind: "invalid", message: "invalid request: the master password needs at least 8 characters" };
+    s.masterPassword = a.password;
+    s.unlocked = true;
+    return vaultStatus(s);
+  },
+  unlock_secrets: (a, s) => {
+    if (s.masterPassword !== null && a.password !== s.masterPassword) throw wrongMaster();
+    s.unlocked = true;
+    return vaultStatus(s);
+  },
+  lock_secrets: (_a, s) => {
+    if (s.masterPassword !== null) s.unlocked = false;
+    return vaultStatus(s);
+  },
+  change_master_password: (a, s) => {
+    if (a.current !== s.masterPassword) throw wrongMaster();
+    s.masterPassword = a.password;
+    s.unlocked = true;
+    return vaultStatus(s);
+  },
+  unprotect_secrets: (a, s) => {
+    if (s.masterPassword !== null && a.password !== s.masterPassword) throw wrongMaster();
+    s.masterPassword = null;
+    s.unlocked = true;
+    return vaultStatus(s);
+  },
+  reset_secrets: (_a, s) => {
+    s.masterPassword = null;
+    s.unlocked = true;
+    return vaultStatus(s);
+  },
   disconnect: () => null,
   add_connection_favorite: (a, s) => {
     const c = s.scenario.connections.find((x) => x.id === a.id);
@@ -445,6 +489,10 @@ export function installMockBackend(scenario: Scenario = defaultScenario()): Mock
     },
     setUpgradeOutcome: (outcome) => {
       state.upgradeOutcome = outcome;
+    },
+    setMasterPassword: (password, unlocked = false) => {
+      state.masterPassword = password;
+      state.unlocked = password === null || unlocked;
     },
   };
 }

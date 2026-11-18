@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, errorMessage, type ImportReport, type ImportSource, type ImportedConnection } from "./api";
+  import { api, errorMessage, withUnlock, type ImportReport, type ImportSource, type ImportedConnection } from "./api";
   import {
     allSelected,
     chosen,
@@ -14,10 +14,13 @@
   let {
     onsaved,
     onclose,
+    unlock,
   }: {
     /** Called after each server is saved, so the list can reload. */
     onsaved: () => void;
     onclose: () => void;
+    /** Ask for the master password when saved passwords are locked. */
+    unlock?: () => Promise<boolean>;
   } = $props();
 
   const SOURCES: { id: ImportSource; label: string; file: string }[] = [
@@ -82,7 +85,7 @@
     const saved: ImportedConnection[] = [];
     try {
       for (const item of items) {
-        await api.saveConnection(item.connection, item.secret);
+        await withUnlock(() => api.saveConnection(item.connection, item.secret), unlock);
         saved.push(item);
         onsaved();
       }

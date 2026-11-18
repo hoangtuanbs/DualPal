@@ -73,6 +73,73 @@ test.describe("UI-E2E servers", () => {
     expect(last).toEqual({ id: "build", secret: "hunter2", remember: true, trust: null });
   });
 
+  test("a saved password behind a master password asks to unlock first, again while wrong", async ({ page }) => {
+    await openApp(page, {
+      ...defaultScenario,
+      masterPassword: "open sesame",
+      servers: { build: sftp({ password: "hunter2", remembered: true }) },
+    });
+    await serverItem(page, "Build box").dblclick();
+    await expect(dialog(page)).toContainText("protected by a master password");
+    const input = dialog(page).getByTestId("dialog-input");
+    await expect(input).toHaveAttribute("type", "password");
+    await input.fill("not it");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(dialog(page)).toContainText("That master password is not correct");
+    await expect(dialog(page).getByTestId("dialog-input")).toHaveValue("");
+    await dialog(page).getByTestId("dialog-input").fill("open sesame");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(row(page, "left", "app")).toBeVisible();
+    expect((await calls(page, "unlock_secrets")).map((c) => c.password)).toEqual(["not it", "open sesame"]);
+    // The saved password was used: nothing was typed for the server itself.
+    expect((await calls(page, "connect")).map((c) => c.secret)).toEqual([null, null]);
+  });
+
+  test("a master password is set from the palette, typed twice", async ({ page }) => {
+    await withServers(page, sftp());
+    await page.keyboard.press("ControlOrMeta+Shift+p");
+    await page.getByTestId("palette").locator("input").fill("protect saved passwords");
+    await page.keyboard.press("Enter");
+    await expect(dialog(page)).toContainText("cannot be recovered");
+    await dialog(page).getByTestId("dialog-input").fill("short");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(dialog(page)).toContainText("at least 8 characters");
+    await dialog(page).getByTestId("dialog-input").fill("long enough pw");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(dialog(page)).toContainText("Type the same master password again");
+    await dialog(page).getByTestId("dialog-input").fill("long enough typo");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(dialog(page)).toContainText("were not the same");
+    await dialog(page).getByTestId("dialog-input").fill("long enough pw");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await dialog(page).getByTestId("dialog-input").fill("long enough pw");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(page.locator(".notice")).toContainText("protected by your master password");
+    expect(await calls(page, "protect_secrets")).toEqual([{ password: "long enough pw" }]);
+
+    // The palette now offers the other master password commands.
+    await page.keyboard.press("ControlOrMeta+Shift+p");
+    await page.getByTestId("palette").locator("input").fill("master password");
+    const titles = await page.getByTestId("palette").locator("li .title").allTextContents();
+    expect(titles).toEqual(expect.arrayContaining(["Change Master Password…", "Stop Using a Master Password…", "Reset Forgotten Master Password…"]));
+  });
+
+  test("saving a server password while locked asks for the master password, then saves", async ({ page }) => {
+    await openApp(page, { ...defaultScenario, masterPassword: "open sesame", servers: { build: sftp() } });
+    await serverItem(page, "Build box").hover();
+    await sidebar(page).getByRole("button", { name: "Edit Build box", exact: true }).click();
+    const form = page.getByTestId("connection-dialog");
+    await expect(form).toContainText("encrypted with your master password");
+    await form.getByPlaceholder("Unchanged").fill("hunter2");
+    await form.getByRole("button", { name: "Save" }).click();
+    await expect(dialog(page)).toContainText("protected by a master password");
+    await dialog(page).getByTestId("dialog-input").fill("open sesame");
+    await dialog(page).getByTestId("dialog-ok").click();
+    await expect(form).toBeHidden();
+    const saves = await calls(page, "save_connection");
+    expect(saves.map((c) => c.secret)).toEqual(["hunter2", "hunter2"]);
+  });
+
   test("UI-E2E-010 a changed host key blocks the connection with no way to trust it", async ({ page }) => {
     await withServers(page, sftp({ hostKeyChanged: true, fingerprint: FP }));
     await serverItem(page, "Build box").dblclick();

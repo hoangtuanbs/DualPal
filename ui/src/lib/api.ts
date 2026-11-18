@@ -426,8 +426,29 @@ export interface Insights {
   failures: ActivityRecord[];
 }
 
+/** Whether a master password protects the saved server passwords. */
+export interface VaultStatus {
+  protected: boolean;
+  /** Entered in this run of the app (always true when not protected). */
+  unlocked: boolean;
+}
+
+/** Shortest master password the app accepts. */
+export const MIN_MASTER_PASSWORD = 8;
+
 export function errorKind(e: unknown): string | null {
   return e && typeof e === "object" && "kind" in e ? String((e as ErrorInfo).kind) : null;
+}
+
+/** Run `f`. When it fails because saved passwords are locked, ask `unlock`
+ *  for the master password and, once unlocked, run it again. */
+export async function withUnlock<T>(f: () => Promise<T>, unlock?: () => Promise<boolean>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (errorKind(e) === "locked" && unlock && (await unlock())) return f();
+    throw e;
+  }
 }
 
 /** Errors from commands arrive as `{ kind, message }`. */
@@ -500,6 +521,17 @@ export const api = {
   stopEditSession: (id: string) => invoke<boolean>("stop_edit_session", { id }),
   uploadEditSession: (id: string) => invoke<EditSession>("upload_edit_session", { id }),
   previewPath: (location: Location) => invoke<string>("preview_path", { location }),
+  secretsStatus: () => invoke<VaultStatus>("secrets_status"),
+  /** Set a master password; saved passwords move from the system store into an encrypted vault. */
+  protectSecrets: (password: string) => invoke<VaultStatus>("protect_secrets", { password }),
+  unlockSecrets: (password: string) => invoke<VaultStatus>("unlock_secrets", { password }),
+  lockSecrets: () => invoke<VaultStatus>("lock_secrets"),
+  changeMasterPassword: (current: string, password: string) =>
+    invoke<VaultStatus>("change_master_password", { current, password }),
+  /** Stop using a master password; saved passwords go back to the system store. */
+  unprotectSecrets: (password: string) => invoke<VaultStatus>("unprotect_secrets", { password }),
+  /** Forgotten master password: delete the protected passwords (servers stay). */
+  resetSecrets: () => invoke<VaultStatus>("reset_secrets"),
   settings: () => invoke<Settings>("settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   syncPlan: (left: Location, right: Location, mode: SyncMode, options: CompareOptions) =>
