@@ -167,6 +167,21 @@ pub trait SecretStore: Send + Sync {
     fn get(&self, key: &str) -> Result<Option<String>>;
     fn set(&self, key: &str, secret: &str) -> Result<()>;
     fn delete(&self, key: &str) -> Result<()>;
+
+    /// Like [`Self::get`], but a store that cannot be read is an error rather
+    /// than "no secret". Used when moving secrets between stores.
+    fn get_strict(&self, key: &str) -> Result<Option<String>> {
+        self.get(key)
+    }
+    /// Like [`Self::set`], but succeeds only once the secret is stored
+    /// durably: no fallback that keeps it in memory for this run only.
+    fn set_durable(&self, key: &str, secret: &str) -> Result<()> {
+        self.set(key, secret)
+    }
+    /// Like [`Self::delete`], but reports a secret that could not be removed.
+    fn delete_strict(&self, key: &str) -> Result<()> {
+        self.delete(key)
+    }
 }
 
 /// A secret store that only lives in memory, for tests and as a fallback.

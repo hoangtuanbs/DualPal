@@ -14,8 +14,8 @@
 //!
 //! The vault starts locked on every run of the app. Until the person types
 //! the master password, reading or saving a secret fails with
-//! [`Error::Locked`], which the UI answers with an unlock prompt. Removing a
-//! secret while locked is remembered and done at the next unlock.
+//! [`Error::Locked`], which the UI answers with an unlock prompt. A secret
+//! removed while locked is dropped at the next unlock ([`ProtectedSecrets::retain`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -135,22 +135,33 @@ struct Open {
 enum State {
     /// No master password: secrets live in the system store.
     Off,
-    /// Protected and not yet unlocked. Keys removed meanwhile are dropped
-    /// from the vault at the next unlock.
-    Locked {
-        pending_deletes: Vec<String>,
-    },
+    /// Protected and not yet unlocked.
+    Locked,
     Unlocked(Open),
 }
 
 /// A [`SecretStore`] that keeps secrets in the system store, or, once a
 /// master password is set, in an encrypted vault file.
+///
+/// Several running copies of the app may share the vault file. Every change
+/// takes an exclusive lock on `secrets.vault.lock`, reloads the file and only
+/// then applies itself, so one window never overwrites another's change. A
+/// master password changed, set or removed elsewhere is noticed on the next
+/// use: the vault locks (or switches to the system store) accordingly.
 pub struct ProtectedSecrets {
     /// The system store (Keychain, Credential Manager, Secret Service).
     system: Arc<dyn SecretStore>,
     path: PathBuf,
     kdf: KdfParams,
     state: Mutex<State>,
+}
+
+/// The parsed, still encrypted vault file.
+struct Sealed {
+    file: VaultFile,
+    salt: [u8; SALT_LEN],
+    nonce: [u8; NONCE_LEN],
+    data: Vec<u8>,
 }
 
 fn random<const N: usize>() -> Result<[u8; N]> {
@@ -179,6 +190,10 @@ fn wrong_password() -> Error {
     Error::AuthFailed("the master password is not correct".into())
 }
 
+fn damaged() -> Error {
+    Error::Invalid("the saved password vault is damaged".into())
+}
+
 fn check_new_password(password: &str) -> Result<()> {
     if password.chars().count() < MIN_PASSWORD_LEN {
         return Err(Error::Invalid(format!(
@@ -199,9 +214,7 @@ impl ProtectedSecrets {
     pub fn with_kdf(path: impl AsRef<Path>, system: Arc<dyn SecretStore>, kdf: KdfParams) -> Self {
         let path = path.as_ref().to_path_buf();
         let state = if path.exists() {
-            State::Locked {
-                pending_deletes: Vec::new(),
-            }
+            State::Locked
         } else {
             State::Off
         };
@@ -214,12 +227,14 @@ impl ProtectedSecrets {
     }
 
     pub fn status(&self) -> VaultStatus {
-        match &*self.state.lock().unwrap() {
+        let mut state = self.state.lock().unwrap();
+        let _ = self.refresh(&mut state);
+        match &*state {
             State::Off => VaultStatus {
                 protected: false,
                 unlocked: true,
             },
-            State::Locked { .. } => VaultStatus {
+            State::Locked => VaultStatus {
                 protected: true,
                 unlocked: false,
             },
@@ -231,10 +246,13 @@ impl ProtectedSecrets {
     }
 
     /// Set a master password: move the secrets of `keys` from the system
-    /// store into a new vault, then remove them from the system store.
+    /// store into a new vault, then remove them from the system store. When
+    /// the system store cannot be read or emptied, nothing changes.
     pub fn enable(&self, password: &str, keys: &[String]) -> Result<()> {
         check_new_password(password)?;
+        let _file = self.file_lock()?;
         let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state)?;
         if !matches!(*state, State::Off) {
             return Err(Error::Invalid(
                 "a master password is already set; change it instead".into(),
@@ -242,7 +260,7 @@ impl ProtectedSecrets {
         }
         let mut secrets = Secrets::default();
         for k in keys {
-            if let Some(s) = self.system.get(k)? {
+            if let Some(s) = self.system.get_strict(k)? {
                 secrets.0.insert(k.clone(), s);
             }
         }
@@ -255,8 +273,18 @@ impl ProtectedSecrets {
         };
         self.write(&open)?;
         // Only now that the vault is on disk: nothing is lost if writing failed.
+        let mut removed: Vec<&String> = Vec::new();
         for k in open.secrets.0.keys() {
-            let _ = self.system.delete(k);
+            if let Err(e) = self.system.delete_strict(k) {
+                // A copy readable without the master password would remain:
+                // undo the move rather than claim protection.
+                for r in &removed {
+                    let _ = self.system.set_durable(r, &open.secrets.0[*r]);
+                }
+                self.remove_file()?;
+                return Err(e);
+            }
+            removed.push(k);
         }
         *state = State::Unlocked(open);
         Ok(())
@@ -265,43 +293,49 @@ impl ProtectedSecrets {
     /// Enter the master password for this run of the app.
     pub fn unlock(&self, password: &str) -> Result<()> {
         let mut state = self.state.lock().unwrap();
-        let pending = match &mut *state {
-            State::Off => return Ok(()),
-            State::Unlocked(_) => {
-                // Already open: still say whether the password was right.
-                self.read(password)?;
-                return Ok(());
+        self.refresh(&mut state)?;
+        match &*state {
+            State::Off => Ok(()),
+            // Already open: still say whether the password was right.
+            State::Unlocked(_) => self.read(password).map(|_| ()),
+            State::Locked => {
+                let open = self.read(password)?;
+                *state = State::Unlocked(open);
+                Ok(())
             }
-            State::Locked { pending_deletes } => std::mem::take(pending_deletes),
-        };
-        let mut open = match self.read(password) {
-            Ok(o) => o,
-            Err(e) => {
-                *state = State::Locked {
-                    pending_deletes: pending,
-                };
-                return Err(e);
-            }
-        };
-        if !pending.is_empty() {
-            for k in &pending {
-                if let Some(mut v) = open.secrets.0.remove(k) {
+        }
+    }
+
+    /// Drop the secrets of every key not in `keys`, e.g. of servers removed
+    /// while the vault was locked. Needs the vault unlocked; does nothing
+    /// otherwise.
+    pub fn retain(&self, keys: &[String]) -> Result<()> {
+        self.modify(|secrets| {
+            let before = secrets.0.len();
+            let gone: Vec<String> = secrets
+                .0
+                .keys()
+                .filter(|k| !keys.contains(k))
+                .cloned()
+                .collect();
+            for k in gone {
+                if let Some(mut v) = secrets.0.remove(&k) {
                     v.zeroize();
                 }
             }
-            self.write(&open)?;
-        }
-        *state = State::Unlocked(open);
-        Ok(())
+            secrets.0.len() != before
+        })
+        .or_else(|e| match e {
+            Error::Locked => Ok(()),
+            e => Err(e),
+        })
     }
 
     /// Forget the key until the master password is entered again.
     pub fn lock(&self) {
         let mut state = self.state.lock().unwrap();
         if matches!(*state, State::Unlocked(_)) {
-            *state = State::Locked {
-                pending_deletes: Vec::new(),
-            };
+            *state = State::Locked;
         }
     }
 
@@ -309,16 +343,13 @@ impl ProtectedSecrets {
     /// the vault is unlocked.
     pub fn change(&self, current: &str, new: &str) -> Result<()> {
         check_new_password(new)?;
+        let _file = self.file_lock()?;
         let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state)?;
         if matches!(*state, State::Off) {
             return Err(Error::Invalid("no master password is set".into()));
         }
         let mut open = self.read(current)?;
-        if let State::Locked { pending_deletes } = &*state {
-            for k in pending_deletes {
-                open.secrets.0.remove(k);
-            }
-        }
         let salt = random::<SALT_LEN>()?;
         open.key = derive(new, &salt, self.kdf)?;
         open.salt = salt;
@@ -329,23 +360,34 @@ impl ProtectedSecrets {
     }
 
     /// Stop using a master password: move the secrets back into the system
-    /// store and delete the vault.
+    /// store and delete the vault. All or nothing: when a secret cannot be
+    /// saved durably in the system store, or the vault cannot be deleted, the
+    /// copies already made are removed again and protection stays on.
     pub fn disable(&self, password: &str) -> Result<()> {
+        let _file = self.file_lock()?;
         let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state)?;
         if matches!(*state, State::Off) {
             return Ok(());
         }
         let open = self.read(password)?;
-        let pending = match &*state {
-            State::Locked { pending_deletes } => pending_deletes.clone(),
-            _ => Vec::new(),
+        let mut copied: Vec<&String> = Vec::new();
+        let undo = |copied: &[&String]| {
+            for k in copied {
+                let _ = self.system.delete_strict(k);
+            }
         };
         for (k, v) in &open.secrets.0 {
-            if !pending.contains(k) {
-                self.system.set(k, v)?;
+            if let Err(e) = self.system.set_durable(k, v) {
+                undo(&copied);
+                return Err(e);
             }
+            copied.push(k);
         }
-        self.remove_file()?;
+        if let Err(e) = self.remove_file() {
+            undo(&copied);
+            return Err(e);
+        }
         *state = State::Off;
         Ok(())
     }
@@ -353,10 +395,83 @@ impl ProtectedSecrets {
     /// For a forgotten master password: delete the vault and every secret in
     /// it. Saved servers stay; their passwords must be entered again.
     pub fn reset(&self) -> Result<()> {
+        let _file = self.file_lock()?;
         let mut state = self.state.lock().unwrap();
         self.remove_file()?;
         *state = State::Off;
         Ok(())
+    }
+
+    /// Change the unlocked secrets under the file lock, starting from what is
+    /// on disk now. `f` returns whether it changed anything.
+    fn modify(&self, f: impl FnOnce(&mut Secrets) -> bool) -> Result<()> {
+        let _file = self.file_lock()?;
+        let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state)?;
+        match &mut *state {
+            State::Off => Err(Error::Invalid("no master password is set".into())),
+            State::Locked => Err(Error::Locked),
+            State::Unlocked(open) => {
+                if f(&mut open.secrets) {
+                    if let Err(e) = self.write(open) {
+                        // Memory must match the file: read it back.
+                        let _ = self.reload(&mut state);
+                        return Err(e);
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Catch up with changes another running copy of the app made to the
+    /// vault file.
+    fn refresh(&self, state: &mut State) -> Result<()> {
+        match state {
+            State::Off if self.path.exists() => *state = State::Locked,
+            State::Locked if !self.path.exists() => *state = State::Off,
+            State::Unlocked(_) => self.reload(state)?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Re-read the vault file with the key in memory.
+    fn reload(&self, state: &mut State) -> Result<()> {
+        let State::Unlocked(open) = &mut *state else {
+            return Ok(());
+        };
+        if !self.path.exists() {
+            // Removed elsewhere: back to the system store.
+            *state = State::Off;
+            return Ok(());
+        }
+        let sealed = self.parse()?;
+        if sealed.salt != open.salt || sealed.file.kdf != open.kdf {
+            // The master password was changed elsewhere: ask for it again.
+            *state = State::Locked;
+            return Ok(());
+        }
+        open.secrets = Self::decrypt(&sealed, &open.key)?;
+        Ok(())
+    }
+
+    /// An exclusive lock on `secrets.vault.lock`, held while the vault file
+    /// is read and replaced. Released when dropped.
+    fn file_lock(&self) -> Result<std::fs::File> {
+        let lock_path = self.path.with_extension("vault.lock");
+        if let Some(dir) = lock_path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| Error::io(dir.to_string_lossy(), e))?;
+        }
+        let io = |e| Error::io(lock_path.to_string_lossy(), e);
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(io)?;
+        f.lock().map_err(io)?;
+        Ok(f)
     }
 
     fn remove_file(&self) -> Result<()> {
@@ -367,11 +482,9 @@ impl ProtectedSecrets {
         }
     }
 
-    /// Open the vault file with `password`.
-    fn read(&self, password: &str) -> Result<Open> {
+    fn parse(&self) -> Result<Sealed> {
         let bytes =
             std::fs::read(&self.path).map_err(|e| Error::io(self.path.to_string_lossy(), e))?;
-        let damaged = || Error::Invalid("the saved password vault is damaged".into());
         let file: VaultFile = serde_json::from_slice(&bytes).map_err(|_| damaged())?;
         if file.format != FORMAT || file.algorithm != ALGORITHM {
             return Err(Error::Unsupported(
@@ -389,25 +502,41 @@ impl ProtectedSecrets {
             .and_then(|s| s.try_into().ok())
             .ok_or_else(damaged)?;
         let data = B64.decode(&file.data).map_err(|_| damaged())?;
-        let key = derive(password, &salt, file.kdf)?;
+        Ok(Sealed {
+            file,
+            salt,
+            nonce,
+            data,
+        })
+    }
+
+    fn decrypt(sealed: &Sealed, key: &[u8; 32]) -> Result<Secrets> {
         let plain = Zeroizing::new(
-            cipher(&key)
+            cipher(key)
                 .decrypt(
-                    &nonce.into(),
+                    &sealed.nonce.into(),
                     Payload {
-                        msg: &data,
-                        aad: &file.header(),
+                        msg: &sealed.data,
+                        aad: &sealed.file.header(),
                     },
                 )
                 .map_err(|_| wrong_password())?,
         );
         let map: BTreeMap<String, String> =
             serde_json::from_slice(&plain).map_err(|_| damaged())?;
+        Ok(Secrets(map))
+    }
+
+    /// Open the vault file with `password`.
+    fn read(&self, password: &str) -> Result<Open> {
+        let sealed = self.parse()?;
+        let key = derive(password, &sealed.salt, sealed.file.kdf)?;
+        let secrets = Self::decrypt(&sealed, &key)?;
         Ok(Open {
             key,
-            salt,
-            kdf: file.kdf,
-            secrets: Secrets(map),
+            salt: sealed.salt,
+            kdf: sealed.file.kdf,
+            secrets,
         })
     }
 
@@ -446,7 +575,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| Error::io(dir.to_string_lossy(), e))?;
     }
-    let tmp = path.with_extension("vault.tmp");
+    let tmp = path.with_extension(format!("vault.{}.tmp", std::process::id()));
     let io = |e| Error::io(tmp.to_string_lossy(), e);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
@@ -464,49 +593,52 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 impl SecretStore for ProtectedSecrets {
     fn get(&self, key: &str) -> Result<Option<String>> {
-        match &*self.state.lock().unwrap() {
+        let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state)?;
+        match &*state {
             State::Off => self.system.get(key),
-            State::Locked { .. } => Err(Error::Locked),
+            State::Locked => Err(Error::Locked),
             State::Unlocked(open) => Ok(open.secrets.0.get(key).cloned()),
         }
     }
 
     fn set(&self, key: &str, secret: &str) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
-        match &mut *state {
-            State::Off => self.system.set(key, secret),
-            State::Locked { .. } => Err(Error::Locked),
-            State::Unlocked(open) => {
-                let old = open.secrets.0.insert(key.into(), secret.into());
-                if let Err(e) = self.write(open) {
-                    match old {
-                        Some(o) => open.secrets.0.insert(key.into(), o),
-                        None => open.secrets.0.remove(key),
-                    };
-                    return Err(e);
-                }
-                Ok(())
+        {
+            let mut state = self.state.lock().unwrap();
+            self.refresh(&mut state)?;
+            if matches!(*state, State::Off) {
+                return self.system.set(key, secret);
             }
         }
+        self.modify(|s| {
+            s.0.insert(key.into(), secret.into());
+            true
+        })
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
-        match &mut *state {
-            State::Off => self.system.delete(key),
-            State::Locked { pending_deletes } => {
-                // An entry left in the system store from before is removed too.
-                let _ = self.system.delete(key);
-                pending_deletes.push(key.into());
-                Ok(())
+        {
+            let mut state = self.state.lock().unwrap();
+            self.refresh(&mut state)?;
+            if matches!(*state, State::Off) {
+                return self.system.delete(key);
             }
-            State::Unlocked(open) => {
-                let _ = self.system.delete(key);
-                if open.secrets.0.remove(key).is_some() {
-                    self.write(open)?;
-                }
-                Ok(())
+        }
+        // An entry left in the system store from before goes too.
+        let _ = self.system.delete(key);
+        match self.modify(|s| match s.0.remove(key) {
+            Some(mut v) => {
+                v.zeroize();
+                true
             }
+            None => false,
+        }) {
+            // Locked: dropped at the next unlock, which keeps only the
+            // secrets of saved servers.
+            Ok(()) | Err(Error::Locked) => Ok(()),
+            // Turned off elsewhere in the meantime.
+            Err(_) if !self.path.exists() => self.system.delete(key),
+            Err(e) => Err(e),
         }
     }
 }

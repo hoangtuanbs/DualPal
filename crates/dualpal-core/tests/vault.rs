@@ -129,21 +129,156 @@ fn locking_forgets_the_key() {
 }
 
 #[test]
-fn removing_a_secret_while_locked_happens_at_the_next_unlock() {
+fn secrets_of_servers_removed_while_locked_are_dropped_at_unlock_even_after_a_restart() {
     let (dir, system, vault) = setup();
     vault.enable(PW, &[]).unwrap();
     vault.set("a", "pw-a").unwrap();
     vault.set("b", "pw-b").unwrap();
-    vault.lock();
-    vault.delete("a").unwrap();
-    vault.unlock(PW).unwrap();
-    assert_eq!(vault.get("a").unwrap(), None);
     drop(vault);
 
-    let vault = reopen(&dir, system);
+    // Removed while locked, then the app quits before anyone unlocks.
+    let vault = reopen(&dir, system.clone());
+    vault.delete("a").unwrap();
+    drop(vault);
+
+    let vault = reopen(&dir, system.clone());
     vault.unlock(PW).unwrap();
+    vault.retain(&["b".into()]).unwrap();
     assert_eq!(vault.get("a").unwrap(), None);
     assert_eq!(vault.get("b").unwrap().as_deref(), Some("pw-b"));
+    drop(vault);
+
+    let vault = reopen(&dir, system.clone());
+    vault.unlock(PW).unwrap();
+    assert_eq!(vault.get("a").unwrap(), None);
+    vault.disable(PW).unwrap();
+    assert_eq!(system.get("a").unwrap(), None);
+    assert_eq!(system.get("b").unwrap().as_deref(), Some("pw-b"));
+}
+
+/// A system store that refuses some strict operations, like a keyring that
+/// is locked or unavailable.
+#[derive(Default)]
+struct Flaky {
+    inner: MemorySecrets,
+    fail_read: bool,
+    fail_delete: bool,
+    fail_durable: bool,
+}
+
+impl SecretStore for Flaky {
+    fn get(&self, key: &str) -> dualpal_core::Result<Option<String>> {
+        self.inner.get(key)
+    }
+    fn set(&self, key: &str, secret: &str) -> dualpal_core::Result<()> {
+        self.inner.set(key, secret)
+    }
+    fn delete(&self, key: &str) -> dualpal_core::Result<()> {
+        self.inner.delete(key)
+    }
+    fn get_strict(&self, key: &str) -> dualpal_core::Result<Option<String>> {
+        if self.fail_read {
+            return Err(Error::Unsupported("reading the keyring".into()));
+        }
+        self.inner.get(key)
+    }
+    fn set_durable(&self, key: &str, secret: &str) -> dualpal_core::Result<()> {
+        if self.fail_durable && key == "b" {
+            return Err(Error::Unsupported("saving to the keyring".into()));
+        }
+        self.inner.set(key, secret)
+    }
+    fn delete_strict(&self, key: &str) -> dualpal_core::Result<()> {
+        if self.fail_delete && key == "b" {
+            return Err(Error::Unsupported("removing from the keyring".into()));
+        }
+        self.inner.delete(key)
+    }
+}
+
+fn flaky(f: Flaky) -> (tempfile::TempDir, Arc<Flaky>, ProtectedSecrets) {
+    let dir = tempfile::tempdir().unwrap();
+    f.inner.set("a", "pw-a").unwrap();
+    f.inner.set("b", "pw-b").unwrap();
+    let system = Arc::new(f);
+    let vault = ProtectedSecrets::with_kdf(
+        dir.path().join("secrets.vault"),
+        system.clone(),
+        KdfParams::insecure_for_tests(),
+    );
+    (dir, system, vault)
+}
+
+#[test]
+fn protection_is_not_claimed_when_the_system_store_cannot_be_read() {
+    let (dir, system, vault) = flaky(Flaky {
+        fail_read: true,
+        ..Default::default()
+    });
+    assert!(vault.enable(PW, &["a".into(), "b".into()]).is_err());
+    assert!(!vault.status().protected);
+    assert!(!dir.path().join("secrets.vault").exists());
+    assert_eq!(system.get("a").unwrap().as_deref(), Some("pw-a"));
+}
+
+#[test]
+fn protection_is_undone_when_a_password_cannot_be_removed_from_the_system_store() {
+    let (dir, system, vault) = flaky(Flaky {
+        fail_delete: true,
+        ..Default::default()
+    });
+    assert!(vault.enable(PW, &["a".into(), "b".into()]).is_err());
+    assert!(!vault.status().protected);
+    assert!(!dir.path().join("secrets.vault").exists());
+    // "a" was removed before "b" failed: it is put back, nothing is lost.
+    assert_eq!(system.get("a").unwrap().as_deref(), Some("pw-a"));
+    assert_eq!(system.get("b").unwrap().as_deref(), Some("pw-b"));
+}
+
+#[test]
+fn turning_it_off_keeps_the_vault_when_the_system_store_cannot_keep_a_password() {
+    let (dir, system, vault) = flaky(Flaky {
+        fail_durable: true,
+        ..Default::default()
+    });
+    vault.enable(PW, &["a".into(), "b".into()]).unwrap();
+    assert!(vault.disable(PW).is_err());
+    assert!(vault.status().protected);
+    assert!(dir.path().join("secrets.vault").exists());
+    // No copy of "a" was left readable without the master password.
+    assert_eq!(system.get("a").unwrap(), None);
+    assert_eq!(vault.get("b").unwrap().as_deref(), Some("pw-b"));
+}
+
+#[test]
+fn two_running_copies_do_not_overwrite_each_other() {
+    let (dir, system, one) = setup();
+    one.enable(PW, &[]).unwrap();
+    let two = reopen(&dir, system.clone());
+    two.unlock(PW).unwrap();
+
+    one.set("a", "pw-a").unwrap();
+    two.set("b", "pw-b").unwrap();
+    assert_eq!(two.get("a").unwrap().as_deref(), Some("pw-a"));
+    assert_eq!(one.get("b").unwrap().as_deref(), Some("pw-b"));
+    one.delete("a").unwrap();
+    assert_eq!(two.get("a").unwrap(), None);
+
+    let three = reopen(&dir, system.clone());
+    three.unlock(PW).unwrap();
+    assert_eq!(three.get("b").unwrap().as_deref(), Some("pw-b"));
+
+    // A new master password set in one copy locks the others.
+    one.change(PW, "another password").unwrap();
+    assert!(matches!(two.get("b"), Err(Error::Locked)));
+    assert!(!two.status().unlocked);
+    two.unlock("another password").unwrap();
+    assert_eq!(two.get("b").unwrap().as_deref(), Some("pw-b"));
+
+    // Turned off in one copy: the others use the system store again.
+    one.disable("another password").unwrap();
+    assert!(!two.status().protected);
+    assert_eq!(two.get("b").unwrap().as_deref(), Some("pw-b"));
 }
 
 #[test]
