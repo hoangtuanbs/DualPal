@@ -5,7 +5,9 @@
 //! own list of favorite paths on that server: favorites within favorites.
 //! Secrets (passwords, key passphrases, S3 secret keys) are never written to
 //! the JSON file; they live in a [`SecretStore`], which the app backs with
-//! the macOS Keychain or the Windows Credential Manager.
+//! the macOS Keychain, the Windows Credential Manager or the Linux Secret
+//! Service, or with a vault encrypted by a master password
+//! ([`crate::vault`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -165,6 +167,21 @@ pub trait SecretStore: Send + Sync {
     fn get(&self, key: &str) -> Result<Option<String>>;
     fn set(&self, key: &str, secret: &str) -> Result<()>;
     fn delete(&self, key: &str) -> Result<()>;
+
+    /// Like [`Self::get`], but a store that cannot be read is an error rather
+    /// than "no secret". Used when moving secrets between stores.
+    fn get_strict(&self, key: &str) -> Result<Option<String>> {
+        self.get(key)
+    }
+    /// Like [`Self::set`], but succeeds only once the secret is stored
+    /// durably: no fallback that keeps it in memory for this run only.
+    fn set_durable(&self, key: &str, secret: &str) -> Result<()> {
+        self.set(key, secret)
+    }
+    /// Like [`Self::delete`], but reports a secret that could not be removed.
+    fn delete_strict(&self, key: &str) -> Result<()> {
+        self.delete(key)
+    }
 }
 
 /// A secret store that only lives in memory, for tests and as a fallback.
@@ -294,6 +311,16 @@ impl Connections {
         let out = conn.clone();
         self.persist(&items)?;
         Ok(out)
+    }
+
+    /// Ids of every saved connection.
+    pub fn ids(&self) -> Vec<String> {
+        self.items
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.id.clone())
+            .collect()
     }
 
     pub fn secret(&self, id: &str) -> Result<Option<String>> {

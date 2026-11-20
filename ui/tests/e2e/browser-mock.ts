@@ -15,6 +15,8 @@ export interface ServerScenario {
   start?: string;
   /** Sign-in needs this secret (unless remembered). */
   password?: string;
+  /** The password is already saved. */
+  remembered?: boolean;
   /** Host key / certificate fingerprint to confirm on first contact. */
   fingerprint?: string;
   /** The server's key changed since it was trusted: refuse to connect. */
@@ -29,6 +31,8 @@ export interface BrowserScenario {
   /** Fixed results for commands, replacing the default handler. */
   results?: Record<string, unknown>;
   servers?: Record<string, ServerScenario>;
+  /** Saved passwords are protected by this master password, locked at start. */
+  masterPassword?: string;
 }
 
 /** A backend call the app made, as recorded by the mock. */
@@ -135,7 +139,7 @@ export function installBrowserMock(scenario: BrowserScenario) {
       ...JSON.parse(JSON.stringify(s)),
       connected: false,
       trusted: !s.fingerprint,
-      remembered: false,
+      remembered: s.remembered ?? false,
       tree: makeTree(s.files ?? {}, "/"),
     });
   for (const s of Object.values(scenario.servers ?? {})) addServer(s);
@@ -179,6 +183,12 @@ export function installBrowserMock(scenario: BrowserScenario) {
     /** Keep `connect` calls waiting until the test calls `__mock.releaseConnects()`. */
     holdConnect: false,
   };
+  /** The master password over saved passwords, and whether it was entered. */
+  let master: string | null = scenario.masterPassword ?? null;
+  let unlocked = master === null;
+  const vaultStatus = () => ({ protected: master !== null, unlocked: master === null || unlocked });
+  const wrongMaster = () => ({ kind: "authFailed", message: "sign-in failed: the master password is not correct" });
+  const locked = () => ({ kind: "locked", message: "saved passwords are locked; enter the master password to unlock them" });
   /** Held `connect` calls, run when released. */
   let heldConnects: (() => void)[] = [];
   const releaseConnects = () => {
@@ -369,6 +379,7 @@ export function installBrowserMock(scenario: BrowserScenario) {
     connections: () => [...servers.values()].map(view),
     ssh_config_hosts: () => [],
     save_connection: (a) => {
+      if (a.secret && !vaultStatus().unlocked) throw locked();
       const c = a.connection;
       const id = c.id || `server-${++serverCounter}`;
       const old = servers.get(id);
@@ -384,6 +395,38 @@ export function installBrowserMock(scenario: BrowserScenario) {
       return null;
     },
     reorder_connections: () => null,
+    secrets_status: () => vaultStatus(),
+    protect_secrets: (a) => {
+      if (a.password.length < 8) throw { kind: "invalid", message: "invalid request: the master password needs at least 8 characters" };
+      master = a.password;
+      unlocked = true;
+      return vaultStatus();
+    },
+    unlock_secrets: (a) => {
+      if (master !== null && a.password !== master) throw wrongMaster();
+      unlocked = true;
+      return vaultStatus();
+    },
+    lock_secrets: () => {
+      unlocked = false;
+      return vaultStatus();
+    },
+    change_master_password: (a) => {
+      if (a.current !== master) throw wrongMaster();
+      master = a.password;
+      unlocked = true;
+      return vaultStatus();
+    },
+    unprotect_secrets: (a) => {
+      if (master !== null && a.password !== master) throw wrongMaster();
+      master = null;
+      return vaultStatus();
+    },
+    reset_secrets: () => {
+      master = null;
+      for (const s of servers.values()) s.remembered = false;
+      return vaultStatus();
+    },
     connect: (a) => {
       if (control.holdConnect) {
         return new Promise((resolve, reject) =>
@@ -538,6 +581,8 @@ export function installBrowserMock(scenario: BrowserScenario) {
       if (a.trust && a.trust === s.fingerprint) s.trusted = true;
       else throw { kind: "unknownHost", message: `unknown host ${host}, key fingerprint ${s.fingerprint}`, host, fingerprint: s.fingerprint };
     }
+    // The saved password is behind the master password: ask for that first.
+    if (s.password && s.remembered && !a.secret && !vaultStatus().unlocked) throw locked();
     if (s.password && !s.remembered && a.secret !== s.password) {
       throw { kind: "authFailed", message: "sign-in failed: wrong user name or password" };
     }

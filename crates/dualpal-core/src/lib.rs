@@ -8,6 +8,7 @@
 //! * [`folder_size`] — the total size and item counts of a folder.
 //! * [`search`] — find files by name below a folder.
 //! * [`connections`] — saved SFTP and S3 connections with their favorites.
+//! * [`vault`] — the optional master password that encrypts saved secrets.
 //! * [`remote_edit`] — edit remote files in a local app, uploading on save.
 //! * [`compare`] and [`sync`] — folder comparison and one- or two-way sync.
 //! * [`rename`] — Multi Rename rules and presets.
@@ -39,6 +40,7 @@ pub mod settings;
 pub mod sync;
 pub mod terminal;
 pub mod upgrade;
+pub mod vault;
 pub mod vfs;
 
 pub use activity::{ActivityLog, ActivityRecord};

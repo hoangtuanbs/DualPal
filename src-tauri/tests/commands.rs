@@ -67,6 +67,13 @@ fn tested_commands() -> HashSet<&'static str> {
         "preview_path",
         "settings",
         "save_settings",
+        "secrets_status",
+        "protect_secrets",
+        "unlock_secrets",
+        "lock_secrets",
+        "change_master_password",
+        "unprotect_secrets",
+        "reset_secrets",
         "sync_plan",
         "cancel_compare",
         "run_sync",
@@ -606,6 +613,107 @@ fn connect_and_remember() {
     )
     .unwrap_err();
     assert_eq!(err["kind"], "notFound", "{err}");
+}
+
+/// The master password: secrets move into an encrypted vault, the app
+/// starts locked, `connect` asks for it, and it can be changed or removed.
+#[test]
+fn master_password_protects_saved_secrets() {
+    let TestApp { app, tmp } = app();
+    let conn = json!({
+        "id": "pw",
+        "name": "Box",
+        "endpoint": { "type": "sftp", "host": "127.0.0.1", "port": 1, "user": "me", "auth": { "method": "password" } },
+        "initialPath": null,
+        "favorites": []
+    });
+    call::<Value>(
+        &app,
+        "save_connection",
+        json!({ "connection": conn, "secret": "S3CR3T" }),
+    )
+    .unwrap();
+    let status: Value = call(&app, "secrets_status", json!({})).unwrap();
+    assert_eq!(status, json!({ "protected": false, "unlocked": true }));
+
+    let err = call::<Value>(&app, "protect_secrets", json!({ "password": "short" })).unwrap_err();
+    assert_eq!(err["kind"], "invalid", "{err}");
+    let status: Value = call(
+        &app,
+        "protect_secrets",
+        json!({ "password": "master pass 1" }),
+    )
+    .unwrap();
+    assert_eq!(status, json!({ "protected": true, "unlocked": true }));
+    let vault = std::fs::read_to_string(tmp.path().join("data/secrets.vault")).unwrap();
+    assert!(!vault.contains("S3CR3T") && !vault.contains("master pass 1"));
+
+    let status: Value = call(&app, "lock_secrets", json!({})).unwrap();
+    assert_eq!(status, json!({ "protected": true, "unlocked": false }));
+    let err = call::<Value>(
+        &app,
+        "connect",
+        json!({ "id": "pw", "secret": null, "remember": false, "trust": null }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "locked", "{err}");
+    let err = call::<Value>(
+        &app,
+        "save_connection",
+        json!({ "connection": conn, "secret": "NEW" }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "locked", "{err}");
+
+    let err =
+        call::<Value>(&app, "unlock_secrets", json!({ "password": "wrong one" })).unwrap_err();
+    assert_eq!(err["kind"], "authFailed", "{err}");
+    let status: Value = call(
+        &app,
+        "unlock_secrets",
+        json!({ "password": "master pass 1" }),
+    )
+    .unwrap();
+    assert_eq!(status["unlocked"], true);
+    // Unlocked: the saved secret is used, so connecting gets to the network.
+    let err = call::<Value>(
+        &app,
+        "connect",
+        json!({ "id": "pw", "secret": null, "remember": false, "trust": null }),
+    )
+    .unwrap_err();
+    assert_ne!(err["kind"], "locked", "{err}");
+
+    let err = call::<Value>(
+        &app,
+        "change_master_password",
+        json!({ "current": "wrong one", "password": "master pass 2" }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "authFailed", "{err}");
+    call::<Value>(
+        &app,
+        "change_master_password",
+        json!({ "current": "master pass 1", "password": "master pass 2" }),
+    )
+    .unwrap();
+    let status: Value = call(
+        &app,
+        "unprotect_secrets",
+        json!({ "password": "master pass 2" }),
+    )
+    .unwrap();
+    assert_eq!(status, json!({ "protected": false, "unlocked": true }));
+    assert!(!tmp.path().join("data/secrets.vault").exists());
+
+    call::<Value>(
+        &app,
+        "protect_secrets",
+        json!({ "password": "master pass 3" }),
+    )
+    .unwrap();
+    let status: Value = call(&app, "reset_secrets", json!({})).unwrap();
+    assert_eq!(status, json!({ "protected": false, "unlocked": true }));
 }
 
 /// CMD-018 — disconnect.

@@ -7,6 +7,7 @@ use dualpal_core::connections::{self, ConnectOptions, Connection, RemoteFavorite
 use dualpal_core::import::{self, ImportReport};
 use dualpal_core::remote_edit::{self, EditSession};
 use dualpal_core::settings::Settings;
+use dualpal_core::vault::VaultStatus;
 use dualpal_core::vfs::{LocalFs, SshConfigHost};
 use dualpal_core::{Error, Location};
 use serde::Serialize;
@@ -59,6 +60,37 @@ impl SecretStore for KeychainSecrets {
         let _ = keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential());
         Ok(())
     }
+
+    fn get_strict(&self, key: &str) -> CmdResult<Option<String>> {
+        if let Some(s) = self.fallback.lock().unwrap().get(key) {
+            return Ok(Some(s.clone()));
+        }
+        match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
+            Ok(s) => Ok(Some(s)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(keyring_error("reading", e)),
+        }
+    }
+
+    fn set_durable(&self, key: &str, secret: &str) -> CmdResult<()> {
+        keyring::Entry::new(SERVICE, key)
+            .and_then(|e| e.set_password(secret))
+            .map_err(|e| keyring_error("saving to", e))?;
+        self.fallback.lock().unwrap().remove(key);
+        Ok(())
+    }
+
+    fn delete_strict(&self, key: &str) -> CmdResult<()> {
+        self.fallback.lock().unwrap().remove(key);
+        match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(keyring_error("removing a password from", e)),
+        }
+    }
+}
+
+fn keyring_error(what: &str, e: keyring::Error) -> Error {
+    Error::Unsupported(format!("{what} the system keyring ({e})"))
 }
 
 #[derive(Serialize)]
@@ -154,7 +186,11 @@ pub async fn connect(
         });
     }
     let stored = if conn.uses_secret() {
-        state.connections.secret(&id).unwrap_or(None)
+        match state.connections.secret(&id) {
+            // Ask for the master password, unless a password was just typed.
+            Err(Error::Locked) if secret.is_none() => return Err(Error::Locked),
+            r => r.unwrap_or(None),
+        }
     } else {
         None
     };
@@ -343,6 +379,65 @@ pub fn settings(state: State<'_, AppState>) -> Settings {
 #[tauri::command]
 pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CmdResult<()> {
     state.settings.set(settings)
+}
+
+// ---- master password ----------------------------------------------------------
+
+#[tauri::command]
+pub fn secrets_status(state: State<'_, AppState>) -> VaultStatus {
+    state.vault.status()
+}
+
+/// Set a master password and move the saved secrets under it.
+#[tauri::command]
+pub fn protect_secrets(state: State<'_, AppState>, password: String) -> CmdResult<VaultStatus> {
+    state.vault.enable(&password, &state.connections.ids())?;
+    Ok(state.vault.status())
+}
+
+#[tauri::command]
+pub fn unlock_secrets(state: State<'_, AppState>, password: String) -> CmdResult<VaultStatus> {
+    state.vault.unlock(&password)?;
+    // Servers removed while locked (in any run) leave their secret behind.
+    state.vault.retain(&state.connections.ids())?;
+    Ok(state.vault.status())
+}
+
+/// Forget the master password until it is entered again. Live connections
+/// stay connected.
+#[tauri::command]
+pub fn lock_secrets(state: State<'_, AppState>) -> VaultStatus {
+    state.vault.lock();
+    state.vault.status()
+}
+
+#[tauri::command]
+pub fn change_master_password(
+    state: State<'_, AppState>,
+    current: String,
+    password: String,
+) -> CmdResult<VaultStatus> {
+    state.vault.unlock(&current)?;
+    state.vault.retain(&state.connections.ids())?;
+    state.vault.change(&current, &password)?;
+    Ok(state.vault.status())
+}
+
+/// Stop using a master password: the secrets go back to the system store.
+#[tauri::command]
+pub fn unprotect_secrets(state: State<'_, AppState>, password: String) -> CmdResult<VaultStatus> {
+    state.vault.unlock(&password)?;
+    // Only the secrets of saved servers go back to the system store.
+    state.vault.retain(&state.connections.ids())?;
+    state.vault.disable(&password)?;
+    Ok(state.vault.status())
+}
+
+/// Forgotten master password: delete the protected secrets. Saved servers stay.
+#[tauri::command]
+pub fn reset_secrets(state: State<'_, AppState>) -> CmdResult<VaultStatus> {
+    state.vault.reset()?;
+    Ok(state.vault.status())
 }
 
 pub fn secrets() -> Arc<dyn SecretStore> {

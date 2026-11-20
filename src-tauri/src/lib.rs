@@ -20,6 +20,7 @@ use dualpal_core::remote_edit::RemoteEditor;
 use dualpal_core::rename::RenamePresets;
 use dualpal_core::settings::SettingsStore;
 use dualpal_core::sync::{SyncEngine, SyncFavorites};
+use dualpal_core::vault::ProtectedSecrets;
 use dualpal_core::{ActivityLog, CancellationToken, OperationQueue, Registry};
 use tauri::{Emitter, Manager};
 
@@ -41,6 +42,8 @@ pub struct AppState {
     pub queue: OperationQueue,
     pub favorites: Favorites,
     pub connections: Connections,
+    /// The optional master password over the connections' secrets.
+    pub vault: Arc<ProtectedSecrets>,
     pub settings: SettingsStore,
     pub editor: RemoteEditor,
     /// Folder each live connection opened in, by file system id.
@@ -61,11 +64,17 @@ pub struct AppState {
 
 /// Build the whole application state on `dirs`. The shell calls this with the
 /// real app folders; tests call it with a temp folder and [`MemorySecrets`].
+/// `secrets` is the system store; with a master password set, secrets live in
+/// `secrets.vault` instead.
 pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Result<AppState> {
     let registry = Arc::new(Registry::with_local());
     let data_dir = dirs.data;
     let favorites = Favorites::open(data_dir.join("favorites.json"));
-    let connections = Connections::open(data_dir.join("connections.json"), secrets);
+    let vault = Arc::new(ProtectedSecrets::open(
+        data_dir.join("secrets.vault"),
+        secrets,
+    ));
+    let connections = Connections::open(data_dir.join("connections.json"), vault.clone());
     let settings = SettingsStore::open(data_dir.join("settings.json"));
     let cache_dir = dirs.cache;
     let preview_dir = cache_dir.join("preview");
@@ -97,6 +106,7 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
         queue,
         favorites,
         connections,
+        vault,
         settings,
         editor,
         start_paths: Mutex::new(HashMap::new()),
@@ -212,6 +222,13 @@ pub const COMMANDS: &[&str] = &[
     "preview_path",
     "settings",
     "save_settings",
+    "secrets_status",
+    "protect_secrets",
+    "unlock_secrets",
+    "lock_secrets",
+    "change_master_password",
+    "unprotect_secrets",
+    "reset_secrets",
     "sync_plan",
     "cancel_compare",
     "run_sync",
@@ -282,6 +299,13 @@ macro_rules! all_commands {
             remote::preview_path,
             remote::settings,
             remote::save_settings,
+            remote::secrets_status,
+            remote::protect_secrets,
+            remote::unlock_secrets,
+            remote::lock_secrets,
+            remote::change_master_password,
+            remote::unprotect_secrets,
+            remote::reset_secrets,
             tools::sync_plan,
             tools::cancel_compare,
             tools::run_sync,

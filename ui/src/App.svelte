@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import {
     api,
     errorKind,
     errorMessage,
+    MIN_MASTER_PASSWORD,
+    type VaultStatus,
     type ActivityRecord,
     type Connection,
     type ConnectionView,
@@ -134,8 +136,15 @@
     checkbox?: string | null;
     allowEmpty?: boolean;
     onconfirm: (value: string, checked: boolean) => void;
+    oncancel?: () => void;
   };
   let dialog = $state<DialogSpec | null>(null);
+  /** A master password prompt. Shown above every other window, including the
+   *  server form, which may be waiting on it. */
+  let passwordPrompt = $state<DialogSpec | null>(null);
+  /** Counts prompts, so a follow-up prompt starts with an empty field. */
+  let promptSerial = $state(0);
+  let vault = $state<VaultStatus>({ protected: false, unlocked: true });
 
   let syncs = $state<SyncFavorite[]>([]);
   /** The folder pair in the Compare & Sync window, when it is open. */
@@ -334,6 +343,7 @@
   const inFlight = new Map<string, Promise<Location | null>>();
 
   async function loadConnections() {
+    vault = await api.secretsStatus();
     connections = await api.connections();
     for (const c of connections) fsNames[c.fsId] = c.name;
   }
@@ -377,7 +387,12 @@
     } catch (e) {
       const kind = errorKind(e);
       const fp = (e as { fingerprint?: string }).fingerprint;
-      if (kind === "unknownHost" && fp) {
+      if (kind === "locked") {
+        // Not awaited: this attempt ends here and a new one starts once unlocked.
+        unlockSecrets().then((ok) => {
+          if (ok) connectThen(c, after, opts);
+        });
+      } else if (kind === "unknownHost" && fp) {
         dialog = {
           title: `Trust ${c.name}?`,
           message:
@@ -394,7 +409,7 @@
           message: `${opts.secret ? `That ${what} did not work. ` : ""}Enter the ${what} for ${c.endpoint.user}@${c.endpoint.host}.`,
           input: "",
           password: true,
-          checkbox: navigator.userAgent.includes("Windows") ? "Remember in Credential Manager" : "Remember in Keychain",
+          checkbox: rememberLabel(),
           confirmLabel: "Connect",
           onconfirm: (secret, remember) => connectThen(c, after, { ...opts, secret, remember }),
         };
@@ -416,7 +431,7 @@
           message: `${opts.secret ? "That password did not work. " : ""}Enter the password for ${who}.`,
           input: "",
           password: true,
-          checkbox: navigator.userAgent.includes("Windows") ? "Remember in Credential Manager" : "Remember in Keychain",
+          checkbox: rememberLabel(),
           confirmLabel: "Connect",
           onconfirm: (secret, remember) => connectThen(c, after, { ...opts, secret, remember }),
         };
@@ -432,6 +447,153 @@
       // Requests that waited on a failed attempt do nothing; this one shows the error.
       settle(null);
     }
+  }
+
+  /** Label of the "remember this password" checkbox. */
+  function rememberLabel() {
+    if (vault.protected) return "Remember (encrypted with your master password)";
+    return navigator.userAgent.includes("Windows") ? "Remember in Credential Manager" : "Remember in Keychain";
+  }
+
+  // ---- master password ----------------------------------------------------------
+
+  /** Ask for a password; null when cancelled. */
+  async function askPassword(title: string, message: string, confirmLabel: string): Promise<string | null> {
+    passwordPrompt = null;
+    await tick();
+    promptSerial++;
+    return new Promise((resolve) => {
+      passwordPrompt = { title, message, input: "", password: true, confirmLabel, onconfirm: (v) => resolve(v), oncancel: () => resolve(null) };
+    });
+  }
+
+  /** Ask for the master password until it is right or the person cancels.
+   *  Resolves true once saved passwords are unlocked. */
+  async function unlockSecrets(): Promise<boolean> {
+    let message = "Saved server passwords are protected by a master password. Enter it to use them until Dual Pal quits.";
+    for (;;) {
+      const pw = await askPassword("Unlock saved passwords", message, "Unlock");
+      if (pw === null) return false;
+      try {
+        vault = await api.unlockSecrets(pw);
+        return true;
+      } catch (e) {
+        if (errorKind(e) !== "authFailed") {
+          notice = errorMessage(e);
+          return false;
+        }
+        message = "That master password is not correct. Try again, or use “Reset Forgotten Master Password” from the command palette.";
+      }
+    }
+  }
+
+  /** Ask for a new master password twice; null when cancelled. */
+  async function chooseMasterPassword(title: string, intro: string): Promise<string | null> {
+    let message = intro;
+    for (;;) {
+      const pw = await askPassword(title, message, "Next");
+      if (pw === null) return null;
+      if (pw.length < MIN_MASTER_PASSWORD) {
+        message = `Use at least ${MIN_MASTER_PASSWORD} characters. ${intro}`;
+        continue;
+      }
+      const again = await askPassword("Confirm the master password", "Type the same master password again.", "Set Password");
+      if (again === null) return null;
+      if (again === pw) return pw;
+      message = `The two passwords were not the same. ${intro}`;
+    }
+  }
+
+  /** Ask for the current master password and run `f` with it, asking again while it is wrong. */
+  async function withCurrentPassword(title: string, message: string, confirmLabel: string, f: (pw: string) => Promise<VaultStatus>) {
+    let m = message;
+    for (;;) {
+      const pw = await askPassword(title, m, confirmLabel);
+      if (pw === null) return false;
+      try {
+        vault = await f(pw);
+        return true;
+      } catch (e) {
+        if (errorKind(e) !== "authFailed") {
+          notice = errorMessage(e);
+          return false;
+        }
+        m = `That master password is not correct. ${message}`;
+      }
+    }
+  }
+
+  async function protectSecrets() {
+    const store = navigator.userAgent.includes("Windows") ? "Windows Credential Manager" : isMac ? "Keychain" : "system keyring";
+    const pw = await chooseMasterPassword(
+      "Set a master password",
+      `Saved server passwords, key passphrases and S3 secret keys move out of the ${store} into a file encrypted with this password. Dual Pal asks for it the first time a server needs it after starting. It cannot be recovered: if you forget it, you will have to enter the server passwords again.`,
+    );
+    if (pw === null) return false;
+    try {
+      vault = await api.protectSecrets(pw);
+      notice = "Saved passwords are now protected by your master password.";
+      return true;
+    } catch (e) {
+      notice = errorMessage(e);
+      return false;
+    }
+  }
+
+  async function changeMasterPassword() {
+    let current = "";
+    const ok = await withCurrentPassword("Change master password", "Enter your current master password.", "Next", async (pw) => {
+      // Only checks the password: unlocking with the right one changes nothing else.
+      const s = await api.unlockSecrets(pw);
+      current = pw;
+      return s;
+    });
+    if (!ok) return;
+    const pw = await chooseMasterPassword("New master password", "Choose the new master password.");
+    if (pw === null) return;
+    try {
+      vault = await api.changeMasterPassword(current, pw);
+      notice = "Master password changed.";
+    } catch (e) {
+      notice = errorMessage(e);
+    }
+  }
+
+  async function unprotectSecrets() {
+    const store = navigator.userAgent.includes("Windows") ? "Windows Credential Manager" : isMac ? "Keychain" : "system keyring";
+    const ok = await withCurrentPassword(
+      "Stop using a master password",
+      `Saved passwords move back into the ${store}. Enter your master password to continue.`,
+      "Stop Using",
+      (pw) => api.unprotectSecrets(pw),
+    );
+    if (ok) notice = `Saved passwords are back in the ${store}.`;
+    return ok;
+  }
+
+  function lockSecrets() {
+    api.lockSecrets().then((s) => {
+      vault = s;
+      notice = "Saved passwords are locked. Dual Pal asks for the master password the next time a server needs one.";
+    });
+  }
+
+  async function resetSecrets() {
+    await tick();
+    dialog = {
+      title: "Reset the master password?",
+      message: "Every password saved under the master password is deleted. Your servers and their favorites stay; you will enter their passwords again when you connect. This cannot be undone.",
+      confirmLabel: "Delete Saved Passwords",
+      danger: true,
+      onconfirm: async () => {
+        try {
+          vault = await api.resetSecrets();
+          notice = "The master password is removed. Saved server passwords were deleted.";
+        } catch (e) {
+          notice = errorMessage(e);
+        }
+      },
+    };
   }
 
   async function disconnect(c: ConnectionView) {
@@ -665,6 +827,16 @@
       { id: "linked", group: "Compare", title: linked ? "Stop Synchronized Browsing" : "Synchronized Browsing", shortcut: `${MOD}Shift+L`, run: toggleLinked },
       { id: "chooseDiff", group: "Settings", title: "Choose Compare App…", run: chooseDiffTool },
       { id: "chooseEditor", group: "Settings", title: "Choose Editor…", run: chooseEditor },
+      ...(vault.protected
+        ? [
+            vault.unlocked
+              ? { id: "lockSecrets", group: "Settings", title: "Lock Saved Passwords", run: lockSecrets }
+              : { id: "unlockSecrets", group: "Settings", title: "Unlock Saved Passwords…", run: () => void unlockSecrets() },
+            { id: "changeMaster", group: "Settings", title: "Change Master Password…", run: changeMasterPassword },
+            { id: "unprotectSecrets", group: "Settings", title: "Stop Using a Master Password…", run: unprotectSecrets },
+            { id: "resetSecrets", group: "Settings", title: "Reset Forgotten Master Password…", run: resetSecrets },
+          ]
+        : [{ id: "protectSecrets", group: "Settings", title: "Protect Saved Passwords with a Master Password…", run: protectSecrets }]),
       { id: "selectAll", group: "Select", title: "Select All", shortcut: `${MOD}A`, run: () => active.visible.forEach((it) => active.selected.add(it.path)) },
       { id: "selectPattern", group: "Select", title: "Select by Name…", shortcut: "+", run: () => selectByPattern(true) },
       { id: "deselectPattern", group: "Select", title: "Deselect by Name…", shortcut: "−", run: () => selectByPattern(false) },
@@ -1092,7 +1264,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (frozen || menu || dialog || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage) return;
+    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -1266,7 +1438,7 @@
     if (t?.closest("input, textarea, [contenteditable]")) return;
     e.preventDefault();
     // The Menu key, which WebView2 delivers only as this event.
-    if (fromKeyboard(e) && !menu && !dialog && !frozen) menuFromKeyboard();
+    if (fromKeyboard(e) && !menu && !dialog && !passwordPrompt && !frozen) menuFromKeyboard();
   }}
 />
 
@@ -1481,7 +1653,11 @@
     password={d.password}
     checkbox={d.checkbox ?? null}
     allowEmpty={d.allowEmpty}
-    oncancel={() => (dialog = null)}
+    oncancel={() => {
+      const cancel = d.oncancel;
+      dialog = null;
+      cancel?.();
+    }}
     onconfirm={(v, checked) => {
       // Read the callback before clearing: `d` is derived from `dialog`.
       const confirm = d.onconfirm;
@@ -1564,11 +1740,37 @@
       editing = undefined;
       importing = true;
     }}
+    unlock={unlockSecrets}
+    masterPassword={vault.protected}
+    onmasterpassword={(on) => (on ? protectSecrets() : unprotectSecrets())}
   />
 {/if}
 
 {#if importing}
-  <ImportDialog onsaved={() => loadConnections()} onclose={() => (importing = false)} />
+  <ImportDialog onsaved={() => loadConnections()} onclose={() => (importing = false)} unlock={unlockSecrets} />
+{/if}
+
+{#if passwordPrompt}
+  {@const p = passwordPrompt}
+  {#key promptSerial}
+    <Dialog
+      title={p.title}
+      message={p.message}
+      input=""
+      confirmLabel={p.confirmLabel}
+      password
+      oncancel={() => {
+        const cancel = p.oncancel;
+        passwordPrompt = null;
+        cancel?.();
+      }}
+      onconfirm={(v) => {
+        const confirm = p.onconfirm;
+        passwordPrompt = null;
+        confirm(v, false);
+      }}
+    />
+  {/key}
 {/if}
 
 <style>
