@@ -24,6 +24,7 @@ crates/dualpal-core   Platform-independent Rust core (no Tauri dependency)
   src/sync.rs         One-way and two-way sync with per-pair history
   src/rename.rs       Multi Rename rules and presets
   src/difftools.rs    External file compare apps
+  src/viewer.rs       File viewer: encodings, streamed search, open files (pages via vfs/range.rs)
 src-tauri/            Tauri shell: commands + progress events wiring the core to the UI
 ui/                   Svelte 5 + TypeScript front end (built with Vite)
 ```
@@ -79,6 +80,8 @@ npm run test:unit                    # L5 UI unit/component tests
 | Menu key / Shift F10 | Menu for the item under the cursor |
 | F2 | Rename |
 | Shift F2 | Multi Rename the marked items |
+| F3 | View the file under the cursor as text, hex or image (see *Viewing files*); Esc or F3 closes it |
+| 1 / 2 / 3, Ctrl/⌘ F, F3 / Shift F3 (in the viewer) | Text / hex / image or media view; find in the file; next / previous match (also Enter / Shift Enter) |
 | F4 | Edit in your preferred editor (files on servers upload again when saved) |
 | F5 / F6 | Copy / move to the other pane |
 | F7 | New folder |
@@ -99,6 +102,16 @@ npm run test:unit                    # L5 UI unit/component tests
 | Ctrl/⌘ Shift Y | Compare & Sync the folders of both panes |
 | Ctrl/⌘ Shift D | Compare two files in your compare app |
 | Ctrl/⌘ Shift L | Synchronized browsing on / off |
+
+## Viewing files
+
+**F3** (or *View* in the item menu or the command palette) opens the file under the cursor in the viewer, from this computer or any server or bucket. Big files open at once: only the part on screen is read, so a 1 GB log scrolls as easily as a small one.
+
+- **Text** (1) shows the file in a monospace font with line numbers, optionally wrapping long lines. The encoding is detected (UTF-8, UTF-16 with or without a byte order mark, otherwise Windows-1252) and can be changed in the toolbar, also to Latin-1.
+- **Hex** (2) shows the offset, 16 bytes per row and the same bytes as ASCII. Files that are not text open here.
+- **Image**, **PDF**, **Video** or **Audio** (3) shows the file as in the preview panel. Files on servers are downloaded for this, up to 64 MB.
+- **Find** (Ctrl/⌘ F) searches the whole file, not just the part on screen, from the top of the screen down. Enter or F3 goes to the next match, Shift Enter or Shift F3 to the previous one; *Ignore case* applies to Latin letters. In hex view, a search like `4F 4B` finds those bytes. A long search on a big file can be stopped.
+- The scroll bar on the right moves through the whole file; Home and End go to its start and end. Line numbers after a jump are counted for files on this computer; on servers they show again from the start of the file.
 
 ## Servers (SFTP, FTP, WebDAV and S3)
 
@@ -144,7 +157,7 @@ Folders on this computer are watched, so a change is synced within a couple of s
 ## Roadmap
 
 1. **Foundation** — Tauri app, VFS layer, operation queue, activity log. ✅
-2. **Dual-pane browser** — tabs, list/icon views, sidebar (devices, favorites), select by pattern or tag, compress, preview panel (audio/video, images, PDF, quick text edit), Move to Trash. ✅
+2. **Dual-pane browser** — tabs, list/icon views, sidebar (devices, favorites), select by pattern or tag, compress, preview panel (audio/video, images, PDF, quick text edit), F3 viewer for files of any size (text, hex, image), Move to Trash. ✅
 3. **Remote connections** — SFTP over SSH, FTP/FTPS, WebDAV and S3, each with nested favorites; edit remote files in your preferred editor with automatic upload on save. ✅
 4. **Compare & power tools** — folder compare and one/two-way sync (saved as favorites), synchronized browsing, external file compare tools, multi-rename presets, command palette, activity insights. ✅
 
