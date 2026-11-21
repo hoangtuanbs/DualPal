@@ -524,19 +524,37 @@ impl Job {
 
     // ---- delete ------------------------------------------------------------
 
+    /// Delete every target. An item that cannot be removed does not stop
+    /// the others; the folders holding it are left, and every failure is
+    /// reported at the end.
     async fn delete(&mut self, targets: Vec<Location>) -> Result<()> {
+        let mut failed: Vec<Error> = Vec::new();
         // (fs, path, is_real_dir) in pre-order; deleted in reverse so that
         // folder contents go before the folder itself.
         let mut items: Vec<(Fs, String, bool)> = Vec::new();
+        // Paths that are still there, so the folders holding them stay too.
+        let mut kept: Vec<(Fs, String)> = Vec::new();
         for t in &targets {
             let fs = self.fs(&t.fs)?;
-            let root = fs.stat(&t.path).await?;
+            let root = match fs.stat(&t.path).await {
+                Ok(root) => root,
+                Err(e) => {
+                    failed.push(e);
+                    continue;
+                }
+            };
             let mut stack = vec![root];
             while let Some(e) = stack.pop() {
                 self.check()?;
                 let real_dir = e.is_dir() && !e.symlink;
                 if real_dir {
-                    stack.extend(fs.list(&e.path).await?);
+                    match fs.list(&e.path).await {
+                        Ok(children) => stack.extend(children),
+                        Err(err) => {
+                            failed.push(err);
+                            kept.push((fs.clone(), e.path.clone()));
+                        }
+                    }
                 }
                 items.push((fs.clone(), e.path, real_dir));
             }
@@ -545,15 +563,30 @@ impl Job {
         self.emit(true);
         for (fs, path, dir) in items.into_iter().rev() {
             self.check()?;
-            self.set_current(&path);
-            if dir {
-                fs.remove_dir(&path).await?;
-            } else {
-                fs.remove_file(&path).await?;
+            if dir
+                && kept
+                    .iter()
+                    .any(|(kfs, k)| kfs.id() == fs.id() && fs.is_within(k, &path))
+            {
+                kept.push((fs, path));
+                continue;
             }
-            self.prog().files_done += 1;
+            self.set_current(&path);
+            let removed = if dir {
+                fs.remove_dir(&path).await
+            } else {
+                fs.remove_file(&path).await
+            };
+            match removed {
+                Ok(()) => self.prog().files_done += 1,
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(e) => {
+                    failed.push(e);
+                    kept.push((fs, path));
+                }
+            }
         }
-        Ok(())
+        Error::combine(failed).map_or(Ok(()), Err)
     }
 
     // ---- compress -----------------------------------------------------------
