@@ -75,7 +75,8 @@ async fn one_way_never_deletes_on_target() {
     live.stop().await;
 }
 
-/// LIVE-007 — one folder inside the other must be refused, either way round.
+/// LIVE-007 — one folder inside the other must be refused, either way round
+/// and through a symlink.
 #[tokio::test]
 async fn one_folder_inside_the_other_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
@@ -86,6 +87,17 @@ async fn one_folder_inside_the_other_is_refused() {
     for (from, to) in [(&a, &ab), (&ab, &a)] {
         let err = live
             .start(loc(from), loc(to), LiveDirection::Both)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("inside the other"), "{err}");
+    }
+    // A folder reached through a link inside the other is inside it too.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&a, tmp.path().join("alias")).unwrap();
+        let via_alias = tmp.path().join("alias/b");
+        let err = live
+            .start(loc(&a), loc(&via_alias), LiveDirection::Both)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("inside the other"), "{err}");

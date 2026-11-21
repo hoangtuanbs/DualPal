@@ -157,7 +157,18 @@ impl LiveSync {
         }
         if from.fs == to.fs {
             let fs = self.queue.registry().get(&from.fs)?;
-            if fs.is_within(&from.path, &to.path) || fs.is_within(&to.path, &from.path) {
+            // On the local disk, look through symlinks: a folder reached via
+            // a link inside the other is still inside it.
+            let real = |p: &str| {
+                if from.fs != LocalFs::ID {
+                    return p.to_string();
+                }
+                std::fs::canonicalize(p)
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| p.to_string())
+            };
+            let (a, b) = (real(&from.path), real(&to.path));
+            if fs.is_within(&a, &b) || fs.is_within(&b, &a) {
                 return Err(Error::Invalid(
                     "one folder is inside the other; auto-sync two separate folders".into(),
                 ));
