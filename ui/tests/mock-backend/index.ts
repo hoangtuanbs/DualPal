@@ -106,6 +106,8 @@ export interface Scenario {
   volumes: Volume[];
   settings: Settings;
   activity: ActivityRecord[];
+  /** Contents of archive files, by path on the local tree; `open_archive` serves them. */
+  archives?: Record<string, Tree>;
 }
 
 export const defaultScenario = (): Scenario => ({
@@ -175,6 +177,7 @@ const wrongMaster = () => ({ kind: "authFailed", message: "sign-in failed: the m
 
 class State {
   scenario: Scenario;
+  archiveCount = 0;
   operations = new Map<string, OperationInfo>();
   failures = new Map<string, { kind: string; message: string }>();
   latestRelease: ReleaseInfo | null = null;
@@ -441,6 +444,19 @@ const handlers: Record<string, Handler> = {
   },
   remove_connection_favorite: () => null,
   open_file: () => null,
+  open_archive: (a, s) => {
+    const loc: Location = a.location;
+    const contents = s.scenario.archives?.[loc.path];
+    if (!contents) throw { kind: "invalid", message: `${loc.path} is damaged or not a supported archive` };
+    const fsId = `archive:${++s.archiveCount}`;
+    s.scenario.trees[fsId] = structuredClone(contents);
+    return { fsId, name: baseName(loc.path), source: loc };
+  },
+  cancel_open_archive: () => null,
+  close_archive: (a, s) => {
+    delete s.scenario.trees[a.fsId];
+    return null;
+  },
   stop_edit_session: () => false,
   upload_edit_session: () => null,
   preview_path: (a) => a.location.path,

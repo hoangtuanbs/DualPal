@@ -2,6 +2,7 @@ import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { api, errorKind, errorMessage, type Entry, type FolderSize, type Location } from "./api";
 import { fsNames } from "./fs-names.svelte";
 import { nameFilter } from "./quick-filter";
+import { holdLocation, isArchiveFs, isArchiveName, onArchiveClosed, openArchive, openArchives, releaseArchives } from "./archives.svelte";
 
 export type SortKey = "name" | "size" | "modified";
 export type ViewMode = "list" | "icons";
@@ -48,6 +49,14 @@ export class PaneState {
   /** Bumped to move focus into the filter bar, even when it is already open. */
   filterFocus = $state(0);
 
+  constructor() {
+    // A closed archive can no longer be gone back to.
+    onArchiveClosed((fs) => {
+      this.history = this.history.filter((l) => l.fs !== fs);
+      this.future = this.future.filter((l) => l.fs !== fs);
+    });
+  }
+
   /** Entries shown before the quick filter: hidden files left out, sorted. */
   listed = $derived.by(() => {
     const list = this.showHidden ? this.entries : this.entries.filter((e) => !e.hidden);
@@ -80,6 +89,8 @@ export class PaneState {
 
   async open(loc: Location, opts: { record?: boolean; focusName?: string; entries?: Entry[] } = {}) {
     this.loading = true;
+    // Another pane leaving this archive meanwhile must not close it.
+    const release = holdLocation(loc);
     try {
       const entries = opts.entries ?? (await api.listDir(loc));
       const from = this.location;
@@ -98,9 +109,12 @@ export class PaneState {
       this.cursor = Math.max(0, idx);
       this.updateSpace();
       PaneState.navigated?.(this, from, loc);
+      // Leaving an archive closes it unless another pane still shows it.
+      if (from && from.fs !== loc.fs && isArchiveFs(from.fs)) releaseArchives();
     } catch (e) {
       this.error = errorMessage(e);
     } finally {
+      release();
       this.loading = false;
     }
   }
@@ -258,7 +272,15 @@ export class PaneState {
   async up() {
     if (!this.location) return;
     const parent = await api.parentLocation(this.location);
-    if (!parent || parent.path === this.location.path) return;
+    if (!parent) {
+      // The top of an archive: back to the folder holding it, on the archive.
+      const archive = openArchives.get(this.location.fs);
+      if (!archive) return;
+      const holder = await api.parentLocation(archive.source);
+      if (holder) await this.open(holder, { focusName: archive.name });
+      return;
+    }
+    if (parent.path === this.location.path) return;
     const name = this.location.path.split(/[\\/]/).filter(Boolean).pop();
     await this.open(parent, { focusName: name });
   }
@@ -291,7 +313,31 @@ export class PaneState {
     if (!this.location) return;
     const loc = { fs: this.location.fs, path: entry.path };
     if (entry.kind === "dir" && !entry.name.toLowerCase().endsWith(".app")) await this.open(loc);
+    else if (entry.kind === "file" && isArchiveName(entry.name)) await this.enterArchive(entry);
     else await api.openFile(loc).catch((e) => (this.error = errorMessage(e)));
+  }
+
+  /** Open an archive file in this pane as a folder. */
+  async enterArchive(entry: Entry) {
+    if (!this.location) return;
+    const source = { fs: this.location.fs, path: entry.path };
+    this.loading = true;
+    try {
+      const archive = await openArchive(source, entry.name);
+      await this.open({ fs: archive.fsId, path: "/" });
+      // It could not be listed: don't keep it open.
+      if (this.location?.fs !== archive.fsId) releaseArchives();
+    } catch (e) {
+      // A cancelled download needs no message.
+      if (errorKind(e) !== "cancelled") this.error = errorMessage(e);
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  /** Inside an archive, which is read-only. */
+  get inArchive(): boolean {
+    return isArchiveFs(this.location?.fs);
   }
 
   /** A new tab state at the same place with the same view settings. */
@@ -347,8 +393,10 @@ export class PaneGroup {
   closeTab(i = this.index) {
     if (this.tabs.length <= 1) return;
     this.tabs[i].forgetSizes();
+    const closed = this.tabs[i].location;
     this.tabs.splice(i, 1);
     if (this.index >= this.tabs.length || this.index > i) this.index = Math.max(0, this.index - 1);
+    if (isArchiveFs(closed?.fs)) releaseArchives();
   }
 
   cycle(delta: number) {

@@ -37,8 +37,17 @@ aes-gcm.workspace = true
 base64.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
+zip.workspace = true
+tar.workspace = true
+flate2.workspace = true
+bzip2.workspace = true
+lzma-rust2.workspace = true
+sevenz-rust2.workspace = true
 
 [dev-dependencies]
+# Writers for the archive tests.
+sevenz-rust2 = { workspace = true, features = ["compress"] }
+lzma-rust2 = { workspace = true, features = ["encoder"] }
 opendal.workspace = true
 tokio-util.workspace = true
 tempfile.workspace = true

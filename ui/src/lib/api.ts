@@ -426,6 +426,24 @@ export interface Insights {
   failures: ActivityRecord[];
 }
 
+/** An archive opened as a folder, from `open_archive`. */
+export interface OpenedArchive {
+  /** File system id of the archive's contents, e.g. "archive:…". */
+  fsId: string;
+  /** The archive's file name. */
+  name: string;
+  /** Where the archive file is. */
+  source: Location;
+}
+
+/** Progress of `open_archive` `request`: downloading it from a server, or unpacking a compressed tar. */
+export interface ArchiveProgress {
+  request: number;
+  phase: "download" | "unpack";
+  done: number;
+  total: number;
+}
+
 /** Whether a master password protects the saved server passwords. */
 export interface VaultStatus {
   protected: boolean;
@@ -565,6 +583,13 @@ export const api = {
     listen<LiveStatus | null>("live-sync-updated", (e) => cb(e.payload)),
   onEditSessionUpdated: (cb: (s: EditSession) => void): Promise<UnlistenFn> =>
     listen<EditSession>("edit-session-updated", (e) => cb(e.payload)),
+  /** Open an archive as a read-only folder. `request` names it for `cancelOpenArchive`. */
+  openArchive: (location: Location, request: number) => invoke<OpenedArchive>("open_archive", { location, request }),
+  cancelOpenArchive: (request: number) => invoke<void>("cancel_open_archive", { request }),
+  /** Close an archive the panes no longer show (once no operation uses it). */
+  closeArchive: (fsId: string) => invoke<void>("close_archive", { fsId }),
+  onArchiveProgress: (cb: (p: ArchiveProgress) => void): Promise<UnlistenFn> =>
+    listen<ArchiveProgress>("archive-progress", (e) => cb(e.payload)),
   onOperationUpdated: (cb: (info: OperationInfo) => void): Promise<UnlistenFn> =>
     listen<OperationInfo>("operation-updated", (e) => cb(e.payload)),
 };
