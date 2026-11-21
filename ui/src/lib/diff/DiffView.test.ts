@@ -181,4 +181,33 @@ describe("UI-UNIT-042 compare view api argument names", () => {
     expect(mock.lastCall("diff_cancel")).toEqual({ request: 3 });
     expect(mock.lastCall("diff_close")).toEqual({ session: 1 });
   });
+
+  it("ignores change keys when there is no text diff (binary files)", async () => {
+    setup(new Uint8Array([0, 1, 2]), new Uint8Array([0, 1, 3]));
+    await screen.findByTestId("diff-binary");
+    const errors: unknown[] = [];
+    const onerror = (e: ErrorEvent) => errors.push(e.error);
+    window.addEventListener("error", onerror);
+    await fireEvent.keyDown(window, { key: "F7" });
+    await fireEvent.keyDown(window, { key: "F7", shiftKey: true });
+    await fireEvent.keyDown(window, { key: "ArrowDown", altKey: true });
+    window.removeEventListener("error", onerror);
+    expect(errors).toEqual([]);
+  });
+
+  it("disables the options while a diff is being worked out", async () => {
+    setup(LEFT, RIGHT);
+    await waitFor(() => expect(status()).toBe("2 changes"));
+    const box = screen.getByRole("checkbox", { name: "Ignore case" });
+    let release!: () => void;
+    const original = diffApi.setOptions;
+    vi.spyOn(diffApi, "setOptions").mockImplementationOnce(async (...a) => {
+      await new Promise<void>((r) => (release = r));
+      return original(...a);
+    });
+    await userEvent.click(screen.getByRole("checkbox", { name: "Ignore whitespace" }));
+    await waitFor(() => expect(box).toBeDisabled());
+    release();
+    await waitFor(() => expect(box).toBeEnabled());
+  });
 });
