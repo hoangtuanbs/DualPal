@@ -1261,7 +1261,7 @@ fn find_files_matches_names_and_cancel() {
     call_ok(&app, "cancel_find_files", json!({ "request": 99 }));
 }
 
-/// CMD-041 — `open_archive` registers a zip as a read-only file system that
+/// CMD-042 — `open_archive` registers a zip as a read-only file system that
 /// `list_dir` and `read_text` work on; `close_archive` unregisters it; a
 /// file that is not an archive is an error; cancelling an unknown request is
 /// a no-op.
