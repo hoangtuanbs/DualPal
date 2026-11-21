@@ -1,9 +1,9 @@
 name: CI
 
+# Runs only when started by hand (Actions tab, "Run workflow"), so pushes and
+# pull requests no longer use GitHub-hosted runner minutes.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

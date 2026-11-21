@@ -8,12 +8,14 @@ name: Build installers
 # builds also sign the installers (.sig files), and a tag push adds latest.json
 # to the release so the app can update itself. Without the secret, everything
 # builds as before. See "Release signing setup" in README.md.
+#
+# Pushes to main and pull requests no longer start this workflow, so they use no
+# GitHub-hosted runner minutes. It runs by hand (Actions tab, "Run workflow")
+# or when a version tag is pushed for a release.
 on:
   workflow_dispatch:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
 
 concurrency:
   group: build-${{ github.ref }}

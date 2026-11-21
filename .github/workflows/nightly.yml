@@ -1,8 +1,8 @@
 name: Nightly
 
+# The daily schedule is off so no runner minutes are used; start it by hand
+# from the Actions tab when needed.
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
 
 concurrency:
