@@ -26,6 +26,17 @@ test.describe("UI-E2E app shell", () => {
     await expect(row(page, "left", "readme.md")).toBeVisible();
   });
 
+  test("UI-KEY-036 Alt Left and Alt Right go back and forward", async ({ page }) => {
+    await openApp(page);
+    await row(page, "left", "docs").dblclick();
+    await expect(row(page, "left", "notes.txt")).toBeVisible();
+    await pane(page, "left").click();
+    await page.keyboard.press("Alt+ArrowLeft");
+    await expect(row(page, "left", "docs")).toBeVisible();
+    await page.keyboard.press("Alt+ArrowRight");
+    await expect(row(page, "left", "notes.txt")).toBeVisible();
+  });
+
   test("UI-KEY-014 F7 opens the new-folder dialog and closes it on OK", async ({ page }) => {
     await openApp(page);
     await pane(page, "left").click();

@@ -10,7 +10,7 @@ const press = (key: string, mods: Partial<Record<"altKey" | "ctrlKey" | "metaKey
   ...mods,
 });
 
-describe("UI-KEY-031 back and forward keys", () => {
+describe("UI-KEY-036 back and forward keys", () => {
   it("Alt+Left and Alt+Right go back and forward on every platform", () => {
     for (const mac of [false, true]) {
       expect(historyKey(press("ArrowLeft", { altKey: true }), mac)).toBe("back");
