@@ -411,10 +411,10 @@ Each case runs in `unique_base(fs)`.
 | VFS-ARC-004 | damaged or fake archives give `invalid`, never a listing of garbage | L1 | P0 | EXISTS: archive.rs | truncated zip/7z/tgz, text named as an archive |
 | VFS-ARC-005 | `../` and absolute entry names stay inside; extraction writes nothing outside the destination | L1 | P0 | EXISTS: archive.rs | |
 | VFS-ARC-006 | password-protected zip and 7z (content or header) say "not supported yet" | L1 | P1 | EXISTS: archive.rs | |
-| VFS-ARC-007 | overlapping zip entries (zip bomb) are refused | L1 | P1 | EXISTS: archive.rs | |
+| VFS-ARC-007 | overlapping zip entries (zip bomb) are refused, counting long local names; compressed tars and 7z blocks over the size limit at >1000:1 are refused | L1 | P1 | EXISTS: archive.rs | |
 | VFS-ARC-008 | extraction through the queue with progress; the archive top copies as a folder named after it | L2 | P0 | EXISTS: archive.rs | |
 | VFS-ARC-009 | an archive on a server is downloaded (progress phases), cancellable, and its scratch folder is removed once unused | L2 | P1 | EXISTS: archive.rs | |
-| VFS-ARC-010 | closing an archive an operation still uses waits for the operation | L2 | P1 | EXISTS: archive.rs | |
+| VFS-ARC-010 | closing an archive an operation still uses waits for the operation; one that stopped on an existing file stays open for a retry until cleared | L2 | P1 | EXISTS: archive.rs | |
 | VFS-ARC-011 | folder size and find work inside an archive | L2 | P1 | EXISTS: archive.rs | |
 | VFS-TXT-001 | read_text truncates at max_bytes | L1 | P0 | EXTEND: ops.rs reads_and_saves_text | `truncated: true`, text length ≤ max |
 | VFS-TXT-002 | binary detection (NUL byte) | L1 | P0 | NEW | `binary: true` |
@@ -731,7 +731,7 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-014 | `PaneState.navigated` hook fires (linked browsing) | P1 | |
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
 | UI-UNIT-019 | archive names recognised (`isArchiveName`, `archiveStem`) | P1 | |
-| UI-UNIT-020 | `PaneState` enters an archive on activate, leaves it from the top onto the archive, closes it once no pane shows it, nested archives return to the outer one, damaged archive → error | P0 | |
+| UI-UNIT-020 | `PaneState` enters an archive on activate, leaves it from the top onto the archive, closes it once no pane shows it (a pane still loading it counts, e.g. Swap Panes), nested archives return to the outer one, damaged archive → error | P0 | |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |

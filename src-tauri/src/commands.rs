@@ -86,7 +86,9 @@ pub fn operations(state: State<'_, AppState>) -> Vec<OperationInfo> {
 
 #[tauri::command]
 pub fn clear_finished_operations(state: State<'_, AppState>) {
-    state.queue.clear_finished()
+    state.queue.clear_finished();
+    // Archives kept for retrying a failed extraction can close now.
+    state.archives.reap();
 }
 
 #[tauri::command]

@@ -406,6 +406,44 @@ async fn overlapping_zip_entries_are_refused() {
     assert!(e.to_string().contains("zip bomb"), "{e}");
 }
 
+/// VFS-ARC-007: an entry whose data, which starts after a long name in its
+/// local header, runs into the next entry's header is refused too.
+#[tokio::test]
+async fn overlap_after_a_long_local_name_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::default());
+    let zip_with = |files: &[(&str, &[u8])]| {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data) in files {
+            w.start_file(*name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    };
+    // b.txt's local header and data, as the writer lays them out.
+    let alone = zip_with(&[("b.txt", b"bbbb")]);
+    let quoted = alone[..30 + 5 + 4].to_vec();
+    assert_eq!(&quoted[..4], b"PK\x03\x04");
+    // a.txt has a long name and holds that header as its data.
+    let long = format!("{}.txt", "a".repeat(200));
+    let mut b = zip_with(&[(&long, &quoted), ("b.txt", b"bbbb")]);
+    let a_data = (30 + long.len()) as u32;
+    // Point b.txt's central record into a.txt's data.
+    let records: Vec<usize> = (0..b.len() - 4)
+        .filter(|&i| &b[i..i + 4] == b"PK\x01\x02")
+        .collect();
+    b[records[1] + 42..records[1] + 46].copy_from_slice(&a_data.to_le_bytes());
+    let path = tmp.path().join("long.zip");
+    std::fs::write(&path, b).unwrap();
+    let e = open_local(&Registry::with_local(), &path, tmp.path())
+        .await
+        .err()
+        .expect("opened");
+    assert!(e.to_string().contains("zip bomb"), "{e}");
+}
+
 /// VFS-ARC-008: copying out of an archive goes through the queue with
 /// progress, and copying the archive's top makes a folder named after it.
 #[tokio::test]
@@ -580,6 +618,58 @@ async fn close_waits_for_operations() {
     assert_eq!(std::fs::read(out.join("docs/a.txt")).unwrap(), b"alpha");
     archives.reap();
     assert!(registry.get(fs.id()).is_err());
+    assert!(archives.ids().is_empty());
+}
+
+/// VFS-ARC-010: an extraction that stopped on an existing file keeps its
+/// archive open after it is closed, so "Replace existing" can run, until
+/// the finished operations are cleared.
+#[tokio::test]
+async fn failed_extraction_can_be_retried_after_close() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry = Arc::new(Registry::with_local());
+    let queue = dualpal_testkit::queue(registry.clone());
+    let archives = Archives::new(registry.clone(), queue.clone(), tmp.path().join("scratch"));
+    let path = make(tmp.path(), "pack.zip", FILES, &[]);
+    let fs = archives
+        .open(
+            &Location::new(LocalFs::ID, path.to_string_lossy()),
+            &CancellationToken::new(),
+            no_progress(),
+        )
+        .await
+        .unwrap();
+    let id = fs.id().to_string();
+    drop(fs);
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(out.join("pack")).unwrap();
+    std::fs::write(out.join("pack/top.txt"), b"old").unwrap();
+    let copy = |conflict| Operation::Copy {
+        sources: vec![Location::new(&id, "/")],
+        destination: Location::new(LocalFs::ID, out.to_string_lossy()),
+        conflict,
+    };
+    let op = queue.enqueue(copy(ConflictPolicy::Fail));
+    // Extract Here lets go of the archive right after queueing.
+    archives.close(&id);
+    let info = queue.wait(op).await.unwrap();
+    assert_eq!(info.status, OperationStatus::Failed);
+    assert_eq!(info.error.unwrap().kind, "alreadyExists");
+    archives.reap();
+    assert!(registry.get(&id).is_ok(), "closed before the retry");
+
+    let info = dualpal_testkit::queue::run(&queue, copy(ConflictPolicy::Overwrite)).await;
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert_eq!(
+        std::fs::read(out.join("pack/top.txt")).unwrap(),
+        b"top level"
+    );
+    archives.reap();
+    assert!(registry.get(&id).is_ok());
+
+    queue.clear_finished();
+    archives.reap();
+    assert!(registry.get(&id).is_err());
     assert!(archives.ids().is_empty());
 }
 

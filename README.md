@@ -108,7 +108,7 @@ Zip, tar, tar.gz/.tgz, tar.bz2, tar.xz and 7z files open like folders: press **E
 - Archives are read-only. Copy (**F5**) or drag items to the other pane to extract them; copies go through the operation queue with progress and can be cancelled. *Extract Here* and *Extract to* in an archive's menu copy everything into a new folder named after it.
 - Preview, folder sizes, find and folder compare work inside archives too, and archives inside archives open the same way.
 - An archive on a server is downloaded to a temporary file first (with progress and *Cancel*); a compressed tar is unpacked once so its files can be read in any order. The temporary files are removed when no pane shows the archive any more, and when Dual Pal quits.
-- Entry names that would point outside the archive (`../x`, `/etc/x`) stay inside it, a file never unpacks to more than the archive says, and zip files whose entries overlap (a common zip bomb) are refused.
+- Entry names that would point outside the archive (`../x`, `/etc/x`) stay inside it, a file never unpacks to more than the archive says, zip files whose entries overlap (a common zip bomb) are refused, and so is anything that unpacks to over 1 GiB at more than 1000 times its size.
 - Password-protected zip and 7z archives are not supported yet; Dual Pal says so instead of opening them.
 
 ## Servers (SFTP, FTP, WebDAV and S3)
