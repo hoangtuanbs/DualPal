@@ -94,6 +94,14 @@ fn tested_commands() -> HashSet<&'static str> {
         "viewer_count_lines",
         "viewer_cancel",
         "viewer_close",
+        "diff_open",
+        "diff_lines",
+        "diff_set_options",
+        "diff_set_encoding",
+        "diff_apply",
+        "diff_save",
+        "diff_cancel",
+        "diff_close",
     ]
     .into_iter()
     .collect()
@@ -1379,4 +1387,129 @@ fn viewer_search_and_count_lines() {
     )
     .unwrap();
     assert_eq!(found, Some(2));
+}
+
+/// CMD-060 — diff_open compares two text files (hunks, sides), diff_lines
+/// gives lines with intra-line marks, diff_set_options and
+/// diff_set_encoding compare again; binary files come back as `binary`;
+/// diff_cancel of an unknown request is a no-op; a closed compare is
+/// `invalid`.
+#[test]
+fn diff_open_lines_and_options() {
+    let TestApp { app, tmp } = app();
+    let a = tmp.path().join("a.txt");
+    let b = tmp.path().join("b.txt");
+    std::fs::write(&a, "same\nHello world\n").unwrap();
+    std::fs::write(&b, "same\nhello there\nadded\n").unwrap();
+    let out: Value = call(
+        &app,
+        "diff_open",
+        json!({
+            "request": 1,
+            "left": local(&a.to_string_lossy()),
+            "right": local(&b.to_string_lossy()),
+            "options": { "ignoreCase": false },
+            "encodings": null,
+        }),
+    )
+    .unwrap();
+    assert_eq!(out["kind"], "text");
+    let state = &out["state"];
+    assert_eq!(
+        state["hunks"],
+        json!([{ "leftStart": 1, "leftLen": 1, "rightStart": 1, "rightLen": 2 }])
+    );
+    assert_eq!(state["sides"][0]["encoding"], "utf-8");
+    assert_eq!(state["sides"][1]["lines"], 3);
+    let session = state["session"].as_u64().unwrap();
+    let lines: Value = call(
+        &app,
+        "diff_lines",
+        json!({ "session": session, "side": "right", "from": 1, "count": 10 }),
+    )
+    .unwrap();
+    assert_eq!(lines[0]["text"], "hello there");
+    assert_eq!(lines[0]["eol"], "lf");
+    assert_eq!(lines[0]["marks"], json!([[0, 5], [6, 11]]));
+    assert_eq!(lines[1]["marks"], json!([]));
+
+    let state: Value = call(
+        &app,
+        "diff_set_options",
+        json!({ "session": session, "options": { "ignoreCase": true, "ignoreWhitespace": false, "ignoreLineEndings": false } }),
+    )
+    .unwrap();
+    assert_eq!(state["options"]["ignoreCase"], true);
+    let state: Value = call(
+        &app,
+        "diff_set_encoding",
+        json!({ "session": session, "side": "left", "encoding": "iso-8859-1" }),
+    )
+    .unwrap();
+    assert_eq!(state["sides"][0]["encoding"], "iso-8859-1");
+
+    call_ok(&app, "diff_cancel", json!({ "request": 99 }));
+    call_ok(&app, "diff_close", json!({ "session": session }));
+    let err = call::<Value>(
+        &app,
+        "diff_lines",
+        json!({ "session": session, "side": "left", "from": 0, "count": 1 }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "invalid");
+
+    let bin = tmp.path().join("c.bin");
+    std::fs::write(&bin, [0u8, 1, 2]).unwrap();
+    let out: Value = call(
+        &app,
+        "diff_open",
+        json!({ "request": 2, "left": local(&a.to_string_lossy()), "right": local(&bin.to_string_lossy()) }),
+    )
+    .unwrap();
+    assert_eq!(
+        out,
+        json!({ "kind": "binary", "identical": false, "sizes": [17, 3] })
+    );
+}
+
+/// CMD-061 — diff_apply copies a change to one side and diff_save writes it
+/// to the file; a stale revision is `invalid`.
+#[test]
+fn diff_apply_and_save() {
+    let TestApp { app, tmp } = app();
+    let a = tmp.path().join("a.txt");
+    let b = tmp.path().join("b.txt");
+    std::fs::write(&a, "one\ntwo\n").unwrap();
+    std::fs::write(&b, "one\n2\n").unwrap();
+    let out: Value = call(
+        &app,
+        "diff_open",
+        json!({ "request": 1, "left": local(&a.to_string_lossy()), "right": local(&b.to_string_lossy()) }),
+    )
+    .unwrap();
+    let session = out["state"]["session"].as_u64().unwrap();
+    let revision = out["state"]["revision"].as_u64().unwrap();
+    let state: Value = call(
+        &app,
+        "diff_apply",
+        json!({ "session": session, "revision": revision, "hunk": 0, "to": "right" }),
+    )
+    .unwrap();
+    assert_eq!(state["hunks"], json!([]));
+    assert_eq!(state["sides"][1]["dirty"], true);
+    let err = call::<Value>(
+        &app,
+        "diff_apply",
+        json!({ "session": session, "revision": revision, "hunk": 0, "to": "left" }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "invalid");
+    let state: Value = call(
+        &app,
+        "diff_save",
+        json!({ "session": session, "side": "right" }),
+    )
+    .unwrap();
+    assert_eq!(state["sides"][1]["dirty"], false);
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "one\ntwo\n");
 }

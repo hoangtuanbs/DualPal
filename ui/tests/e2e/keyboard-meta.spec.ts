@@ -39,6 +39,7 @@ const COVERED_BY: Record<string, string> = {
   "Ctrl/⌘ Shift P": "UI-KEY-025",
   "Ctrl/⌘ Shift Y": "UI-KEY-026",
   "Ctrl/⌘ Shift D": "UI-KEY-027",
+  "Alt ↓ / Alt ↑, F7 / Shift F7, Alt → / Alt ← (in file compare)": "UI-KEY-045",
   "Ctrl/⌘ Shift L": "UI-KEY-028",
   "Ctrl/⌘ Shift F": "UI-KEY-031",
   "Space on a folder": "UI-KEY-032",

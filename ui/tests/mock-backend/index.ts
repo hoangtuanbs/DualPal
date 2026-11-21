@@ -4,6 +4,7 @@
 // command + arguments that produced it.
 
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { diffHandlers } from "./diff";
 import type {
   ActivityRecord,
   ConnectionView,
@@ -128,7 +129,7 @@ export const defaultScenario = (): Scenario => ({
   volumes: [
     { name: "System", location: { fs: "local", path: "/" }, totalBytes: 1_000_000_000, availableBytes: 500_000_000, removable: false, wsl: false },
   ],
-  settings: { editor: null, diffTool: null },
+  settings: { editor: null, diffTool: null, externalCompare: null },
   activity: [],
 });
 
@@ -496,6 +497,7 @@ const handlers: Record<string, Handler> = {
 export function installMockBackend(scenario: Scenario = defaultScenario()): MockHandle {
   const recorder = new Recorder();
   const state = new State(structuredClone(scenario));
+  const diffs = diffHandlers((fs) => state.scenario.trees[fs] ?? state.scenario.trees.local);
 
   mockIPC((cmd, payload) => {
     const args = (payload ?? {}) as any;
@@ -507,6 +509,8 @@ export function installMockBackend(scenario: Scenario = defaultScenario()): Mock
     }
     const handler = handlers[cmd];
     if (handler) return handler(args, state);
+    const diff = (diffs as Record<string, (a: any) => unknown>)[cmd];
+    if (diff) return diff(args);
     // Unknown command → the real backend would reject it.
     throw { kind: "unsupported", message: `unsupported command ${cmd}` };
   });
