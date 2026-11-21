@@ -85,11 +85,24 @@ export function onArchiveClosed(f: (fsId: string) => void): () => void {
   return () => forgetters.delete(f);
 }
 
-/** Close the archives that no pane shows. An archive holding a shown
- *  archive (a zip inside a zip) stays open, since leaving goes back into it. */
+/** Where panes are going: listings still loading (Swap Panes, a new tab). */
+const incoming: Location[] = [];
+
+/** Count `loc` as shown while a pane lists it; call the result when done. */
+export function holdLocation(loc: Location): () => void {
+  incoming.push(loc);
+  return () => {
+    const i = incoming.indexOf(loc);
+    if (i >= 0) incoming.splice(i, 1);
+  };
+}
+
+/** Close the archives that no pane shows or is going to. An archive holding
+ *  a shown archive (a zip inside a zip) stays open, since leaving goes back
+ *  into it. */
 export function releaseArchives() {
   const used = new Set<string>();
-  for (const loc of shown()) {
+  for (const loc of [...shown(), ...incoming]) {
     let fs = loc?.fs;
     while (fs && openArchives.has(fs) && !used.has(fs)) {
       used.add(fs);
