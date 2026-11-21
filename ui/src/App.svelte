@@ -1006,7 +1006,7 @@
   function verifyChecksums(entry: Entry) {
     const loc = active.location;
     if (!loc) return;
-    if (!checksumAlgorithmOf(entry.name)) {
+    if (entry.kind !== "file" || !checksumAlgorithmOf(entry.name)) {
       notice = "Pick a .md5, .sha1, .sha256 or .xxh128 file to verify.";
       return;
     }

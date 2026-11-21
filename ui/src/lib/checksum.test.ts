@@ -15,6 +15,7 @@ describe("checksum helpers", () => {
     expect(withChecksumExtension("SUMS.md5", "xxh128")).toBe("SUMS.xxh128");
     expect(defaultChecksumName(["a.txt"], "Docs", "md5")).toBe("a.txt.md5");
     expect(defaultChecksumName(["a.txt", "b"], "Docs", "md5")).toBe("Docs.md5");
+    expect(defaultChecksumName(["a.txt", "b"], "C:", "sha256")).toBe("Checksums.sha256");
     expect(defaultChecksumName(["a", "b"], "", "md5")).toBe("Checksums.md5");
     expect(folderNameOf("/home/u/Docs/")).toBe("Docs");
     expect(folderNameOf("C:\\Users\\u")).toBe("u");

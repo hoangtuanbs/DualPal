@@ -24,7 +24,9 @@ export function withChecksumExtension(name: string, algorithm: ChecksumAlgorithm
 
 /** The name suggested for a checksum file of `names` in a folder called `folderName`. */
 export function defaultChecksumName(names: string[], folderName: string, algorithm: ChecksumAlgorithm): string {
-  const base = names.length === 1 ? names[0] : folderName || "Checksums";
+  // A drive root ("C:") is no file name: fall back to a plain one.
+  const folder = folderName && !folderName.includes(":") ? folderName : "Checksums";
+  const base = names.length === 1 ? names[0] : folder;
   return withChecksumExtension(base, algorithm);
 }
 
