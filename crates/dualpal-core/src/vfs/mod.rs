@@ -5,6 +5,7 @@
 //! [`Location`] is a pair of that id and a path inside it, so the UI, the
 //! operation queue and (later) the sync engine can treat all of them alike.
 
+pub mod archive;
 mod davput;
 mod ftp;
 mod local;
@@ -14,6 +15,7 @@ mod sftp;
 mod text;
 pub mod wsl;
 
+pub use archive::{ArchiveFs, Archives};
 pub use ftp::{FtpFs, FtpParams, FtpSecurity};
 pub use local::LocalFs;
 pub use s3::{S3Fs, S3Params, WebDavParams};

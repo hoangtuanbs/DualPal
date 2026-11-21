@@ -88,6 +88,9 @@ fn tested_commands() -> HashSet<&'static str> {
         "diff_tools",
         "compare_files",
         "activity_insights",
+        "open_archive",
+        "cancel_open_archive",
+        "close_archive",
     ]
     .into_iter()
     .collect()
@@ -1256,4 +1259,81 @@ fn find_files_matches_names_and_cancel() {
     assert!(blank["hits"].as_array().unwrap().is_empty());
 
     call_ok(&app, "cancel_find_files", json!({ "request": 99 }));
+}
+
+/// CMD-041 — `open_archive` registers a zip as a read-only file system that
+/// `list_dir` and `read_text` work on; `close_archive` unregisters it; a
+/// file that is not an archive is an error; cancelling an unknown request is
+/// a no-op.
+#[test]
+fn open_and_close_archive() {
+    use std::io::Write;
+    let TestApp { app, tmp } = app();
+    let path = tmp.path().join("pack.zip");
+    let mut w = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    w.start_file("docs/a.txt", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    w.write_all(b"inside").unwrap();
+    w.finish().unwrap();
+
+    let opened: Value = call(
+        &app,
+        "open_archive",
+        json!({ "location": local(&path.to_string_lossy()), "request": 1 }),
+    )
+    .unwrap();
+    let fs_id = opened["fsId"].as_str().unwrap().to_string();
+    assert!(fs_id.starts_with("archive:"));
+    assert_eq!(opened["name"], "pack.zip");
+    assert_eq!(opened["source"]["path"], path.to_string_lossy().as_ref());
+
+    let root: Vec<Value> = call(
+        &app,
+        "list_dir",
+        json!({ "location": { "fs": fs_id, "path": "/" } }),
+    )
+    .unwrap();
+    assert_eq!(root.len(), 1);
+    assert_eq!(root[0]["name"], "docs");
+    let text: Value = call(
+        &app,
+        "read_text",
+        json!({ "location": { "fs": fs_id, "path": "/docs/a.txt" }, "maxBytes": 100 }),
+    )
+    .unwrap();
+    assert_eq!(text["text"], "inside");
+    let parent: Value = call(
+        &app,
+        "parent_location",
+        json!({ "location": { "fs": fs_id, "path": "/" } }),
+    )
+    .unwrap();
+    assert!(parent.is_null());
+    let write_err = call::<Value>(
+        &app,
+        "write_text",
+        json!({ "location": { "fs": fs_id, "path": "/docs/a.txt" }, "text": "x" }),
+    )
+    .unwrap_err();
+    assert_eq!(write_err["kind"], "permissionDenied");
+
+    call_ok(&app, "close_archive", json!({ "fsId": fs_id }));
+    let gone = call::<Value>(
+        &app,
+        "list_dir",
+        json!({ "location": { "fs": fs_id, "path": "/" } }),
+    )
+    .unwrap_err();
+    assert_eq!(gone["kind"], "unknownFileSystem");
+
+    let text_file = tmp.path().join("notes.zip");
+    std::fs::write(&text_file, "not a zip at all, only text").unwrap();
+    let bad = call::<Value>(
+        &app,
+        "open_archive",
+        json!({ "location": local(&text_file.to_string_lossy()), "request": 2 }),
+    )
+    .unwrap_err();
+    assert_eq!(bad["kind"], "invalid");
+    call_ok(&app, "cancel_open_archive", json!({ "request": 99 }));
 }
