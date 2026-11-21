@@ -221,6 +221,8 @@ export interface EditSession {
 export interface Settings {
   editor: string | null;
   diffTool: string | null;
+  /** true: Compare Files opens the external compare app instead of the built-in view. */
+  externalCompare?: boolean | null;
   /** Milliseconds since the epoch of the last update check. */
   lastUpdateCheck?: number | null;
   /** false turns off the automatic check for a new release. Empty means on. */
