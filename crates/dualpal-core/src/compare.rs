@@ -25,8 +25,10 @@ pub enum CompareBy {
     /// Same size and modification time (within `tolerance_ms`).
     #[default]
     SizeAndDate,
-    /// Same size, whatever the dates. When the sizes differ, dates say
-    /// which side is newer.
+    /// Same size, and no side newer than the other: equal sizes with
+    /// dates further apart than `tolerance_ms` show the newer side. Copies
+    /// keep the source's modification time where the target allows it, so
+    /// a file copied over compares as the same afterwards.
     Size,
     /// Same bytes. Reads both files when their sizes match.
     Content,
@@ -412,7 +414,7 @@ impl Walker {
         };
         let same = match self.opts.by {
             CompareBy::SizeAndDate => a.matches(b, tol),
-            CompareBy::Size => a.size == b.size,
+            CompareBy::Size => a.size == b.size && newer() == DiffState::Different,
             CompareBy::Content => a.size == b.size && self.same_content(&le.path, &re.path).await?,
         };
         Ok(if same { DiffState::Same } else { newer() })

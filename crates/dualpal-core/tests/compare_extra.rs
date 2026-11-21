@@ -34,16 +34,9 @@ fn write(p: &Path, content: &str) {
     std::fs::write(p, content).unwrap();
 }
 
-/// CMP-002 — `by: size` ignores dates for equality but reports the newer side.
-///
-/// This expectation is kept for the record but does not match the compare
-/// design: in size mode equal sizes mean `Same` (dates only say which side
-/// is newer when the sizes differ). Reporting equal-size files as newer
-/// would make every sync copy them again, which is what size mode exists to
-/// avoid (servers that stamp uploads with their own time, FAT dates). See
-/// `by_size_equal_sizes_are_same` for the intended behaviour.
+/// CMP-002 — `by: size` reports the newer side of equal-size files whose
+/// dates differ.
 #[tokio::test]
-#[ignore = "NOT A BUG: in size mode equal sizes are Same by design; reporting a newer side would make every sync copy them again"]
 async fn by_size_ignores_dates() {
     let tmp = tempfile::tempdir().unwrap();
     let l = tmp.path().join("l");
@@ -62,10 +55,10 @@ async fn by_size_ignores_dates() {
     assert_eq!(c.get("same.txt").unwrap().state, DiffState::RightNewer);
 }
 
-/// CMP-002 — `by: size`: equal sizes are `Same` whatever the dates; when
-/// the sizes differ, the dates say which side is newer.
+/// CMP-002 — `by: size`: equal sizes with dates within the tolerance are
+/// `Same`; when the sizes differ, the dates say which side is newer.
 #[tokio::test]
-async fn by_size_equal_sizes_are_same() {
+async fn by_size_equal_sizes_and_dates_are_same() {
     let tmp = tempfile::tempdir().unwrap();
     let l = tmp.path().join("l");
     let r = tmp.path().join("r");
@@ -74,7 +67,7 @@ async fn by_size_equal_sizes_are_same() {
     write(&l.join("grown.txt"), "x");
     write(&r.join("grown.txt"), "xyz");
     set_mtime(l.join("same.txt"), 1_600_000_000_000);
-    set_mtime(r.join("same.txt"), 1_600_000_100_000);
+    set_mtime(r.join("same.txt"), 1_600_000_001_000);
     set_mtime(l.join("grown.txt"), 1_600_000_000_000);
     set_mtime(r.join("grown.txt"), 1_600_000_100_000);
 
