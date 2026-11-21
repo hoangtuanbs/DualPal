@@ -70,4 +70,19 @@ test.describe("UI-E2E settings", () => {
     await expect(columns).toContainText("Date Modified");
     await expect(columns).not.toContainText("Size");
   });
+
+  test("UI-E2E-036 a pane that leaves its last folder and comes back at once saves nothing", async ({ page }) => {
+    const last = { mode: "last", folder: null };
+    await openApp(page, { ...defaultScenario, settings: { paneStart: [last, last], lastFolders: ["/home/user", "/home/user"] } });
+    await expect(row(page, "left", "a.txt")).toBeVisible();
+    await clearCalls(page);
+    await point(page, "left", "docs");
+    await page.keyboard.press("Enter");
+    await expect(row(page, "left", "notes.txt")).toBeVisible();
+    await page.keyboard.press("Backspace");
+    await expect(row(page, "left", "a.txt")).toBeVisible();
+    // Longer than the wait before a folder is saved.
+    await page.waitForTimeout(1500);
+    expect((await calls(page, "update_settings")).map((a) => a.patch)).toEqual([]);
+  });
 });

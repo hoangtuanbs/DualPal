@@ -841,6 +841,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-E2E-031 | unsaved state survives nothing unexpected: reload restores favorites/servers from backend, not localStorage | P2 | |
 | UI-E2E-034 | a command rebound in Settings runs from its new key, the old key does nothing, the palette shows the new key | P1 | |
 | UI-E2E-035 | Settings appearance and pane choices apply at once and are read at start | P1 | |
+| UI-E2E-036 | a pane set to open its last folder that leaves it and comes back within the save delay saves nothing | P1 | |
 
 ### 8.15 Full-stack desktop E2E — `DESK` (L7)
 

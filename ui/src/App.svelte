@@ -264,11 +264,12 @@
   let lastSaveTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     const here = groups.map((g) => g.current.location);
+    // A save still waiting is for a folder the pane may have left already.
+    clearTimeout(lastSaveTimer);
     if (!prefs.settings.paneStart?.some((p) => p?.mode === "last")) return;
     const saved = prefs.settings.lastFolders ?? [];
     const next = here.map((l, i) => (l?.fs === "local" ? l.path : (saved[i] ?? null)));
     if (next.every((p, i) => p === (saved[i] ?? null))) return;
-    clearTimeout(lastSaveTimer);
     lastSaveTimer = setTimeout(() => {
       if (started) prefs.update({ lastFolders: next }).catch(() => {});
     }, 800);
