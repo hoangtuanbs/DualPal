@@ -353,11 +353,12 @@
       oncontext(e.clientX, e.clientY, null);
     }}
   >
+    {#if pane.notice}
+      <p class="message notice" data-testid={`pane-${side}-notice`}>{pane.notice}</p>
+    {/if}
     {#if pane.error}
       <p class="message error" data-testid={`pane-${side}-error`}>{pane.error}</p>
-    {:else if pane.notice}
-      <p class="message notice" data-testid={`pane-${side}-notice`}>{pane.notice}</p>
-    {:else if pane.visible.length === 0 && !pane.loading}
+    {:else if !pane.notice && pane.visible.length === 0 && !pane.loading}
       <p class="message">{pane.filter ? "No items match the filter." : "This folder is empty."}</p>
     {/if}
     {#each pane.visible as entry, i (entry.path)}
