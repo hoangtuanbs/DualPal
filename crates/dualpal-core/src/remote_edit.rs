@@ -10,6 +10,11 @@
 //! keeps a small manifest next to it so that saves that had not reached the
 //! server when the app closed (or the connection dropped) are offered again
 //! on the next run instead of being deleted.
+//!
+//! Saves never silently replace someone else's change either: the server
+//! file's size and date are remembered when it is downloaded or uploaded,
+//! and checked before each upload. If they changed, the save is held as a
+//! conflict until the user chooses to overwrite the server copy or skip it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +46,10 @@ pub enum EditStatus {
     /// The last save is not on the server yet (see `error`). It is retried
     /// while the server is connected, or with [`RemoteEditor::upload_now`].
     Failed,
+    /// The file changed on the server since it was opened or last uploaded,
+    /// so the last save was not uploaded. Resolve it with
+    /// [`RemoteEditor::resolve_conflict`].
+    Conflict,
     Stopped,
 }
 
@@ -59,6 +68,16 @@ pub struct EditSession {
 /// (modified time in ms, size) of a local file.
 type Signature = (i64, u64);
 
+/// Size and modification time of the server file, to notice changes made
+/// by someone else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ServerSig {
+    size: u64,
+    modified_ms: Option<i64>,
+}
+
+const CONFLICT: &str = "the file changed on the server since you opened it";
+
 /// Kept next to each local copy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Manifest {
@@ -66,6 +85,10 @@ struct Manifest {
     file: String,
     /// Signature of the local copy as last downloaded or uploaded.
     synced: Option<Signature>,
+    /// The server file as last downloaded or uploaded; `None` if unknown
+    /// (e.g. a manifest from an older version), and then not checked.
+    #[serde(default)]
+    server: Option<ServerSig>,
 }
 
 struct Running {
@@ -240,6 +263,7 @@ impl RemoteEditor {
             .map(|r| r.info.clone());
         if let Some(s) = existing {
             if s.status == EditStatus::Failed {
+                // (A conflict is left for the user to resolve.)
                 // Unsent changes: don't download over them, send them.
                 return self.upload_now(s.id).await;
             }
@@ -262,6 +286,10 @@ impl RemoteEditor {
                 remote: remote.clone(),
                 file,
                 synced: signature(&local),
+                server: Some(ServerSig {
+                    size: entry.size,
+                    modified_ms: entry.modified_ms,
+                }),
             },
         );
 
@@ -303,24 +331,58 @@ impl RemoteEditor {
         ));
     }
 
-    /// Upload the local copy now and (re)start watching it, e.g. for a save
-    /// that failed or was left over from an earlier run.
-    pub async fn upload_now(&self, id: Uuid) -> Result<EditSession> {
-        let info = self
-            .inner
+    fn session(&self, id: Uuid) -> Result<EditSession> {
+        self.inner
             .sessions
             .lock()
             .unwrap()
             .get(&id)
             .map(|r| r.info.clone())
-            .ok_or_else(|| Error::NotFound(format!("edit session {id}")))?;
+            .ok_or_else(|| Error::NotFound(format!("edit session {id}")))
+    }
+
+    /// Upload the local copy now and (re)start watching it, e.g. for a save
+    /// that failed or was left over from an earlier run. If the server copy
+    /// changed meanwhile, nothing is uploaded and the session is returned
+    /// in [`EditStatus::Conflict`].
+    pub async fn upload_now(&self, id: Uuid) -> Result<EditSession> {
+        self.send(id, false).await
+    }
+
+    /// Settle a save held as a conflict. `overwrite` uploads the local copy
+    /// over the server's; otherwise this save is skipped: the server copy
+    /// and the local copy are both left as they are, and the next save is
+    /// checked again.
+    pub async fn resolve_conflict(&self, id: Uuid, overwrite: bool) -> Result<EditSession> {
+        let info = self.session(id)?;
+        if overwrite {
+            return self.send(id, true).await;
+        }
+        let fs = self.inner.registry.get(&info.remote.fs)?;
+        let mut info = info;
+        info.status = EditStatus::Watching;
+        info.error = None;
+        // Keep the remembered `synced`, so the skipped save is still known
+        // as unsent if the app closes, but don't upload it from here.
+        let local = PathBuf::from(&info.local_path);
+        self.spawn_watcher(info.clone(), fs, signature(&local));
+        Ok(info)
+    }
+
+    async fn send(&self, id: Uuid, force: bool) -> Result<EditSession> {
+        let info = self.session(id)?;
         let fs = self.inner.registry.get(&info.remote.fs)?;
         let local = PathBuf::from(&info.local_path);
         update(&self.inner, id, |s| s.status = EditStatus::Uploading);
         let sig = signature(&local);
-        match upload(&*fs, &local, &info.remote.path).await {
-            Ok(()) => {
-                mark_synced(&local, sig);
+        let sent = if force {
+            upload_checked(&*fs, &local, &info.remote.path, None).await
+        } else {
+            upload_checked(&*fs, &local, &info.remote.path, server_sig(&local)).await
+        };
+        match sent {
+            Ok(server) => {
+                mark_synced(&local, sig, server);
                 let mut info = info;
                 info.status = EditStatus::Uploaded;
                 info.uploads += 1;
@@ -329,7 +391,15 @@ impl RemoteEditor {
                 self.spawn_watcher(info.clone(), fs, sig);
                 Ok(info)
             }
-            Err(e) => {
+            Err(Sent::Conflict) => {
+                // Watch on, without sending this save again by itself.
+                let mut info = info;
+                info.status = EditStatus::Conflict;
+                info.error = Some(CONFLICT.into());
+                self.spawn_watcher(info.clone(), fs, sig);
+                Ok(info)
+            }
+            Err(Sent::Failed(e)) => {
                 update(&self.inner, id, |s| {
                     s.status = EditStatus::Failed;
                     s.error = Some(e.to_string());
@@ -383,13 +453,57 @@ impl RemoteEditor {
     }
 }
 
-/// Record that the copy at `local` (with signature `sig`) is on the server.
-fn mark_synced(local: &Path, sig: Option<Signature>) {
+/// Record that the copy at `local` (with signature `sig`) is on the server,
+/// which now holds `server`.
+fn mark_synced(local: &Path, sig: Option<Signature>, server: Option<ServerSig>) {
     let Some(dir) = local.parent() else { return };
     if let Some(mut m) = read_manifest(dir) {
         m.synced = sig;
+        m.server = server;
         write_manifest(dir, &m);
     }
+}
+
+/// The server file as remembered for the copy at `local`.
+fn server_sig(local: &Path) -> Option<ServerSig> {
+    read_manifest(local.parent()?)?.server
+}
+
+async fn stat_server(fs: &dyn FileSystem, path: &str) -> Result<Option<ServerSig>> {
+    match fs.stat(path).await {
+        Ok(e) => Ok(Some(ServerSig {
+            size: e.size,
+            modified_ms: e.modified_ms,
+        })),
+        Err(Error::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+enum Sent {
+    /// The server copy is not the one `expected`; nothing was uploaded.
+    Conflict,
+    Failed(Error),
+}
+
+/// Upload `from` to `path`, first checking that the server file is still
+/// `expected` (when given). Returns the server file as it is afterwards.
+async fn upload_checked(
+    fs: &dyn FileSystem,
+    from: &Path,
+    path: &str,
+    expected: Option<ServerSig>,
+) -> std::result::Result<Option<ServerSig>, Sent> {
+    if let Some(expected) = expected {
+        let now = stat_server(fs, path).await.map_err(Sent::Failed)?;
+        // A file deleted on the server counts as changed, too.
+        if now != Some(expected) {
+            return Err(Sent::Conflict);
+        }
+    }
+    upload(fs, from, path).await.map_err(Sent::Failed)?;
+    // Servers may stamp the upload with their own time: remember theirs.
+    Ok(stat_server(fs, path).await.ok().flatten())
 }
 
 fn update(inner: &Inner, id: Uuid, f: impl FnOnce(&mut EditSession)) {
@@ -412,6 +526,8 @@ async fn watch(
     cancel: CancellationToken,
 ) {
     let mut delay = POLL;
+    // A local save that was not uploaded because of a conflict.
+    let mut held: Option<Signature> = None;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
@@ -427,12 +543,16 @@ async fn watch(
         if signature(&local) != now {
             continue;
         }
+        if now == held {
+            continue; // a save held as a conflict; the user decides
+        }
         update(&inner, id, |s| s.status = EditStatus::Uploading);
-        match upload(&*fs, &local, &remote_path).await {
-            Ok(()) => {
+        match upload_checked(&*fs, &local, &remote_path, server_sig(&local)).await {
+            Ok(server) => {
                 // Only a save that reached the server counts as synced.
                 synced = now;
-                mark_synced(&local, now);
+                held = None;
+                mark_synced(&local, now, server);
                 update(&inner, id, |s| {
                     s.status = EditStatus::Uploaded;
                     s.uploads += 1;
@@ -440,7 +560,14 @@ async fn watch(
                     s.error = None;
                 });
             }
-            Err(e) => {
+            Err(Sent::Conflict) => {
+                held = now;
+                update(&inner, id, |s| {
+                    s.status = EditStatus::Conflict;
+                    s.error = Some(CONFLICT.into());
+                });
+            }
+            Err(Sent::Failed(e)) => {
                 update(&inner, id, |s| {
                     s.status = EditStatus::Failed;
                     s.error = Some(e.to_string());

@@ -320,6 +320,17 @@ pub async fn upload_edit_session(state: State<'_, AppState>, id: Uuid) -> CmdRes
     state.editor.upload_now(id).await
 }
 
+/// Settle a save held because the server copy changed: upload it over the
+/// server's (`overwrite`) or skip it.
+#[tauri::command]
+pub async fn resolve_edit_conflict(
+    state: State<'_, AppState>,
+    id: Uuid,
+    overwrite: bool,
+) -> CmdResult<EditSession> {
+    state.editor.resolve_conflict(id, overwrite).await
+}
+
 #[tauri::command]
 pub fn stop_edit_session(state: State<'_, AppState>, id: Uuid) -> bool {
     state.editor.stop(id)

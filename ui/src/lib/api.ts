@@ -206,7 +206,7 @@ export interface SshConfigHost {
   identityFile: string | null;
 }
 
-export type EditStatus = "watching" | "uploading" | "uploaded" | "failed" | "stopped";
+export type EditStatus = "watching" | "uploading" | "uploaded" | "failed" | "conflict" | "stopped";
 
 export interface EditSession {
   id: string;
@@ -521,6 +521,9 @@ export const api = {
   editSessions: () => invoke<EditSession[]>("edit_sessions"),
   stopEditSession: (id: string) => invoke<boolean>("stop_edit_session", { id }),
   uploadEditSession: (id: string) => invoke<EditSession>("upload_edit_session", { id }),
+  /** A save held because the server copy changed: overwrite the server copy, or skip this save. */
+  resolveEditConflict: (id: string, overwrite: boolean) =>
+    invoke<EditSession>("resolve_edit_conflict", { id, overwrite }),
   previewPath: (location: Location) => invoke<string>("preview_path", { location }),
   secretsStatus: () => invoke<VaultStatus>("secrets_status"),
   /** Set a master password; saved passwords move from the system store into an encrypted vault. */

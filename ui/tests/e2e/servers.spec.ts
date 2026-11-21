@@ -315,6 +315,20 @@ test.describe("UI-E2E servers", () => {
     await bar.getByRole("button", { name: "Upload" }).click();
     await expect.poll(() => calls(page, "upload_edit_session")).toEqual([{ id: session.id }]);
 
+    // A save held because the server copy changed offers both choices.
+    await emit(page, "edit-session-updated", { ...session, status: "conflict", error: "changed" });
+    await expect(bar).toContainText("Changed on the server since you opened it");
+    await bar.getByRole("button", { name: "Skip this save" }).click();
+    await expect.poll(() => calls(page, "resolve_edit_conflict")).toEqual([{ id: session.id, overwrite: false }]);
+    await emit(page, "edit-session-updated", { ...session, status: "conflict", error: "changed" });
+    await bar.getByRole("button", { name: "Overwrite server copy" }).click();
+    await expect
+      .poll(() => calls(page, "resolve_edit_conflict"))
+      .toEqual([
+        { id: session.id, overwrite: false },
+        { id: session.id, overwrite: true },
+      ]);
+
     // Stopping a session with unsent changes asks first.
     await emit(page, "edit-session-updated", { ...session, status: "failed", error: "connection lost" });
     await bar.getByRole("button", { name: "Stop editing readme.txt" }).click();

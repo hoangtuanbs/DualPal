@@ -890,7 +890,7 @@
 
   function stopEditing(id: string) {
     const s = editSessions.find((x) => x.id === id);
-    if (s?.status !== "failed") {
+    if (s?.status !== "failed" && s?.status !== "conflict") {
       api.stopEditSession(id);
       return;
     }
@@ -1634,6 +1634,7 @@
     sessions={editSessions}
     onstop={stopEditing}
     onupload={(id) => api.uploadEditSession(id).catch((e) => (notice = errorMessage(e)))}
+    onresolve={(id, overwrite) => api.resolveEditConflict(id, overwrite).catch((e) => (notice = errorMessage(e)))}
   />
     <div class="ops">
       <OperationsPanel
