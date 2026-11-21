@@ -11,7 +11,7 @@
   import { newRequest } from "../viewer/source";
   import type { TextEncoding } from "../viewer/viewer-api";
   import { diffApi, NO_OPTIONS, type DiffLine, type DiffOptions, type DiffOutcome, type DiffState, type Side } from "./diff-api";
-  import { buildBlocks, hunkRow, rowAt, totalRows, type Mode, type RowRef } from "./rows";
+  import { buildBlocks, rowAt, totalRows, type Mode, type RowRef } from "./rows";
 
   let {
     left,
@@ -217,23 +217,32 @@
     return current >= 0 ? `Change ${current + 1} of ${count}` : n;
   });
 
+  /** First row of each change, worked out once per layout. */
+  const hunkStarts = $derived.by(() => {
+    const rows = new Array<number>(count).fill(-1);
+    for (const b of blocks) if (b.hunk >= 0 && b.hunk < count && rows[b.hunk] < 0) rows[b.hunk] = b.row;
+    return rows.map((r) => (r < 0 ? 0 : r));
+  });
+
   function go(i: number) {
     if (!count) return;
     current = Math.max(0, Math.min(count - 1, i));
-    scrollTo(hunkRow(blocks, current) - 3);
+    scrollTo(hunkStarts[current] - 3);
   }
   function next() {
+    if (!count) return;
     if (current < 0) {
       // The first change below the top of the screen.
-      const i = diff!.hunks.findIndex((_, k) => hunkRow(blocks, k) >= top);
+      const i = hunkStarts.findIndex((row) => row >= top);
       go(i < 0 ? count - 1 : i);
     } else go(current + 1);
   }
   function previous() {
+    if (!count) return;
     if (current < 0) {
       let i = -1;
-      diff!.hunks.forEach((_, k) => {
-        if (hunkRow(blocks, k) < top) i = k;
+      hunkStarts.forEach((row, k) => {
+        if (row < top) i = k;
       });
       go(i < 0 ? 0 : i);
     } else go(current - 1);
@@ -421,10 +430,10 @@
           <button aria-pressed={mode === "split"} onclick={() => setMode("split")}>Side by side</button>
           <button aria-pressed={mode === "inline"} onclick={() => setMode("inline")}>Inline</button>
         </div>
-        <label><input type="checkbox" checked={options.ignoreWhitespace} onchange={(e) => setOption("ignoreWhitespace", e.currentTarget.checked)} /> Ignore whitespace</label>
-        <label><input type="checkbox" checked={options.ignoreCase} onchange={(e) => setOption("ignoreCase", e.currentTarget.checked)} /> Ignore case</label>
+        <label><input type="checkbox" checked={options.ignoreWhitespace} disabled={busy} onchange={(e) => setOption("ignoreWhitespace", e.currentTarget.checked)} /> Ignore whitespace</label>
+        <label><input type="checkbox" checked={options.ignoreCase} disabled={busy} onchange={(e) => setOption("ignoreCase", e.currentTarget.checked)} /> Ignore case</label>
         <label
-          ><input type="checkbox" checked={options.ignoreLineEndings} onchange={(e) => setOption("ignoreLineEndings", e.currentTarget.checked)} /> Ignore line endings</label
+          ><input type="checkbox" checked={options.ignoreLineEndings} disabled={busy} onchange={(e) => setOption("ignoreLineEndings", e.currentTarget.checked)} /> Ignore line endings</label
         >
         <button onclick={previous} disabled={!count} title="Previous change (Alt ↑ or Shift F7)">Previous</button>
         <button onclick={next} disabled={!count} title="Next change (Alt ↓ or F7)">Next</button>
