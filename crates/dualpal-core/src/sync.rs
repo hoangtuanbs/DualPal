@@ -71,6 +71,10 @@ pub enum SyncReason {
     ChangedAndDeleted,
     /// A file on one side, a folder on the other.
     KindMismatch,
+    /// Another item in the same folder has the same name apart from case
+    /// (e.g. `Case.txt` and `case.txt`). On a case-insensitive disk they
+    /// are one file, so copying either would overwrite the other.
+    CaseConflict,
 }
 
 /// Files and bytes an item holds on one side (a whole folder, for folders).
@@ -134,6 +138,7 @@ fn under(rel: &str, dir: &str) -> bool {
 pub fn plan_steps(cmp: &Comparison, snap: &Snapshot, mode: SyncMode) -> Vec<SyncStep> {
     let tol = cmp.options.tolerance_ms;
     let items = &cmp.items;
+    let case_clash = case_clashes(items);
     let mut steps = Vec::new();
     let mut i = 0;
     while i < items.len() {
@@ -176,6 +181,7 @@ pub fn plan_steps(cmp: &Comparison, snap: &Snapshot, mode: SyncMode) -> Vec<Sync
         let planned = match item.state {
             DiffState::Same => None,
             DiffState::Different if item.dir => None,
+            _ if case_clash.contains(item.rel.as_str()) => Some(step(Skip, R::CaseConflict, true)),
             DiffState::KindMismatch => Some(step(Skip, R::KindMismatch, true)),
             DiffState::LeftOnly | DiffState::RightOnly => {
                 let left = item.state == DiffState::LeftOnly;
@@ -229,6 +235,25 @@ pub fn plan_steps(cmp: &Comparison, snap: &Snapshot, mode: SyncMode) -> Vec<Sync
         i = next;
     }
     steps
+}
+
+/// Items whose name matches another item in the same folder apart from
+/// case. Compare matches names exactly, so on a case-insensitive disk such
+/// items would be copied over one another; they are left for the user.
+fn case_clashes(items: &[DiffItem]) -> std::collections::HashSet<&str> {
+    let mut groups: HashMap<(&str, String), Vec<&str>> = HashMap::new();
+    for i in items {
+        let parent = i.rel.rsplit_once('/').map_or("", |(p, _)| p);
+        groups
+            .entry((parent, i.name.to_lowercase()))
+            .or_default()
+            .push(i.rel.as_str());
+    }
+    groups
+        .into_values()
+        .filter(|g| g.len() > 1)
+        .flatten()
+        .collect()
 }
 
 /// The snapshot after a sync: the old one, minus paths gone from both
