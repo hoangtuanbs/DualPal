@@ -238,8 +238,9 @@ struct Planned {
     size: u64,
 }
 
-/// Find the files below `names` (directly inside `folder_path`). Folders that
-/// cannot be listed come back as error entries rather than failing the walk.
+/// Find the files below `names` (directly inside `folder_path`). Items that
+/// cannot be read and folders that cannot be listed come back as error
+/// entries rather than failing the walk.
 async fn collect(
     fs: &dyn FileSystem,
     folder_path: &str,
@@ -252,9 +253,20 @@ async fn collect(
     let mut pending: Vec<(String, String)> = Vec::new();
     for name in names {
         let path = fs.join(folder_path, name);
-        let entry = tokio::select! {
-            r = fs.stat(&path) => r?,
+        let stat = tokio::select! {
+            r = fs.stat(&path) => r,
             _ = cancel.cancelled() => return Err(Error::Cancelled),
+        };
+        let entry = match stat {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(ChecksumEntry {
+                    path: name.clone(),
+                    hash: None,
+                    error: Some(e.to_string()),
+                });
+                continue;
+            }
         };
         match entry.kind {
             EntryKind::Dir => pending.push((path, name.clone())),
@@ -304,11 +316,16 @@ async fn collect(
     Ok((files, errors))
 }
 
-/// Escape a path for a checksum line. Backslashes and newlines are written
-/// as `\\` and `\n`, and such a line starts with a backslash (GNU style).
+/// Escape a path for a checksum line. Backslashes, newlines and carriage
+/// returns are written as `\\`, `\n` and `\r`, and such a line starts with a
+/// backslash (GNU style).
 fn escape_path(path: &str) -> (bool, String) {
-    if path.contains('\\') || path.contains('\n') {
-        (true, path.replace('\\', "\\\\").replace('\n', "\\n"))
+    if path.contains(['\\', '\n', '\r']) {
+        let escaped = path
+            .replace('\\', "\\\\")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r");
+        (true, escaped)
     } else {
         (false, path.to_string())
     }
@@ -321,6 +338,7 @@ fn unescape_path(text: &str) -> String {
         if c == '\\' {
             match chars.next() {
                 Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
                 Some(other) => out.push(other),
                 None => out.push('\\'),
             }
@@ -433,7 +451,7 @@ pub async fn write_file(
 ) -> Result<Location> {
     let fs = registry.get(&folder.fs)?;
     let name = checksum_name(file_name, algorithm);
-    if name.starts_with('.') || name.contains(['/', '\\']) {
+    if name.is_empty() || name.contains(['/', '\\']) {
         return Err(Error::Invalid(format!("not a file name: {file_name}")));
     }
     let path = fs.join(&folder.path, &name);
@@ -724,6 +742,19 @@ mod tests {
             .collect();
         let got: Vec<(String, String)> = parsed.into_iter().map(|l| (l.hash, l.path)).collect();
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn carriage_returns_in_names_round_trip() {
+        let entries = vec![ChecksumEntry {
+            path: "a\r".into(),
+            hash: Some("900150983cd24fb0d6963f7d28e17f72".into()),
+            error: None,
+        }];
+        let text = format_lines(&entries);
+        assert_eq!(text, "\\900150983cd24fb0d6963f7d28e17f72  a\\r\n");
+        let parsed = parse_lines(&text, Algorithm::Md5).unwrap();
+        assert_eq!(parsed[0].path, "a\r");
     }
 
     #[test]
