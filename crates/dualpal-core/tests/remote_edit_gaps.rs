@@ -316,8 +316,9 @@ async fn unverified_upload_keeps_later_saves_checked() {
     editor.stop(s.id);
 }
 
-/// EDIT-007 — an upload that fails part way (after the server file was
-/// truncated) is retried without being mistaken for someone else's change.
+/// EDIT-007 — an upload that fails part way leaves the server file as it
+/// was (the bytes go to a temporary name first), and is retried without
+/// being mistaken for someone else's change.
 #[tokio::test]
 async fn retry_after_a_partial_upload_is_not_a_conflict() {
     let mem = MemFs::new("inner");
@@ -326,16 +327,49 @@ async fn retry_after_a_partial_upload_is_not_a_conflict() {
     let s = editor.start(Location::new("mem", "/f.txt")).await.unwrap();
 
     faulty.fail_write_after(3);
-    std::fs::write(&s.local_path, "new content").unwrap();
+    // A new length, so the save is seen even within one clock tick.
+    std::fs::write(&s.local_path, "new, longer content").unwrap();
     let e = editor.clone();
     eventually("the upload fails", WAIT, move || {
         session(&e, s.id).is_some_and(|s| s.status == EditStatus::Failed)
     })
     .await;
-    assert_ne!(mem.contents("/f.txt").unwrap(), b"old content");
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"old content");
+    assert_eq!(
+        mem.paths()
+            .iter()
+            .filter(|p| p.contains("dualpal-part"))
+            .count(),
+        0
+    );
 
     let done = editor.upload_now(s.id).await.unwrap();
     assert_eq!(done.status, EditStatus::Uploaded, "{:?}", done.error);
-    assert_eq!(mem.contents("/f.txt").unwrap(), b"new content");
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"new, longer content");
+    editor.stop(s.id);
+}
+
+/// EDIT-007 — an upload gives the server file the local copy's
+/// modification time, so a compare by date sees the two as equal.
+#[tokio::test]
+async fn upload_keeps_the_local_modification_time() {
+    let mem = MemFs::new("inner");
+    mem.seed_file("/f.txt", "old content");
+    let (_faulty, editor, _tmp) = faulty_setup(&mem);
+    let s = editor.start(Location::new("mem", "/f.txt")).await.unwrap();
+    std::fs::write(&s.local_path, "new content").unwrap();
+    let when = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&s.local_path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+    let done = editor.upload_now(s.id).await.unwrap();
+    assert_eq!(done.status, EditStatus::Uploaded, "{:?}", done.error);
+    let server = dualpal_core::vfs::FileSystem::stat(&mem, "/f.txt")
+        .await
+        .unwrap();
+    assert_eq!(server.modified_ms, Some(1_600_000_000_000));
     editor.stop(s.id);
 }

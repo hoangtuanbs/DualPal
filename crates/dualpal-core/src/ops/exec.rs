@@ -12,6 +12,7 @@ use crate::compare::{self, Side};
 use crate::error::{Error, Result};
 use crate::rename::RenameItem;
 use crate::sync::{SnapPair, SyncAction, SyncDone, SyncStep};
+use crate::vfs::{part_path, rename_over};
 use crate::vfs::{Entry, EntryKind, FileSystem, LocalFs, Location};
 
 const CHUNK: usize = 256 * 1024;
@@ -381,7 +382,7 @@ impl Job {
         let part = if dst_fs.atomic_writes() {
             item.dst.clone()
         } else {
-            part_path(dst_fs, &item.dst)
+            part_path(dst_fs.as_ref(), &item.dst)
         };
         let retry = item.src_fs.id() != LocalFs::ID || dst_fs.id() != LocalFs::ID;
         let mut offset = 0; // bytes of this file already in place
@@ -451,7 +452,7 @@ impl Job {
             // Only a file is moved aside; a folder in the way is never
             // replaced by a rename.
             let renamed = match existing {
-                Some(e) if !e.is_dir() => rename_over(dst_fs, &part, &item.dst).await,
+                Some(e) if !e.is_dir() => rename_over(dst_fs.as_ref(), &part, &item.dst).await,
                 _ => dst_fs.rename(&part, &item.dst).await,
             };
             if let Err(e) = renamed {
@@ -636,7 +637,14 @@ impl Job {
         }
         self.emit(true);
 
-        let writer = dst_fs.open_write(&dest.path).await?;
+        // The archive is written under a temporary name and only takes its
+        // name once complete, so a cut-off write never looks like an archive.
+        let part = if dst_fs.atomic_writes() {
+            dest.path.clone()
+        } else {
+            part_path(dst_fs.as_ref(), &dest.path)
+        };
+        let writer = dst_fs.open_write(&part).await?;
         let result: Result<()> = async {
             let zip_err = |e: async_zip::error::ZipError| Error::Io {
                 path: dest.path.clone(),
@@ -690,11 +698,16 @@ impl Job {
             inner
                 .shutdown()
                 .await
-                .map_err(|err| Error::io(&dest.path, err))
+                .map_err(|err| Error::io(&dest.path, err))?;
+            drop(inner);
+            if part != dest.path {
+                dst_fs.rename(&part, &dest.path).await?;
+            }
+            Ok(())
         }
         .await;
         if result.is_err() {
-            let _ = dst_fs.remove_file(&dest.path).await; // don't leave a broken archive
+            let _ = dst_fs.remove_file(&part).await; // don't leave a broken archive
         }
         result
     }
@@ -773,57 +786,6 @@ async fn resume_offset(dst_fs: &Fs, part: &str, size: u64) -> u64 {
             keep - keep % CHUNK as u64
         }
         _ => 0,
-    }
-}
-
-/// The hidden name a file is written under until its copy is complete.
-/// It is new each time, so it never belongs to another file.
-fn part_path(fs: &Fs, dst: &str) -> String {
-    let parent = fs.parent(dst).unwrap_or_default();
-    let name = fs.file_name(dst).unwrap_or_default();
-    let tag = &Uuid::new_v4().simple().to_string()[..12];
-    // Keep within the usual 255-byte limit on a name.
-    let part = if name.len() <= 200 {
-        format!(".{name}.{tag}.dualpal-part")
-    } else {
-        format!(".dualpal-{tag}.part")
-    };
-    fs.join(&parent, &part)
-}
-
-/// Rename `from` onto the existing file `to`. Where the backend's rename
-/// will not replace a file (some servers), the old file is moved aside
-/// first, removed once the new one is in place, and put back if the new
-/// one cannot be. If it cannot be put back either, the error says where
-/// it was left.
-async fn rename_over(fs: &Fs, from: &str, to: &str) -> Result<()> {
-    let first = match fs.rename(from, to).await {
-        Ok(()) => return Ok(()),
-        Err(Error::Cancelled) => return Err(Error::Cancelled),
-        Err(e) => e,
-    };
-    // A temporary name like a partial copy's, so auto-sync ignores it too.
-    let aside = part_path(fs, to);
-    if fs.rename(to, &aside).await.is_err() {
-        return Err(first);
-    }
-    match fs.rename(from, to).await {
-        Ok(()) => {
-            let _ = fs.remove_file(&aside).await;
-            Ok(())
-        }
-        Err(e) => match fs.rename(&aside, to).await {
-            Ok(()) => Err(e),
-            Err(back) => Err(Error::Several(vec![
-                e,
-                Error::Io {
-                    path: aside,
-                    source: std::io::Error::other(format!(
-                        "the old {to} was left here and could not be put back ({back})"
-                    )),
-                },
-            ])),
-        },
     }
 }
 

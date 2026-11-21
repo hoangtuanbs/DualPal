@@ -155,13 +155,19 @@ pub async fn download(fs: &dyn FileSystem, path: &str, to: &Path) -> Result<()> 
     result
 }
 
+/// Send the local copy to the server. It goes to a temporary name there
+/// first and replaces the server file only once complete, so a dropped
+/// connection never leaves it cut short. The server file then gets the
+/// local copy's modification time, so a compare by date sees them as equal.
 async fn upload(fs: &dyn FileSystem, from: &Path, path: &str) -> Result<()> {
     let mut r = tokio::fs::File::open(from).await.map_err(|e| io(from, e))?;
     let mut buf = Vec::new();
     r.read_to_end(&mut buf).await.map_err(|e| io(from, e))?;
-    let mut w = fs.open_write(path).await?;
-    w.write_all(&buf).await.map_err(|e| Error::io(path, e))?;
-    w.shutdown().await.map_err(|e| Error::io(path, e))
+    crate::vfs::write_file_atomic(fs, path, &buf).await?;
+    if let Some((ms, _)) = signature(from) {
+        let _ = fs.set_modified(path, ms).await;
+    }
+    Ok(())
 }
 
 fn signature(p: &Path) -> Option<Signature> {

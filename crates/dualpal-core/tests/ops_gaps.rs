@@ -755,3 +755,56 @@ async fn compress_onto_an_existing_file_is_refused() {
         "not a zip, but mine"
     );
 }
+
+/// OPS-ZIP-004 — a new archive is written under a temporary name and only
+/// takes its name once complete; a failed one leaves nothing behind.
+#[tokio::test]
+async fn compress_writes_under_a_temporary_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("a.txt");
+    write(&src, "some text to pack");
+    let out = tmp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let remote = Arc::new(FaultyFs::with_id(LocalFs::new(), "remote"));
+    let registry = Registry::with_local();
+    registry.register(remote.clone());
+    let q = queue_over(registry, 2);
+    let zip = out.join("packed.zip");
+    let job = || Operation::Compress {
+        sources: vec![loc(&src)],
+        destination: Location::new("remote", zip.to_string_lossy()),
+    };
+    let names = |dir: &Path| -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    };
+
+    // While it is being written, only the temporary name is there.
+    remote.slow_writes(Duration::from_millis(400));
+    let id = q.enqueue(job());
+    let o = out.clone();
+    eventually(
+        "the archive is being written",
+        Duration::from_secs(10),
+        move || names(&o).iter().any(|n| n.ends_with(".dualpal-part")),
+    )
+    .await;
+    assert!(!zip.exists());
+    let info = tokio::time::timeout(Duration::from_secs(60), q.wait(id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert!(zip.exists());
+    assert_eq!(names(&out), vec!["packed.zip".to_string()]);
+
+    // A write that fails leaves neither the archive nor its temporary file.
+    std::fs::remove_file(&zip).unwrap();
+    remote.slow_writes(Duration::ZERO);
+    remote.fail_write_after(10);
+    let info = run(&q, job()).await;
+    assert_eq!(info.status, OperationStatus::Failed);
+    assert_eq!(names(&out), Vec::<String>::new());
+}
