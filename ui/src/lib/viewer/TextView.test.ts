@@ -188,6 +188,29 @@ describe("UI-UNIT-034 TextView pages through big files", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("keeps the rows it read when filling the screen from above fails", async () => {
+    const src = bigSource(1000);
+    let failBelow = -1;
+    const source: ByteSource = {
+      size: src.size,
+      read: async (offset, length) => {
+        if (offset < failBelow) throw { kind: "connection", message: "connection dropped" };
+        return src.read(offset, length);
+      },
+    };
+    const { rerender } = render(TextView, { source, encoding: "utf-8", rows: 5 });
+    await waitFor(() => expect(rowsText()[0]).toBe(label(1)));
+    await fireEvent.keyDown(screen.getByTestId("text-view"), { key: "End" });
+    await waitFor(() => expect(rowsText()[0]).toBe(label(996)));
+    // The screen grows: the rows below the top read fine, the ones above fail.
+    failBelow = 995 * LINE;
+    await rerender({ rows: 9 });
+    await waitFor(() => expect(rowsText()).toEqual([996, 997, 998, 999, 1000].map(label)));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(rowsText()).toEqual([996, 997, 998, 999, 1000].map(label));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("decodes with the chosen encoding", async () => {
     const { rerender } = render(TextView, { source: memorySource(new Uint8Array([0x63, 0x61, 0x66, 0xe9])), encoding: "utf-8", rows: 5 });
     await waitFor(() => expect(rowsText()).toEqual(["caf�"]));

@@ -88,6 +88,9 @@
   // ---- media ------------------------------------------------------------------
   let mediaSrc = $state<string | null>(null);
   let mediaNote = $state<string | null>(null);
+  // One download at a time: going back to media mode while it runs waits
+  // for the same request instead of starting another.
+  let mediaLoad: Promise<string> | null = null;
   $effect(() => {
     if (mode !== "media" || mediaSrc || !media) return;
     if (location.fs === "local") {
@@ -96,12 +99,17 @@
       mediaNote = `Files on servers over ${formatBytes(REMOTE_MEDIA_LIMIT)} are not downloaded to show them.`;
     } else {
       mediaNote = "Downloading…";
-      api.previewPath(location).then(
+      mediaLoad ??= api.previewPath(location);
+      mediaLoad.then(
         (p) => {
           mediaSrc = convertFileSrc(p);
           mediaNote = null;
         },
-        (e) => (mediaNote = errorMessage(e)),
+        (e) => {
+          // Going back to media mode tries again.
+          mediaLoad = null;
+          mediaNote = errorMessage(e);
+        },
       );
     }
   });

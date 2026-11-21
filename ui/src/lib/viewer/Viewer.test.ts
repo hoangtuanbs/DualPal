@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import Viewer from "./Viewer.svelte";
 import { viewerApi } from "./viewer-api";
+import { api } from "../api";
 import { defaultScenario, file, installMockBackend, type MemEntry } from "../../../tests/mock-backend";
 
 /** A text file of `n` numbered rows, "row 000001\n" (11 bytes each). */
@@ -183,6 +184,26 @@ describe("UI-UNIT-036 Viewer", () => {
     setup("photo.png", "\u0089PNG");
     expect(await screen.findByRole("img", { name: "photo.png" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("viewer")).toHaveFocus());
+  });
+
+  it("downloads a server image once when it goes back to the image during the download", async () => {
+    mockConvertFileSrc("linux");
+    const scenario = defaultScenario();
+    const path = "/srv/photo.png";
+    const e: MemEntry = { ...file("photo.png", "\u0089PNG"), path };
+    scenario.trees.local.set(path, e); // the mock serves other file systems from this tree
+    installMockBackend(scenario);
+    let done!: (p: string) => void;
+    const preview = vi.spyOn(api, "previewPath").mockImplementation(() => new Promise((r) => (done = r)));
+    const { content: _c, ...entry } = e;
+    render(Viewer, { location: { fs: "sftp:test", path }, entry, onclose: vi.fn() });
+    expect(await screen.findByText("Downloading…")).toBeInTheDocument();
+    await fireEvent.keyDown(window, { key: "2" });
+    await fireEvent.keyDown(window, { key: "3" });
+    expect(preview).toHaveBeenCalledTimes(1);
+    done("/tmp/preview/photo.png");
+    expect(await screen.findByRole("img", { name: "photo.png" })).toBeInTheDocument();
+    expect(preview).toHaveBeenCalledTimes(1);
   });
 
   it("shows an error when the file cannot be opened", async () => {
