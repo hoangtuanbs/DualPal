@@ -109,9 +109,16 @@ describe("SettingsDialog", () => {
     await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("status")).toHaveTextContent("cannot be changed");
 
-    // Reset one, then all.
+    // Reset Refresh: Copy has its Ctrl+R now, so it asks first; Cancel keeps it.
     await user.click(within(keyRow("refresh")).getByRole("button", { name: "Reset" }));
-    await waitFor(() => expect(lastPatch()).toEqual({ keyBindings: { swap: ["F9"], copy: ["Mod+R"] } }));
+    expect(screen.getByTestId("key-conflict")).toHaveTextContent("Ctrl+R is used by “Copy to Other Pane”");
+    await user.click(within(screen.getByTestId("key-conflict")).getByRole("button", { name: "Cancel" }));
+    expect(within(keyRow("refresh")).queryByText("Ctrl+R")).toBeNull();
+    await user.click(within(keyRow("refresh")).getByRole("button", { name: "Reset" }));
+    await user.click(within(screen.getByTestId("key-conflict")).getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(lastPatch()).toEqual({ keyBindings: { swap: ["F9"], copy: [] } }));
+    expect(within(keyRow("refresh")).getByText("Ctrl+R")).toBeInTheDocument();
+    expect(within(keyRow("copy")).queryByText("Ctrl+R")).toBeNull();
     await user.click(screen.getByTestId("keys-reset-all"));
     await waitFor(() => expect(lastPatch()).toEqual({ keyBindings: {} }));
     expect(within(keyRow("copy")).getByText("F5")).toBeInTheDocument();
