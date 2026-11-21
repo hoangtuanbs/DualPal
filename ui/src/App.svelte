@@ -45,6 +45,7 @@
   import AboutDialog from "./lib/AboutDialog.svelte";
   import { emailSupport, openProjectPage } from "./lib/about";
   import UpdateBar from "./lib/UpdateBar.svelte";
+  import Viewer from "./lib/viewer/Viewer.svelte";
   import { updates } from "./lib/updates.svelte";
   import { UPDATE_CHECK_DELAY_MS, UPDATE_RECHECK_POLL_MS, activeOperationCount } from "./lib/updates";
   import { SPLIT_DEFAULT, clampSplit, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
@@ -153,6 +154,8 @@
   let showPalette = $state(false);
   let showFind = $state(false);
   let showInsights = $state(false);
+  /** The file open in the viewer (F3). */
+  let viewing = $state<{ location: Location; entry: Entry } | null>(null);
   let aboutPage = $state<"about" | "donate" | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
   let linked = $state(false);
@@ -816,6 +819,7 @@
       { id: "newFolder", group: "File", title: "New Folder", shortcut: "F7", run: newFolder },
       { id: "rename", group: "File", title: "Rename", shortcut: "F2", run: rename },
       { id: "multiRename", group: "File", title: "Multi Rename…", shortcut: "Shift+F2", run: multiRename },
+      { id: "view", group: "File", title: "View", shortcut: "F3", run: viewFile },
       { id: "edit", group: "File", title: "Edit in Editor", shortcut: "F4", run: editInEditor },
       { id: "terminal", group: "File", title: "Open Terminal Here", shortcut: `${MOD}Shift+T`, run: openTerminal },
       { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
@@ -917,6 +921,14 @@
   /** Open the marked files, or the file under the cursor, in the preferred editor. */
   async function editInEditor() {
     await openFiles(true);
+  }
+
+  /** Open the file under the cursor in the viewer (F3). */
+  function viewFile() {
+    const loc = active.location;
+    const entry = active.current;
+    if (!loc || !entry || entry.kind !== "file") return;
+    viewing = { location: { fs: loc.fs, path: entry.path }, entry };
   }
 
   /** Open the marked files (or the one under the cursor) in their apps, or
@@ -1116,6 +1128,9 @@
       ...(single?.kind === "dir" && active.location
         ? [{ label: "Open in New Tab", icon: "new-tab", run: () => openInNewTab(single) }]
         : []),
+      ...(single?.kind === "file"
+        ? [{ label: "View", icon: "eye", shortcut: "F3", run: viewFile }]
+        : []),
       {
         label: files.length > 1 ? `Edit ${files.length} Files` : "Edit in Editor",
         icon: "edit",
@@ -1264,7 +1279,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage) return;
+    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage || viewing) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -1380,6 +1395,9 @@
       case "F10":
         if (!e.shiftKey) return;
         menuFromKeyboard();
+        return handled();
+      case "F3":
+        viewFile();
         return handled();
       case "F4":
         editInEditor();
@@ -1726,6 +1744,10 @@
 
 <UpdateBar />
 
+
+{#if viewing}
+  <Viewer location={viewing.location} entry={viewing.entry} onclose={() => (viewing = null)} />
+{/if}
 
 {#if showInsights}
   <Insights {nameOf} onclose={() => (showInsights = false)} />
