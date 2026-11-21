@@ -271,7 +271,7 @@
     const next = here.map((l, i) => (l?.fs === "local" ? l.path : (saved[i] ?? null)));
     if (next.every((p, i) => p === (saved[i] ?? null))) return;
     lastSaveTimer = setTimeout(() => {
-      if (started) prefs.update({ lastFolders: next }).catch(() => {});
+      if (started) prefs.update({ lastFolders: next }).catch((e) => console.warn("Could not save the last folders:", errorMessage(e)));
     }, 800);
   });
 
