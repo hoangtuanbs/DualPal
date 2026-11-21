@@ -7,6 +7,7 @@ mod commands;
 mod remote;
 mod tools;
 mod upgrade;
+mod viewer;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -60,6 +61,8 @@ pub struct AppState {
     pub folder_size_cancel: Mutex<HashMap<u64, CancellationToken>>,
     /// Name searches that are running, by request id.
     pub find_cancel: Mutex<HashMap<u64, CancellationToken>>,
+    /// Files open in the viewer (F3), with their page caches.
+    pub viewer: dualpal_core::viewer::Sessions,
 }
 
 /// Build the whole application state on `dirs`. The shell calls this with the
@@ -118,6 +121,7 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
         compare_cancel: Mutex::new(None),
         folder_size_cancel: Mutex::new(HashMap::new()),
         find_cancel: Mutex::new(HashMap::new()),
+        viewer: dualpal_core::viewer::Sessions::default(),
     })
 }
 
@@ -243,6 +247,12 @@ pub const COMMANDS: &[&str] = &[
     "diff_tools",
     "compare_files",
     "activity_insights",
+    "viewer_open",
+    "viewer_read",
+    "viewer_search",
+    "viewer_count_lines",
+    "viewer_cancel",
+    "viewer_close",
 ];
 
 /// The single `generate_handler!` list, shared by the app and the tests.
@@ -320,6 +330,12 @@ macro_rules! all_commands {
             tools::diff_tools,
             tools::compare_files,
             tools::activity_insights,
+            viewer::viewer_open,
+            viewer::viewer_read,
+            viewer::viewer_search,
+            viewer::viewer_count_lines,
+            viewer::viewer_cancel,
+            viewer::viewer_close,
         ]
     };
 }
