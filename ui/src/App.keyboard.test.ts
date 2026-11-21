@@ -24,7 +24,7 @@ const key = (k: string, init: KeyboardEventInit) =>
 // The app listens for backend events, which the mock backend does not send.
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {}, emit: async () => {}, once: async () => () => {} }));
 
-describe("UI-KEY-031 Alt+Left and Alt+Right go back and forward in the active pane", () => {
+describe("UI-KEY-036 Alt+Left and Alt+Right go back and forward in the active pane", () => {
   it("walks the left pane's history with the keys", async () => {
     render(App);
     const left = await waitFor(() => screen.getByTestId("pane-left"));

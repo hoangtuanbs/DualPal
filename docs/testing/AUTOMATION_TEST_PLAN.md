@@ -774,7 +774,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-KEY-028 | Ctrl/⌘ Shift L | linked browsing toggles; entering folder in one pane enters same name in other |
 | UI-KEY-029 | shortcuts ignored while typing in an input/editor | F5 inside rename prompt does not copy |
 | UI-KEY-030 | shortcuts disabled while auto-sync locks panes (`frozen`) | F5/F6/F8 make no calls |
-| UI-KEY-031 | Alt ← / Alt →, ⌘[ / ⌘] (macOS) | back / forward in the active pane; the folder left gets the cursor back; `historyKey` maps keys only on macOS for ⌘ |
+| UI-KEY-036 | Alt ← / Alt →, ⌘[ / ⌘] (macOS) | back / forward in the active pane; the folder left gets the cursor back; `historyKey` maps keys only on macOS for ⌘ |
 
 **Mouse**
 
