@@ -108,7 +108,8 @@ fn utf16_without_bom(sample: &[u8]) -> Option<Encoding> {
         return None;
     }
     let (mut even_zero, mut odd_zero) = (0usize, 0usize);
-    for pair in sample.chunks_exact(2) {
+    // A trailing odd byte is left out, as before.
+    for pair in sample.as_chunks::<2>().0 {
         even_zero += (pair[0] == 0) as usize;
         odd_zero += (pair[1] == 0) as usize;
     }
@@ -137,11 +138,12 @@ pub fn decode(bytes: &[u8], encoding: Encoding) -> String {
     match encoding {
         Encoding::Utf8 => String::from_utf8_lossy(bytes).into_owned(),
         Encoding::Utf16Le | Encoding::Utf16Be => {
-            let units = bytes.chunks_exact(2).map(|p| {
+            // A trailing odd byte is dropped.
+            let units = bytes.as_chunks::<2>().0.iter().map(|&p| {
                 if encoding == Encoding::Utf16Le {
-                    u16::from_le_bytes([p[0], p[1]])
+                    u16::from_le_bytes(p)
                 } else {
-                    u16::from_be_bytes([p[0], p[1]])
+                    u16::from_be_bytes(p)
                 }
             });
             char::decode_utf16(units)
@@ -412,8 +414,10 @@ pub async fn count_lines_chunked(
                 let nl = encoding.newline();
                 let whole = buf.len() / 2 * 2;
                 lines += buf[..whole]
-                    .chunks_exact(2)
-                    .filter(|unit| *unit == nl)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .filter(|unit| unit.as_slice() == nl)
                     .count() as u64;
                 buf.drain(..whole);
             }
