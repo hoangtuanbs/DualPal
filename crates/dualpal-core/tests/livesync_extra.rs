@@ -75,23 +75,27 @@ async fn one_way_never_deletes_on_target() {
     live.stop().await;
 }
 
-/// LIVE-007 — one folder inside the other must be refused.
-///
-/// The current implementation only refuses two *identical* folders.
+/// LIVE-007 — one folder inside the other must be refused, either way round.
 #[tokio::test]
-#[ignore = "BUG: LiveSync only refuses identical folders, not one inside the other"]
 async fn one_folder_inside_the_other_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join("a/b")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("ab")).unwrap();
     let live = setup();
-    assert!(live
-        .start(
-            loc(&tmp.path().join("a")),
-            loc(&tmp.path().join("a/b")),
-            LiveDirection::Both,
-        )
+    let (a, ab) = (tmp.path().join("a"), tmp.path().join("a/b"));
+    for (from, to) in [(&a, &ab), (&ab, &a)] {
+        let err = live
+            .start(loc(from), loc(to), LiveDirection::Both)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("inside the other"), "{err}");
+    }
+    assert!(live.status().is_none());
+    // A sibling whose name merely starts the same is fine.
+    live.start(loc(&a), loc(&tmp.path().join("ab")), LiveDirection::Both)
         .await
-        .is_err());
+        .unwrap();
+    live.stop().await;
 }
 
 /// LIVE-008 — a side without change notifications is polled.
