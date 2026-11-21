@@ -59,6 +59,29 @@ async fn calculate_walks_folders_recursively() {
 }
 
 #[tokio::test]
+async fn calculate_goes_on_when_a_selected_item_is_gone() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), "abc").unwrap();
+    let registry = Registry::with_local();
+    let entries = checksum::calculate(
+        &registry,
+        &local(tmp.path()),
+        &names(&["a.txt", "gone.txt"]),
+        Algorithm::Md5,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].path, "a.txt");
+    assert_eq!(entries[0].hash.as_deref(), Some(MD5_ABC));
+    assert_eq!(entries[1].path, "gone.txt");
+    assert_eq!(entries[1].hash, None);
+    assert!(entries[1].error.is_some());
+}
+
+#[tokio::test]
 async fn calculate_streams_large_files_with_progress() {
     let tmp = tempfile::tempdir().unwrap();
     let data: Vec<u8> = (0..3 * 1024 * 1024u32).map(|i| (i % 253) as u8).collect();
@@ -254,10 +277,25 @@ async fn written_file_verifies_and_keeps_existing_files() {
     let text = std::fs::read_to_string(dir.join("SUMS.sha256")).unwrap();
     assert_eq!(text.lines().count(), 1);
 
-    let bad = checksum::write_file(&registry, &folder, "a/b", Algorithm::Md5, &entries, true)
-        .await
-        .unwrap_err();
-    assert_eq!(bad.kind(), "invalid");
+    for name in ["a/b", "", ".md5"] {
+        let bad = checksum::write_file(&registry, &folder, name, Algorithm::Md5, &entries, true)
+            .await
+            .unwrap_err();
+        assert_eq!(bad.kind(), "invalid", "{name:?}");
+    }
+
+    // A hidden file's checksum file is hidden too, and that is fine.
+    let hidden = checksum::write_file(
+        &registry,
+        &folder,
+        ".env.sha256",
+        Algorithm::Sha256,
+        &entries,
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(hidden.path, dir.join(".env.sha256").to_string_lossy());
 }
 
 #[tokio::test]
