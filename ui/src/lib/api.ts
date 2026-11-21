@@ -55,6 +55,46 @@ export interface FindProgress {
   folders: number;
 }
 
+/** Hash algorithms of the Checksums dialog; the names match the Rust enum. */
+export type ChecksumAlgorithm = "md5" | "sha1" | "sha256" | "xxh128";
+
+/** One file in a checksum calculation. Exactly one of `hash` and `error` is set. */
+export interface ChecksumEntry {
+  /** Path relative to the folder, with "/" between the parts. */
+  path: string;
+  hash: string | null;
+  error: string | null;
+}
+
+/** Progress of a running checksum calculation or verification (`checksum-progress`). */
+export interface ChecksumProgress {
+  request: number;
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  /** Bytes to read in all; zero when unknown (verification). */
+  bytesTotal: number;
+  current: string;
+}
+
+export type VerifyStatus = "ok" | "failed" | "missing";
+
+/** One line of a checksum file, checked. */
+export interface VerifyEntry {
+  path: string;
+  status: VerifyStatus;
+  expected: string;
+  actual: string | null;
+  error: string | null;
+}
+
+export interface VerifyReport {
+  entries: VerifyEntry[];
+  ok: number;
+  failed: number;
+  missing: number;
+}
+
 export type ConflictPolicy = "fail" | "skip" | "overwrite";
 
 export type Operation =
@@ -493,6 +533,16 @@ export const api = {
   findFiles: (location: Location, query: string, request: number) =>
     invoke<SearchResult>("find_files", { location, query, request }),
   cancelFindFiles: (request: number) => invoke<void>("cancel_find_files", { request }),
+  /** Hash `names` (items in `folder`) with `algorithm`. `request` names the run for `cancelChecksum`. */
+  checksumCalculate: (folder: Location, names: string[], algorithm: ChecksumAlgorithm, request: number) =>
+    invoke<ChecksumEntry[]>("checksum_calculate", { folder, names, algorithm, request }),
+  /** Check the files listed in the checksum file `file`. */
+  checksumVerify: (file: Location, algorithm: ChecksumAlgorithm, request: number) =>
+    invoke<VerifyReport>("checksum_verify", { file, algorithm, request }),
+  cancelChecksum: (request: number) => invoke<void>("cancel_checksum", { request }),
+  /** Write `entries` as a checksum file named `fileName` in `folder`. Returns the new file. */
+  checksumSave: (folder: Location, fileName: string, algorithm: ChecksumAlgorithm, entries: ChecksumEntry[], overwrite: boolean) =>
+    invoke<Location>("checksum_save", { folder, fileName, algorithm, entries, overwrite }),
   readText: (location: Location, maxBytes: number) => invoke<TextFile>("read_text", { location, maxBytes }),
   writeText: (location: Location, text: string) => invoke<void>("write_text", { location, text }),
   connections: () => invoke<ConnectionView[]>("connections"),
@@ -545,6 +595,9 @@ export const api = {
   /** Matches of a running `findFiles` search, as they are found. */
   onFindProgress: (cb: (p: FindProgress) => void): Promise<UnlistenFn> =>
     listen<FindProgress>("find-files-progress", (e) => cb(e.payload)),
+  /** Progress of a running checksum calculation or verification. */
+  onChecksumProgress: (cb: (p: ChecksumProgress) => void): Promise<UnlistenFn> =>
+    listen<ChecksumProgress>("checksum-progress", (e) => cb(e.payload)),
   onCompareProgress: (cb: (p: { folders: number; current: string }) => void): Promise<UnlistenFn> =>
     listen<{ folders: number; current: string }>("compare-progress", (e) => cb(e.payload)),
   renamePreview: (rules: RenameRule[], inputs: RenameInput[], others: string[]) =>

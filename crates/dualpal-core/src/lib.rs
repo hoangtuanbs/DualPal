@@ -6,6 +6,7 @@
 //!   create folder) that reports live progress and supports cancellation.
 //! * [`activity`] — a persistent log of finished operations.
 //! * [`folder_size`] — the total size and item counts of a folder.
+//! * [`checksum`] — MD5, SHA-1, SHA-256 and XXH128 checksums, and verification.
 //! * [`search`] — find files by name below a folder.
 //! * [`connections`] — saved SFTP and S3 connections with their favorites.
 //! * [`vault`] — the optional master password that encrypts saved secrets.
@@ -22,6 +23,7 @@
 //! reused by other front ends (CLI, tests).
 
 pub mod activity;
+pub mod checksum;
 pub mod compare;
 pub mod connections;
 pub mod difftools;
