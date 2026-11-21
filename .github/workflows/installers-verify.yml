@@ -19,7 +19,7 @@ jobs:
     name: Version consistency (INS-001)
     # Only verify builds that succeeded (or a run picked by hand).
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
       - name: Check the three versions agree
@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         distro: [ubuntu:24.04, debian:12, fedora:41, opensuse/tumbleweed, ubuntu:22.04]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     container: ${{ matrix.distro }}
     defaults:
       run:
@@ -58,14 +58,13 @@ jobs:
         run: bash scripts/installer-tests/linux.sh installers
 
   windows:
-    name: Windows (${{ matrix.os }} / ${{ matrix.kind }})
+    name: Windows (${{ matrix.kind }})
     needs: version-consistency
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, windows-2022]
         kind: [nsis, msi]
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, Windows]
     steps:
       - uses: actions/checkout@v4
       - name: Download installers
@@ -98,7 +97,7 @@ jobs:
   macos:
     name: macOS (dmg smoke)
     needs: version-consistency
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
       - name: Download installers
