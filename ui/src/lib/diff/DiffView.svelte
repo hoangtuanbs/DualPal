@@ -289,7 +289,7 @@
 
   async function setEncoding(side: Side, encoding: TextEncoding) {
     const s = diff;
-    if (s) await run(() => diffApi.setEncoding(s.session, side, encoding));
+    if (s && (await run(() => diffApi.setEncoding(s.session, side, encoding)))) current = -1;
   }
 
   function setMode(m: Mode) {
