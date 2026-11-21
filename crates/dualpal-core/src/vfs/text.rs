@@ -53,6 +53,11 @@ pub async fn read_text(fs: &dyn FileSystem, path: &str, max_bytes: usize) -> Res
 /// the original, so a failed save never leaves a half-written file. The
 /// original's permission bits are kept.
 pub async fn write_text(fs: &dyn FileSystem, path: &str, text: &str) -> Result<()> {
+    write_bytes(fs, path, text.as_bytes()).await
+}
+
+/// Save bytes over an existing file, like [`write_text`].
+pub async fn write_bytes(fs: &dyn FileSystem, path: &str, bytes: &[u8]) -> Result<()> {
     let original = fs.stat(path).await?;
     if original.is_dir() {
         return Err(Error::Invalid(format!("not a file: {path}")));
@@ -65,9 +70,7 @@ pub async fn write_text(fs: &dyn FileSystem, path: &str, text: &str) -> Result<(
 
     let result = async {
         let mut w = fs.open_write(&tmp).await?;
-        w.write_all(text.as_bytes())
-            .await
-            .map_err(|e| Error::io(&tmp, e))?;
+        w.write_all(bytes).await.map_err(|e| Error::io(&tmp, e))?;
         w.flush().await.map_err(|e| Error::io(&tmp, e))?;
         w.shutdown().await.map_err(|e| Error::io(&tmp, e))?;
         drop(w);

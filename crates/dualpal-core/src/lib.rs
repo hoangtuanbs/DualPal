@@ -25,6 +25,7 @@
 pub mod activity;
 pub mod compare;
 pub mod connections;
+pub mod diff;
 pub mod difftools;
 pub mod error;
 pub mod folder_size;

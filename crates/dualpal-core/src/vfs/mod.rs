@@ -20,7 +20,7 @@ pub use local::LocalFs;
 pub use range::{RangeReader, PAGE_SIZE};
 pub use s3::{S3Fs, S3Params, WebDavParams};
 pub use sftp::{parse_ssh_config, ssh_config_hosts, SftpFs, SftpParams, SshConfigHost};
-pub use text::{read_text, write_text, TextFile};
+pub use text::{read_text, write_bytes, write_text, TextFile};
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
