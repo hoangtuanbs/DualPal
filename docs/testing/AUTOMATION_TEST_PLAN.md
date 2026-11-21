@@ -707,7 +707,7 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
 | CMD-039 | `latest_release` reads GitHub's latest release (tag, page, date) from `DUALPAL_RELEASES_URL` and sends a User-Agent | P1 | |
 | CMD-040 | `apply_upgrade` needs a finished `download_upgrade`; `download_upgrade` refuses a version that is no longer the newest release | P1 | |
-| CMD-041 | `open_archive` registers a zip that `list_dir`/`read_text` read and `write_text` refuses; `close_archive` unregisters it; a fake archive is `invalid` | P1 | |
+| CMD-042 | `open_archive` registers a zip that `list_dir`/`read_text` read and `write_text` refuses; `close_archive` unregisters it; a fake archive is `invalid` | P1 | |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
@@ -1171,7 +1171,7 @@ cargo insta review
 | About / Donate / Email | UI-UNIT-016, UI-CMP-013, UI-E2E-027, CMD-011/012 |
 | Favorites (local, server, sync) | PLC-*, CON-004, SYNC-013, CMD-010/019/029, UI-E2E-007/013/017, DESK-006 |
 | Windows / WSL specifics | VFS-LOC-002/005/006, VFS-WSL-*, UI-E2E-029, DESK-018 |
-| Archives as folders | VFS-ARC-*, CMD-041, UI-UNIT-019/020, UI-E2E-032/033 |
+| Archives as folders | VFS-ARC-*, CMD-042, UI-UNIT-019/020, UI-E2E-032/033 |
 | Installers & release | INS-* |
 
 ### 11.4 Definition of done for the whole plan
