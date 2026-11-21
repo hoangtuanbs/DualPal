@@ -1380,7 +1380,9 @@
         else active.moveCursor(icons ? active.columns : 1);
         return handled();
       case "ArrowUp":
-        if (e.shiftKey) extendSelection(icons ? -active.columns : -1);
+        // Ctrl/⌘ ↑ with Shift still opens the enclosing folder, as before.
+        if (e.metaKey || e.ctrlKey) active.up();
+        else if (e.shiftKey) extendSelection(icons ? -active.columns : -1);
         else active.moveCursor(icons ? -active.columns : -1);
         return handled();
       case "ContextMenu":
