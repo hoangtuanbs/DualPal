@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/svelte";
 import Pane from "./Pane.svelte";
 import { PaneGroup, PaneState } from "./pane-state.svelte";
 import { installMockBackend, tree } from "../../tests/mock-backend";
-import type { Location } from "./api";
+import { api, type Location } from "./api";
 
 const at = (path: string): Location => ({ fs: "local", path });
 
@@ -76,5 +76,29 @@ describe("UI-MOUSE-013 side buttons go back and forward in the pane", () => {
     expect(mouse(el, "mouseup", 1)).toBe(true);
     await new Promise((r) => setTimeout(r, 0));
     expect(group.current.location).toEqual(at("/b"));
+  });
+});
+
+describe("UI-UNIT-017 history notices in the pane", () => {
+  it("shows which folders were skipped even when the next one fails", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/a/": "", "/b/": "", "/c/": "" }));
+    const p = new PaneState();
+    await p.open(at("/a"));
+    await p.open(at("/b"));
+    await p.open(at("/c"));
+    mock.setTree("local", tree({ "/c/": "" })); // /b is gone
+    const real = api.listDir;
+    vi.spyOn(api, "listDir").mockImplementation((loc: Location) =>
+      loc.path === "/a" ? Promise.reject({ kind: "permissionDenied", message: "permission denied: /a" }) : real(loc),
+    );
+    try {
+      renderPane(new PaneGroup(p));
+      await p.back();
+      expect(await screen.findByTestId("pane-left-error")).toHaveTextContent("permission denied: /a");
+      expect(screen.getByTestId("pane-left-notice")).toHaveTextContent("“b”");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
