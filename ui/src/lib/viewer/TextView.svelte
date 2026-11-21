@@ -64,13 +64,19 @@
   // Measure the box and one character of the font.
   $effect(() => {
     const el = box;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => {
+    if (!el) return;
+    const measure = () => {
       height = el.clientHeight;
       width = el.clientWidth;
       const r = probe?.getBoundingClientRect();
       if (r && r.width) charWidth = r.width / 10;
-    });
+    };
+    // Measure now too: the first observer callback can come after the
+    // first keys (WebKit), and a screen laid out for the default row count
+    // would be too short.
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   });
@@ -100,8 +106,16 @@
     const o = opts;
     const src = source;
     const mine = ++serial;
-    void rowsFrom(src, o, t, n).then((r) => {
-      if (mine === serial) shown = r;
+    void rowsFrom(src, o, t, n).then(async (r) => {
+      if (mine !== serial) return;
+      shown = r;
+      // Never leave empty rows below the end of the file while there is
+      // text above: when the screen grows (or was laid out for fewer rows),
+      // the end stays at the bottom.
+      if (r.length < n && (t.seg > o.bom || t.sub > 0)) {
+        const p = await rowsUp(src, o, t, n - r.length);
+        if (mine === serial && top === t && (p.seg !== t.seg || p.sub !== t.sub)) top = p;
+      }
     });
   });
 
