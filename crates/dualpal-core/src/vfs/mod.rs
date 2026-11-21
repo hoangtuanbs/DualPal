@@ -181,6 +181,12 @@ pub trait FileSystem: Send + Sync {
     fn parallel_transfers(&self) -> usize {
         1
     }
+    /// True if a new file copied here should get the source file's
+    /// permission bits (so a script stays executable). Only backends where
+    /// [`FileSystem::set_mode`] is cheap and meaningful say yes.
+    fn copies_modes(&self) -> bool {
+        false
+    }
     /// Move an item to the system Trash / Recycle Bin.
     async fn trash(&self, path: &str) -> Result<()> {
         Err(Error::Unsupported(format!(

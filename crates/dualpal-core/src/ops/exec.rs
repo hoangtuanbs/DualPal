@@ -29,6 +29,8 @@ struct Item {
     dir: bool,
     size: u64,
     modified_ms: Option<i64>,
+    /// Unix permission bits of the source, when its backend reports them.
+    mode: Option<u32>,
 }
 
 struct Job {
@@ -242,6 +244,7 @@ impl Job {
                         dir: true,
                         size: 0,
                         modified_ms: entry.modified_ms,
+                        mode: entry.mode,
                     });
                     for child in children.into_iter().rev() {
                         check_name(dst_fs, &child.name)?;
@@ -256,6 +259,7 @@ impl Job {
                     dir: false,
                     size: entry.size,
                     modified_ms: entry.modified_ms,
+                    mode: entry.mode,
                 }),
                 _ => self.prog().skipped += 1,
             }
@@ -430,12 +434,20 @@ impl Job {
             }
             return Err(e);
         }
+        // A file that replaces another gets the old one's permissions, as
+        // writing into it would have kept them. A new file gets the
+        // source's permission bits where the target keeps modes.
+        let mode = match &existing {
+            Some(e) => e.mode.filter(|_| part != item.dst).map(|m| m & 0o7777),
+            None => item
+                .mode
+                .filter(|_| dst_fs.copies_modes())
+                .map(|m| m & 0o777),
+        };
+        if let Some(mode) = mode {
+            let _ = dst_fs.set_mode(&part, mode).await;
+        }
         if part != item.dst {
-            // The new file replaces the old one, so give it the old one's
-            // permissions, as writing into it would have kept them.
-            if let Some(mode) = existing.and_then(|e| e.mode) {
-                let _ = dst_fs.set_mode(&part, mode & 0o7777).await;
-            }
             if let Err(e) = dst_fs.rename(&part, &item.dst).await {
                 let _ = dst_fs.remove_file(&part).await;
                 return Err(e);
