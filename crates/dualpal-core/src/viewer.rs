@@ -199,6 +199,11 @@ pub struct SearchOptions {
     pub backward: bool,
     /// Compare ASCII letters without case.
     pub ignore_case: bool,
+    /// The text encoding of a text search. In UTF-16 a match starts on a
+    /// code unit (an even offset: the byte order mark is 2 bytes) and
+    /// ignoring case changes whole code units only. `None` compares raw
+    /// bytes, e.g. a hex search.
+    pub encoding: Option<Encoding>,
     /// Bytes read per step (tests use small ones to cross boundaries).
     pub chunk: usize,
 }
@@ -208,14 +213,42 @@ impl Default for SearchOptions {
         Self {
             backward: false,
             ignore_case: false,
+            encoding: None,
             chunk: SEARCH_CHUNK,
         }
     }
 }
 
-fn fold(bytes: &mut [u8], ignore_case: bool) {
-    if ignore_case {
-        bytes.make_ascii_lowercase();
+impl SearchOptions {
+    /// Bytes per code unit a match must start on.
+    fn unit(&self) -> u64 {
+        self.encoding.map_or(1, |e| e.unit() as u64)
+    }
+
+    /// A match at file offset `at` starts on a code unit.
+    fn aligned(&self, at: u64) -> bool {
+        at.is_multiple_of(self.unit())
+    }
+
+    /// Lower-case `bytes` (from file offset `start`) for an ignore-case
+    /// search. In UTF-16 only whole code units that are ASCII letters
+    /// change: byte-wise folding would turn U+0141 (`41 01` in LE) into
+    /// U+0161 (`61 01`). A code unit cut by the end of `bytes` is left alone.
+    fn fold(&self, bytes: &mut [u8], start: u64) {
+        if !self.ignore_case {
+            return;
+        }
+        let (low, high) = match self.encoding {
+            Some(Encoding::Utf16Le) => (0, 1),
+            Some(Encoding::Utf16Be) => (1, 0),
+            _ => return bytes.make_ascii_lowercase(),
+        };
+        let skip = ((start % 2) as usize).min(bytes.len());
+        for unit in bytes[skip..].as_chunks_mut::<2>().0 {
+            if unit[high] == 0 {
+                unit[low] = unit[low].to_ascii_lowercase();
+            }
+        }
     }
 }
 
@@ -239,7 +272,7 @@ pub async fn search(
         return Ok(None);
     }
     let mut needle = needle.to_vec();
-    fold(&mut needle, options.ignore_case);
+    options.fold(&mut needle, 0);
     let chunk = options.chunk.max(needle.len());
     let from = from.min(size);
 
@@ -250,7 +283,7 @@ pub async fn search(
             (from, size),
             &needle,
             chunk,
-            options.ignore_case,
+            &options,
             false,
             cancel,
             &mut progress,
@@ -267,7 +300,7 @@ pub async fn search(
             (0, end),
             &needle,
             chunk,
-            options.ignore_case,
+            &options,
             true,
             cancel,
             &mut progress,
@@ -287,12 +320,12 @@ pub async fn search(
         let start = end.saturating_sub(chunk as u64);
         let reader = fs.open_read_at(path, start).await?;
         let mut buf = crate::vfs::range::read_up_to(reader, end - start, path).await?;
-        fold(&mut buf, options.ignore_case);
-        if let Some(i) = memchr::memmem::rfind(&buf, &needle) {
-            let at = start + i as u64;
-            if at < from {
-                return Ok(Some(at));
-            }
+        options.fold(&mut buf, start);
+        let hit = memchr::memmem::rfind_iter(&buf, &needle)
+            .map(|i| start + i as u64)
+            .find(|&at| at < from && options.aligned(at));
+        if let Some(at) = hit {
+            return Ok(Some(at));
         }
         scanned += end - start;
         progress(scanned);
@@ -313,7 +346,7 @@ async fn scan_forward(
     range: (u64, u64),
     needle: &[u8],
     chunk: usize,
-    ignore_case: bool,
+    options: &SearchOptions,
     last: bool,
     cancel: &CancellationToken,
     progress: &mut impl FnMut(u64),
@@ -346,13 +379,27 @@ async fn scan_forward(
             break; // The file is shorter than it was.
         }
         pos += got as u64;
-        fold(&mut buf[before..], ignore_case);
-        if last {
-            if let Some(i) = memchr::memmem::rfind(&buf, needle) {
-                found = Some(buf_start + i as u64);
+        // The whole buffer: a UTF-16 code unit cut by the last chunk is
+        // whole now. Folding twice changes nothing.
+        options.fold(&mut buf, buf_start);
+        let hits = |rev: bool| {
+            let at = |i: usize| buf_start + i as u64;
+            if rev {
+                memchr::memmem::rfind_iter(&buf, needle)
+                    .map(at)
+                    .find(|&a| options.aligned(a))
+            } else {
+                memchr::memmem::find_iter(&buf, needle)
+                    .map(at)
+                    .find(|&a| options.aligned(a))
             }
-        } else if let Some(i) = memchr::memmem::find(&buf, needle) {
-            return Ok(Some(buf_start + i as u64));
+        };
+        if last {
+            if let Some(at) = hits(true) {
+                found = Some(at);
+            }
+        } else if let Some(at) = hits(false) {
+            return Ok(Some(at));
         }
         progress(pos - from);
         let keep = (needle_len - 1).min(buf.len());
@@ -523,10 +570,19 @@ impl Sessions {
         reader.read(offset, len).await
     }
 
-    /// The file system and path of an open file, and its size.
-    async fn target(&self, session: u64) -> Result<(Arc<dyn FileSystem>, String, u64)> {
+    /// The file system and path of an open file, and its size. Waits for
+    /// a page read in progress (which can stream a long prefix on a server
+    /// without seeking); `cancel` stops the wait.
+    async fn target(
+        &self,
+        session: u64,
+        cancel: &CancellationToken,
+    ) -> Result<(Arc<dyn FileSystem>, String, u64)> {
         let s = self.get(session)?;
-        let r = s.reader.lock().await;
+        let r = tokio::select! {
+            r = s.reader.lock() => r,
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+        };
         Ok((r.file_system().clone(), r.path().to_string(), r.size()))
     }
 
@@ -551,18 +607,22 @@ impl Sessions {
         options: SearchOptions,
         progress: impl FnMut(u64),
     ) -> Result<Option<u64>> {
-        let (fs, path, size) = self.target(session).await?;
+        // Cancellable from the start, also while waiting for the reader.
         let cancel = self.start(request);
-        let result = search(
-            fs.as_ref(),
-            &path,
-            size,
-            needle,
-            from,
-            options,
-            &cancel,
-            progress,
-        )
+        let result = async {
+            let (fs, path, size) = self.target(session, &cancel).await?;
+            search(
+                fs.as_ref(),
+                &path,
+                size,
+                needle,
+                from,
+                options,
+                &cancel,
+                progress,
+            )
+            .await
+        }
         .await;
         self.finish(request);
         result
@@ -576,9 +636,12 @@ impl Sessions {
         upto: u64,
         encoding: Encoding,
     ) -> Result<u64> {
-        let (fs, path, _) = self.target(session).await?;
         let cancel = self.start(request);
-        let result = count_lines(fs.as_ref(), &path, upto, encoding, &cancel).await;
+        let result = async {
+            let (fs, path, _) = self.target(session, &cancel).await?;
+            count_lines(fs.as_ref(), &path, upto, encoding, &cancel).await
+        }
+        .await;
         self.finish(request);
         result
     }
