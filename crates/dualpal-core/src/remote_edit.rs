@@ -76,6 +76,14 @@ struct ServerSig {
     modified_ms: Option<i64>,
 }
 
+/// Remembered after an upload whose result could not be read back. It
+/// matches no real server file, so the next save is held as a conflict
+/// instead of being sent unchecked.
+const UNVERIFIED: ServerSig = ServerSig {
+    size: u64::MAX,
+    modified_ms: Some(i64::MIN),
+};
+
 const CONFLICT: &str = "the file changed on the server since you opened it";
 
 /// Kept next to each local copy.
@@ -382,7 +390,7 @@ impl RemoteEditor {
         };
         match sent {
             Ok(server) => {
-                mark_synced(&local, sig, server);
+                mark_synced(&local, sig, Some(server));
                 let mut info = info;
                 info.status = EditStatus::Uploaded;
                 info.uploads += 1;
@@ -399,7 +407,8 @@ impl RemoteEditor {
                 self.spawn_watcher(info.clone(), fs, sig);
                 Ok(info)
             }
-            Err(Sent::Failed(e)) => {
+            Err(Sent::Failed(e, left)) => {
+                mark_server(&local, left);
                 update(&self.inner, id, |s| {
                     s.status = EditStatus::Failed;
                     s.error = Some(e.to_string());
@@ -464,6 +473,20 @@ fn mark_synced(local: &Path, sig: Option<Signature>, server: Option<ServerSig>) 
     }
 }
 
+/// Record that the server now holds `server` (e.g. what a failed upload
+/// left there), keeping the local copy unsent.
+fn mark_server(local: &Path, server: Option<ServerSig>) {
+    let (Some(dir), Some(server)) = (local.parent(), server) else {
+        return;
+    };
+    if let Some(mut m) = read_manifest(dir) {
+        if m.server.is_some() {
+            m.server = Some(server);
+            write_manifest(dir, &m);
+        }
+    }
+}
+
 /// The server file as remembered for the copy at `local`.
 fn server_sig(local: &Path) -> Option<ServerSig> {
     read_manifest(local.parent()?)?.server
@@ -483,27 +506,37 @@ async fn stat_server(fs: &dyn FileSystem, path: &str) -> Result<Option<ServerSig
 enum Sent {
     /// The server copy is not the one `expected`; nothing was uploaded.
     Conflict,
-    Failed(Error),
+    /// The upload failed. Holds the server file as the failed upload left
+    /// it, when it could be read: a write may have truncated it, and that
+    /// is not someone else's change.
+    Failed(Error, Option<ServerSig>),
 }
 
 /// Upload `from` to `path`, first checking that the server file is still
-/// `expected` (when given). Returns the server file as it is afterwards.
+/// `expected` (when given). Returns the server file as it is afterwards,
+/// or [`UNVERIFIED`] if it cannot be read back.
 async fn upload_checked(
     fs: &dyn FileSystem,
     from: &Path,
     path: &str,
     expected: Option<ServerSig>,
-) -> std::result::Result<Option<ServerSig>, Sent> {
+) -> std::result::Result<ServerSig, Sent> {
     if let Some(expected) = expected {
-        let now = stat_server(fs, path).await.map_err(Sent::Failed)?;
+        let now = stat_server(fs, path)
+            .await
+            .map_err(|e| Sent::Failed(e, None))?;
         // A file deleted on the server counts as changed, too.
         if now != Some(expected) {
             return Err(Sent::Conflict);
         }
     }
-    upload(fs, from, path).await.map_err(Sent::Failed)?;
+    let sent = upload(fs, from, path).await;
     // Servers may stamp the upload with their own time: remember theirs.
-    Ok(stat_server(fs, path).await.ok().flatten())
+    let after = stat_server(fs, path).await.ok().flatten();
+    match sent {
+        Ok(()) => Ok(after.unwrap_or(UNVERIFIED)),
+        Err(e) => Err(Sent::Failed(e, after)),
+    }
 }
 
 fn update(inner: &Inner, id: Uuid, f: impl FnOnce(&mut EditSession)) {
@@ -552,7 +585,7 @@ async fn watch(
                 // Only a save that reached the server counts as synced.
                 synced = now;
                 held = None;
-                mark_synced(&local, now, server);
+                mark_synced(&local, now, Some(server));
                 update(&inner, id, |s| {
                     s.status = EditStatus::Uploaded;
                     s.uploads += 1;
@@ -567,7 +600,8 @@ async fn watch(
                     s.error = Some(CONFLICT.into());
                 });
             }
-            Err(Sent::Failed(e)) => {
+            Err(Sent::Failed(e, left)) => {
+                mark_server(&local, left);
                 update(&inner, id, |s| {
                     s.status = EditStatus::Failed;
                     s.error = Some(e.to_string());
