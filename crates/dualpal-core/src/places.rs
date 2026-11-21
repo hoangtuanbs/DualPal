@@ -350,14 +350,22 @@ impl Favorites {
         Ok(items.clone())
     }
 
-    /// Reorder: move the favorite at `from` to index `to`.
+    /// Reorder: move the favorite at `from` to index `to`. Both must be
+    /// positions in the current list; otherwise nothing changes and an
+    /// `InvalidInput` error is returned (the list may have changed since).
     pub fn reorder(&self, from: usize, to: usize) -> std::io::Result<Vec<Favorite>> {
         let mut items = self.items.lock().unwrap();
-        if from < items.len() {
-            let f = items.remove(from);
-            let to = to.min(items.len());
-            items.insert(to, f);
+        if from >= items.len() || to >= items.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "cannot move favorite {from} to {to}: there are {}",
+                    items.len()
+                ),
+            ));
         }
+        let f = items.remove(from);
+        items.insert(to, f);
         self.save(&items)?;
         Ok(items.clone())
     }
