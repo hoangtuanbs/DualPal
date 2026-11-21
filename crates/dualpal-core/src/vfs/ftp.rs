@@ -842,6 +842,11 @@ impl FileSystem for FtpFs {
         self.open_read_at(path, 0).await
     }
 
+    /// REST before RETR starts the download at the offset.
+    fn seekable_reads(&self) -> bool {
+        true
+    }
+
     async fn open_read_at(&self, path: &str, offset: u64) -> Result<Reader> {
         let p = posix::normalize(path);
         let mut conn = self.open().await?;
