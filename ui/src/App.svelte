@@ -1098,6 +1098,11 @@
   async function toggleFavorite() {
     const loc = active.location;
     if (!loc) return;
+    // An archive's folders only exist while it is open.
+    if (active.inArchive) {
+      notice = "Folders inside archives cannot be favorites. Add the folder holding the archive instead.";
+      return;
+    }
     const conn = connectionOf(loc.fs);
     try {
       if (conn) {
