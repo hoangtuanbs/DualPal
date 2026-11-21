@@ -59,6 +59,15 @@ test.describe("UI-KEY viewer", () => {
     await expect(page.getByTestId("hex-view")).toBeVisible();
     await page.keyboard.press("1");
     await expect(page.getByTestId("text-view")).toBeVisible();
+    // End shows the last line whole, at the bottom of the view.
+    await page.keyboard.press("End");
+    await expect(textRows(page).last()).toHaveText("entry 5000");
+    const box = (await page.getByTestId("text-view").boundingBox())!;
+    const last = (await textRows(page).last().boundingBox())!;
+    expect(last.y + last.height).toBeLessThanOrEqual(box.y + box.height + 0.5);
+    expect(box.y + box.height - (last.y + last.height)).toBeLessThan(40);
+    await page.keyboard.press("Home");
+    await expect(textRows(page).first()).toHaveText("entry 1");
 
     await page.keyboard.press(`${MOD}+f`);
     const field = page.getByTestId("viewer-search");

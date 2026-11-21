@@ -46,10 +46,11 @@
   let probe: HTMLSpanElement | undefined = $state();
   let height = $state(0);
   let width = $state(0);
-  let lineHeight = $state(18);
+  /** Row height, as in the CSS below. */
+  const lineHeight = 18;
   let charWidth = $state(8);
 
-  const visible = $derived(fixedRows ?? (height > 0 ? Math.max(1, Math.floor(height / lineHeight)) : 30));
+  const visible = $derived(fixedRows ?? (height > 0 ? Math.max(1, Math.floor((height - 4) / lineHeight)) : 30));
   const gutterChars = $derived(lineNumbers ? 7 : 0);
   const cols = $derived(
     wrap ? (fixedCols ?? (width > 0 ? Math.max(8, Math.floor(width / charWidth) - gutterChars - 2) : 100)) : null,
@@ -68,10 +69,7 @@
       height = el.clientHeight;
       width = el.clientWidth;
       const r = probe?.getBoundingClientRect();
-      if (r && r.height) {
-        lineHeight = r.height;
-        charWidth = r.width / 10;
-      }
+      if (r && r.width) charWidth = r.width / 10;
     });
     ro.observe(el);
     return () => ro.disconnect();
