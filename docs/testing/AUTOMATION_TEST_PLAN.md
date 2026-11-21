@@ -498,6 +498,9 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | SET-003 | corrupt settings.json → defaults | L2 | P1 | NEW | |
 | SET-004 | unknown fields ignored (forward compatible) | L2 | P2 | NEW | |
 | SET-006 | update check switch and skipped release round-trip; older files load with both empty | L2 | P1 | NEW | |
+| SET-007 | Settings screen choices (theme, text size, density, hidden files, columns, pane start, key bindings) round-trip in camelCase | L2 | P1 | NEW | |
+| SET-008 | a file from before the Settings screen loads with today's behaviour; an unknown choice from a newer version reads as the default | L2 | P1 | NEW | |
+| SET-009 | `update` changes only the given fields; a wrongly shaped change is refused and changes nothing | L2 | P1 | NEW | |
 
 ### 8.5 Connections, secrets, sign-in — `CON`
 
@@ -696,6 +699,7 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
 | CMD-039 | `latest_release` reads GitHub's latest release (tag, page, date) from `DUALPAL_RELEASES_URL` and sends a User-Agent | P1 | |
 | CMD-040 | `apply_upgrade` needs a finished `download_upgrade`; `download_upgrade` refuses a version that is no longer the newest release | P1 | |
+| CMD-043 | `update_settings(patch)` merges the given fields, returns all settings; a wrong type is `invalid` | P1 | |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
@@ -719,6 +723,13 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-014 | `PaneState.navigated` hook fires (linked browsing) | P1 | |
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
+| UI-UNIT-021 | `keymap` default bindings equal the README shortcuts (Windows/Linux and Mac, Ctrl in place of ⌘) and display as before | P0 | |
+| UI-UNIT-022 | `keymap` records a press as a combination; reserved keys refused; field-safe keys | P1 | |
+| UI-UNIT-023 | `keymap` conflicts and replacing a key moves it from the other command | P1 | |
+| UI-UNIT-024 | `keymap` reset one / all; defaults stored as nothing | P1 | |
+| UI-UNIT-025 | `SettingsDialog` appearance applies to the document at once and saves through `update_settings` | P1 | |
+| UI-UNIT-026 | `SettingsDialog` panes and apps fields save; Esc closes | P1 | |
+| UI-UNIT-027 | `SettingsDialog` keyboard: record, conflict → Replace, reserved key note, Reset, Reset All | P1 | |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
 | UI-CMP-003 | `CommandPalette` fuzzy filter, arrow keys, Enter runs, lists servers/favorites/syncs | P0 | |
@@ -773,6 +784,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-KEY-028 | Ctrl/⌘ Shift L | linked browsing toggles; entering folder in one pane enters same name in other |
 | UI-KEY-029 | shortcuts ignored while typing in an input/editor | F5 inside rename prompt does not copy |
 | UI-KEY-030 | shortcuts disabled while auto-sync locks panes (`frozen`) | F5/F6/F8 make no calls |
+| UI-KEY-037 | Ctrl/⌘ , | Settings opens, also from the filter field |
 
 **Mouse**
 
@@ -826,6 +838,8 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-E2E-029 | Windows path scenario: `C:\Users\…` breadcrumbs and parent navigation | P1 | scenario "windows-paths" |
 | UI-E2E-030 | 5 000 entries render and scroll; cursor End reaches last | P1 | |
 | UI-E2E-031 | unsaved state survives nothing unexpected: reload restores favorites/servers from backend, not localStorage | P2 | |
+| UI-E2E-034 | a command rebound in Settings runs from its new key, the old key does nothing, the palette shows the new key | P1 | |
+| UI-E2E-035 | Settings appearance and pane choices apply at once and are read at start | P1 | |
 
 ### 8.15 Full-stack desktop E2E — `DESK` (L7)
 

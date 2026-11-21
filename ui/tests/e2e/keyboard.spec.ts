@@ -435,6 +435,21 @@ test.describe("UI-KEY keyboard", () => {
     await expect(row(page, "left", "b.txt")).toBeVisible();
   });
 
+  test("UI-KEY-037 Ctrl/Cmd , opens Settings, also from a text field", async ({ page }) => {
+    await start(page);
+    await page.keyboard.press(`${MOD}+,`);
+    const settings = page.getByTestId("settings-dialog");
+    await expect(settings).toBeVisible();
+    await expect(settings.getByRole("tab", { name: "Appearance" })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Escape");
+    await expect(settings).toBeHidden();
+    // From the filter field too.
+    await page.keyboard.press(`${MOD}+f`);
+    await expect(page.getByTestId("pane-left-filter")).toBeFocused();
+    await page.keyboard.press(`${MOD}+,`);
+    await expect(settings).toBeVisible();
+  });
+
   test("UI-KEY-029 shortcuts are ignored while typing in a field", async ({ page }) => {
     await start(page);
     await page.keyboard.press("F2");
