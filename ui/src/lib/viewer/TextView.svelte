@@ -131,8 +131,9 @@
         // text above: when the screen grows (or was laid out for fewer rows),
         // the end stays at the bottom.
         if (r.length < n && (t.seg > o.bom || t.sub > 0)) {
-          const p = await rowsUp(src, o, t, n - r.length);
-          if (mine === serial && top === t && (p.seg !== t.seg || p.sub !== t.sub)) top = p;
+          // The rows are already shown: a failure here only keeps the top.
+          const p = await rowsUp(src, o, t, n - r.length).catch(() => null);
+          if (p && mine === serial && top === t && (p.seg !== t.seg || p.sub !== t.sub)) top = p;
         }
       })
       .catch((e) => {
@@ -151,7 +152,7 @@
     if (!lineNumbers || t.line !== null || !src.countLines) return;
     void src.countLines(t.seg, enc).then(
       (n) => {
-        if (top.seg === t.seg && top.line === null && source === src) top = { ...top, line: n + 1 };
+        if (top.seg === t.seg && top.line === null && source === src && encoding === enc) top = { ...top, line: n + 1 };
       },
       () => {},
     );
