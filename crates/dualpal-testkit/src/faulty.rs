@@ -55,6 +55,9 @@ struct State {
     reads: AtomicUsize,
     /// 0 = use the wrapped backend, 1 = force true, 2 = force false.
     resumable: AtomicU64,
+    /// 0 = use the wrapped backend, 1 = force true, 2 = no seeking: reads
+    /// at an offset stream the file from the start and skip.
+    seekable: AtomicU64,
     atomic: AtomicU64,
     /// 0 = use the wrapped backend.
     parallel: AtomicUsize,
@@ -78,6 +81,7 @@ impl<F: FileSystem> FaultyFs<F> {
                 resumed: Mutex::new(Vec::new()),
                 reads: AtomicUsize::new(0),
                 resumable: AtomicU64::new(0),
+                seekable: AtomicU64::new(0),
                 atomic: AtomicU64::new(0),
                 parallel: AtomicUsize::new(0),
                 rename_replaces: AtomicBool::new(true),
@@ -156,6 +160,14 @@ impl<F: FileSystem> FaultyFs<F> {
     pub fn set_resumable(&self, yes: bool) {
         self.state
             .resumable
+            .store(if yes { 1 } else { 2 }, Ordering::SeqCst);
+    }
+
+    /// Whether reads can start at an offset. `false` makes `open_read_at`
+    /// stream from the start and skip, like a backend without seeking.
+    pub fn set_seekable(&self, yes: bool) {
+        self.state
+            .seekable
             .store(if yes { 1 } else { 2 }, Ordering::SeqCst);
     }
 
@@ -355,8 +367,30 @@ impl<F: FileSystem> FileSystem for FaultyFs<F> {
     async fn open_read_at(&self, path: &str, offset: u64) -> Result<Reader> {
         self.before(FaultOp::OpenReadAt).await?;
         self.state.reads.fetch_add(1, Ordering::SeqCst);
-        let reader = self.inner.open_read_at(path, offset).await?;
+        let reader = if self.state.seekable.load(Ordering::SeqCst) == 2 {
+            use tokio::io::AsyncReadExt;
+            let mut r = self.inner.open_read(path).await?;
+            let skipped = tokio::io::copy(&mut (&mut r).take(offset), &mut tokio::io::sink())
+                .await
+                .map_err(|e| Error::io(path, e))?;
+            if skipped < offset {
+                return Err(Error::Invalid(format!(
+                    "{path} is shorter than {offset} bytes"
+                )));
+            }
+            r
+        } else {
+            self.inner.open_read_at(path, offset).await?
+        };
         Ok(Box::new(CountingReader { inner: reader }))
+    }
+
+    fn seekable_reads(&self) -> bool {
+        match self.state.seekable.load(Ordering::SeqCst) {
+            1 => true,
+            2 => false,
+            _ => self.inner.seekable_reads(),
+        }
     }
 
     async fn open_write(&self, path: &str) -> Result<Writer> {

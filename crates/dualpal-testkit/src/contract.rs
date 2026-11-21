@@ -121,6 +121,7 @@ pub async fn run_contract(fs: Arc<dyn FileSystem>, base: &str, caps: Caps) {
     set_modified_round_trip(&fs, base, caps).await;
     set_mode_round_trip(&fs, base, caps).await;
     open_read_at_offset(&fs, base).await;
+    read_range_case(&fs, base).await;
     open_write_at_resumes(&fs, base, caps).await;
     name_torture_case(&fs, base).await;
     unicode_names(&fs, base).await;
@@ -402,6 +403,29 @@ pub async fn open_read_at_offset(fs: &Arc<dyn FileSystem>, base: &str) {
         Err(e) => panic!("reading past the end: {e}"),
         Ok(_) => panic!("reading past the end must be invalid"),
     }
+}
+
+/// VFS-CON-031 — `read_range` returns the bytes asked for, fewer at the
+/// end of the file and none past it, on every backend.
+pub async fn read_range_case(fs: &Arc<dyn FileSystem>, base: &str) {
+    let d = case_dir(fs, base, "031-range").await;
+    let path = fs.join(&d, "range.bin");
+    let data = pseudo_random(200_000, 31);
+    write_bytes(fs, &path, &data).await.unwrap();
+    let r = |o: u64, n: usize| {
+        let (fs, path) = (fs.clone(), path.clone());
+        async move { fs.read_range(&path, o, n).await.unwrap() }
+    };
+    assert_eq!(r(0, 10).await, &data[..10]);
+    assert_eq!(r(150_000, 1000).await, &data[150_000..151_000]);
+    assert_eq!(r(199_990, 100).await, &data[199_990..], "cut at the end");
+    assert!(r(200_000, 10).await.is_empty(), "at the end");
+    assert!(r(500_000, 10).await.is_empty(), "past the end");
+    assert!(r(5, 0).await.is_empty(), "nothing asked");
+    let empty = fs.join(&d, "empty.bin");
+    write_bytes(fs, &empty, b"").await.unwrap();
+    assert!(fs.read_range(&empty, 0, 10).await.unwrap().is_empty());
+    assert!(fs.read_range(&d, 0, 10).await.is_err(), "a folder");
 }
 
 /// VFS-CON-021
