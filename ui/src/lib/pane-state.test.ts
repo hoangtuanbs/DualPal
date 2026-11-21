@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneState } from "./pane-state.svelte";
 import { installMockBackend, tree } from "../../tests/mock-backend";
-import type { Entry, Location } from "./api";
+import { api, type Entry, type Location } from "./api";
 
 const LOC: Location = { fs: "local", path: "/dir" };
 
@@ -387,5 +387,130 @@ describe("UI-UNIT-018 PaneState quick filter", () => {
     expect(p.filter).toBe("*.txt");
     expect(p.visible.map((e) => e.name)).toEqual(["a.txt", "c.txt"]);
     expect(p.selected.size).toBe(1);
+  });
+});
+
+describe("UI-UNIT-017 PaneState back and forward", () => {
+  const at = (path: string): Location => ({ fs: "local", path });
+  /** A mock tree with these folders, so that back and forward can list them. */
+  const folders = (...names: string[]) => tree(Object.fromEntries(names.map((n) => [`${n}/`, ""])));
+
+  it("pushes on every folder change, and a new navigation clears forward", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", folders("/a", "/b", "/c", "/d"));
+    const p = new PaneState();
+    await p.open(at("/a"));
+    await p.open(at("/b"));
+    await p.open(at("/c"));
+
+    await p.back();
+    expect(p.location).toEqual(at("/b"));
+    await p.back();
+    expect(p.location).toEqual(at("/a"));
+    expect(p.canForward).toBe(true);
+
+    await p.forward();
+    expect(p.location).toEqual(at("/b"));
+
+    // Going somewhere new drops what was ahead.
+    await p.open(at("/d"));
+    expect(p.canForward).toBe(false);
+    await p.back();
+    expect(p.location).toEqual(at("/b"));
+  });
+
+  it("opening the folder already shown records nothing", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", folders("/a"));
+    const p = new PaneState();
+    await p.open(at("/a"));
+    await p.open(at("/a"));
+    expect(p.canBack).toBe(false);
+  });
+
+  it("keeps at most 100 folders back", async () => {
+    const mock = installMockBackend();
+    const names = Array.from({ length: 105 }, (_, i) => `/f${i}`);
+    mock.setTree("local", folders(...names));
+    const p = new PaneState();
+    for (const n of names) await p.open(at(n));
+
+    // f0..f104 were visited: the 104 before the current folder are kept, the oldest four dropped.
+    for (let i = 0; i < 100; i++) await p.back();
+    expect(p.location).toEqual(at("/f4"));
+    expect(p.canBack).toBe(false);
+  });
+
+  it("puts the cursor back on the item it left, going back and forward", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", folders("/p", "/p/x", "/p/y", "/p/z"));
+    const p = new PaneState();
+    await p.open(at("/p"));
+    p.cursor = 1; // "y"
+    await p.open(at("/p/y"));
+    p.cursor = 0;
+
+    await p.back();
+    expect(p.location).toEqual(at("/p"));
+    expect(p.current?.name).toBe("y");
+
+    await p.forward();
+    expect(p.location).toEqual(at("/p/y"));
+  });
+
+  it("skips a folder that no longer exists, with a notice", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", folders("/a", "/b", "/c"));
+    const p = new PaneState();
+    await p.open(at("/a"));
+    await p.open(at("/b"));
+    await p.open(at("/c"));
+    mock.setTree("local", folders("/a", "/c")); // /b is gone
+
+    await p.back();
+    expect(p.location).toEqual(at("/a"));
+    expect(p.error).toBeNull();
+    expect(p.notice).toContain("“b”");
+    expect(p.canBack).toBe(false);
+
+    // Forward goes to where the pane was, not to the skipped folder.
+    await p.forward();
+    expect(p.location).toEqual(at("/c"));
+    expect(p.notice).toBeNull();
+  });
+
+  it("skips a folder on a server that is no longer connected", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", folders("/a"));
+    const server: Location = { fs: "conn:box", path: "/srv" };
+    const real = api.listDir;
+    vi.spyOn(api, "listDir").mockImplementation((loc: Location) =>
+      loc.fs === "conn:box" ? Promise.reject({ kind: "disconnected", message: "not connected" }) : real(loc),
+    );
+    try {
+      const p = new PaneState();
+      await p.open(server, { entries: [] });
+      await p.open(at("/a"));
+
+      await p.back();
+      expect(p.location).toEqual(at("/a"));
+      expect(p.notice).toContain("“srv”");
+      expect(p.canBack).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("serializes quick repeats so that each step lands in turn", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", folders("/a", "/b", "/c"));
+    const p = new PaneState();
+    await p.open(at("/a"));
+    await p.open(at("/b"));
+    await p.open(at("/c"));
+
+    await Promise.all([p.back(), p.back()]);
+    expect(p.location).toEqual(at("/a"));
+    expect(p.canBack).toBe(false);
   });
 });
