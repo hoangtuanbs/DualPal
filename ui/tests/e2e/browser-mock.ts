@@ -33,6 +33,8 @@ export interface BrowserScenario {
   servers?: Record<string, ServerScenario>;
   /** Saved passwords are protected by this master password, locked at start. */
   masterPassword?: string;
+  /** Contents of archive files ("/" paths inside), by the archive's path. */
+  archives?: Record<string, Record<string, string>>;
 }
 
 /** A backend call the app made, as recorded by the mock. */
@@ -152,8 +154,13 @@ export function installBrowserMock(scenario: BrowserScenario) {
     return s;
   };
   /** The tree of a file system id: "local" or a connected server. */
+  /** Open archives, by file system id. */
+  const archives = new Map<string, Tree>();
+  let archiveCounter = 0;
   const fsOf = (fs: string): Tree => {
     if (fs === "local") return local;
+    const archive = archives.get(fs);
+    if (archive) return archive;
     for (const s of servers.values()) if (fsId(s.connection.id) === fs && s.connected) return s.tree;
     throw { kind: "unknownFileSystem", message: `unknown file system: ${fs}` };
   };
@@ -347,6 +354,18 @@ export function installBrowserMock(scenario: BrowserScenario) {
       return { hits, truncated: false, skipped: 0 };
     },
     cancel_find_files: () => null,
+    open_archive: (a) => {
+      const files = scenario.archives?.[a.location.path];
+      if (!files) throw { kind: "invalid", message: `${a.location.path} is damaged or not a supported archive` };
+      const fsId = `archive:${++archiveCounter}`;
+      archives.set(fsId, makeTree({ "/": "", ...files }, "/"));
+      return { fsId, name: fsOf(a.location.fs).base(a.location.path), source: a.location };
+    },
+    cancel_open_archive: () => null,
+    close_archive: (a) => {
+      archives.delete(a.fsId);
+      return null;
+    },
     parent_location: (a) => {
       const up = fsOf(a.location.fs).parent(a.location.path);
       return up === null ? null : { fs: a.location.fs, path: up };

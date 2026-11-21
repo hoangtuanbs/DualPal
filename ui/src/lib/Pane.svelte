@@ -4,6 +4,7 @@
   import { formatBytes, formatDate, formatShortDate } from "./format";
   import type { PaneGroup, SortKey } from "./pane-state.svelte";
   import { fsNames } from "./fs-names.svelte";
+  import { archiveCrumbs } from "./archives.svelte";
   import { drag, dragging, fromKeyboard, type DropTarget } from "./drag.svelte";
 
   let {
@@ -58,29 +59,40 @@
     else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
   });
 
-  const crumbs = $derived.by(() => {
-    const path = pane.location?.path ?? "";
+  type Crumb = { name: string; loc: Location };
+
+  /** Crumbs of a folder path: the root (a server's name), then each folder. */
+  function pathCrumbs(loc: Location): Crumb[] {
+    const path = loc.path;
+    const at = (p: string) => ({ fs: loc.fs, path: p });
     const windows = /^[A-Za-z]:/.test(path) || path.startsWith("\\\\");
     // A server's root shows the server's name.
-    const root = (pane.location && fsNames[pane.location.fs]) || "/";
-    const out: { name: string; path: string }[] = windows ? [] : [{ name: root, path: "/" }];
+    const root = fsNames[loc.fs] || "/";
+    const out: Crumb[] = windows ? [] : [{ name: root, loc: at("/") }];
     let acc = "";
     let parts = path.split(/[\\/]/).filter(Boolean);
     // A network share (\\server\share\, also WSL's \\wsl.localhost\Ubuntu\)
     // is one root crumb named after the share.
     if (path.startsWith("\\\\") && parts.length >= 2) {
       acc = `\\\\${parts[0]}\\${parts[1]}\\`;
-      out.push({ name: parts[1], path: acc });
+      out.push({ name: parts[1], loc: at(acc) });
       parts = parts.slice(2);
     }
     for (const part of parts) {
       if (!windows) acc = `${acc}/${part}`;
       // Drive roots keep their trailing separator ("C:\").
       else acc = acc === "" ? `${part}\\` : `${acc.endsWith("\\") ? acc : acc + "\\"}${part}`;
-      out.push({ name: part, path: acc });
+      out.push({ name: part, loc: at(acc) });
     }
     return out;
-  });
+  }
+
+  /** Inside an archive, the crumbs lead from the folders holding it. */
+  function crumbsFor(loc: Location): Crumb[] {
+    return archiveCrumbs(loc, crumbsFor) ?? pathCrumbs(loc);
+  }
+
+  const crumbs = $derived(pane.location ? crumbsFor(pane.location) : [{ name: "/", loc: { fs: "local", path: "/" } }]);
 
   // ---- drag and drop ------------------------------------------------------
   // Pointer events rather than HTML drag and drop, which the Windows webview
@@ -289,11 +301,10 @@
       <button title="Enclosing folder (Backspace)" onclick={() => pane.up()}>↑</button>
     </div>
     <nav class="crumbs" aria-label="Path" data-testid={`pane-${side}-crumbs`} bind:this={crumbsEl}>
-      {#each crumbs as c, i (c.path)}
+      {#each crumbs as c, i (`${c.loc.fs}:${c.loc.path}`)}
         {#if i > 0}<span class="sep">›</span>{/if}
-        <button
-          class="crumb"
-          onclick={() => pane.location && pane.open({ fs: pane.location.fs, path: c.path })}>{c.name}</button
+        <button class="crumb" class:archive={i > 0 && c.loc.path === "/" && c.loc.fs !== crumbs[i - 1].loc.fs}
+          onclick={() => pane.open(c.loc)}>{c.name}</button
         >
       {/each}
     </nav>
@@ -457,6 +468,10 @@
     border-radius: 4px;
     color: var(--text);
     font-weight: 500;
+  }
+  /* The archive a pane is inside. */
+  .crumb.archive {
+    color: var(--accent);
   }
   .sep {
     color: var(--muted);
