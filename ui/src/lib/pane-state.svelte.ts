@@ -2,7 +2,7 @@ import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { api, errorKind, errorMessage, type Entry, type FolderSize, type Location } from "./api";
 import { fsNames } from "./fs-names.svelte";
 import { nameFilter } from "./quick-filter";
-import { isArchiveFs, isArchiveName, onArchiveClosed, openArchive, openArchives, releaseArchives } from "./archives.svelte";
+import { holdLocation, isArchiveFs, isArchiveName, onArchiveClosed, openArchive, openArchives, releaseArchives } from "./archives.svelte";
 
 export type SortKey = "name" | "size" | "modified";
 export type ViewMode = "list" | "icons";
@@ -89,6 +89,8 @@ export class PaneState {
 
   async open(loc: Location, opts: { record?: boolean; focusName?: string; entries?: Entry[] } = {}) {
     this.loading = true;
+    // Another pane leaving this archive meanwhile must not close it.
+    const release = holdLocation(loc);
     try {
       const entries = opts.entries ?? (await api.listDir(loc));
       const from = this.location;
@@ -112,6 +114,7 @@ export class PaneState {
     } catch (e) {
       this.error = errorMessage(e);
     } finally {
+      release();
       this.loading = false;
     }
   }

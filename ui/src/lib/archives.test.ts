@@ -86,6 +86,17 @@ describe("UI-UNIT-020 entering and leaving archives", () => {
     expect(mock.calls("close_archive")).toHaveLength(1);
   });
 
+  it("swapping panes keeps the archive the other pane is entering", async () => {
+    const left = await paneAt(HOME);
+    await left.activate(entry(left, "pack.zip"));
+    const inside = left.location!;
+    const right = await paneAt(HOME);
+    await Promise.all([left.open(HOME), right.open(inside)]);
+    expect(right.location).toEqual(inside);
+    expect(mock.calls("close_archive")).toHaveLength(0);
+    expect(openArchives.has(inside.fs)).toBe(true);
+  });
+
   it("an archive inside an archive returns into the outer one", async () => {
     const p = await paneAt(HOME);
     await p.activate(entry(p, "pack.zip"));
