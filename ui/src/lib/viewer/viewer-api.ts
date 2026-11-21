@@ -39,9 +39,20 @@ export const viewerApi = {
   open: (location: Location) => invoke<ViewerFile>("viewer_open", { location }),
   read: async (session: number, offset: number, length: number) =>
     toBytes(await invoke<unknown>("viewer_read", { session, offset, length })),
-  /** Offset of the first match at or after `from` (or the last one before it, `backward`), or null. */
-  search: (session: number, request: number, needle: Uint8Array, from: number, backward: boolean, ignoreCase: boolean) =>
-    invoke<number | null>("viewer_search", { session, request, needle: [...needle], from, backward, ignoreCase }),
+  /**
+   * Offset of the first match at or after `from` (or the last one before it, `backward`), or null.
+   * `encoding` is the text encoding of a text search (UTF-16 matches start on a code unit and fold
+   * whole ones); null compares raw bytes.
+   */
+  search: (
+    session: number,
+    request: number,
+    needle: Uint8Array,
+    from: number,
+    backward: boolean,
+    ignoreCase: boolean,
+    encoding: TextEncoding | null,
+  ) => invoke<number | null>("viewer_search", { session, request, needle: [...needle], from, backward, ignoreCase, encoding }),
   /** Line feeds in the first `upto` bytes. */
   countLines: (session: number, request: number, upto: number, encoding: TextEncoding) =>
     invoke<number>("viewer_count_lines", { session, request, upto, encoding }),

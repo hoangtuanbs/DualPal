@@ -7,8 +7,9 @@
   // open at once: only the rows on screen are read and decoded. Reusable by
   // the file compare view (one per side).
   import { untrack } from "svelte";
+  import { errorMessage } from "../api";
   import Scrollbar from "./Scrollbar.svelte";
-  import { charRange, posAt, rowsFrom, rowsUp, segmentBefore, startPos, rowCount, type Pos, type Row, type TextOptions } from "./layout";
+  import { charRange, posAt, rowOffset, rowsFrom, rowsUp, segmentBefore, startPos, rowCount, type Pos, type Row, type TextOptions } from "./layout";
   import type { ByteSource } from "./source";
   import type { TextEncoding } from "./viewer-api";
 
@@ -59,7 +60,14 @@
 
   let top = $state<Pos>({ seg: 0, sub: 0, cont: false, line: 1 });
   let shown = $state<Row[]>([]);
+  /** The encoding `shown` was decoded with. */
+  let shownEncoding: TextEncoding = untrack(() => encoding);
   let serial = 0;
+  /** A read failed (e.g. a server connection dropped); bumping `attempt` tries again. */
+  let failed = $state<string | null>(null);
+  let attempt = $state(0);
+  /** Bumped by every move; a slower, older move does not apply. */
+  let nav = 0;
 
   // Measure the box and one character of the font.
   $effect(() => {
@@ -91,10 +99,16 @@
         lastSource = src;
         top = startPos(o);
       } else {
+        // The byte at the top row, also when it is wrapped inside a line.
         const keep = top;
-        void posAt(src, o, keep.seg).then((p) => {
-          if (source === src && top === keep) top = keep.line !== null && p.seg === keep.seg ? { ...p, line: keep.line } : p;
-        });
+        void posAt(src, o, topOffset()).then(
+          (p) => {
+            if (source === src && top === keep) top = keep.line !== null && p.seg === keep.seg ? { ...p, line: keep.line } : p;
+          },
+          (e) => {
+            if (source === src && top === keep) failed = errorMessage(e);
+          },
+        );
       }
     });
   });
@@ -105,18 +119,28 @@
     const n = visible;
     const o = opts;
     const src = source;
+    void attempt;
     const mine = ++serial;
-    void rowsFrom(src, o, t, n).then(async (r) => {
-      if (mine !== serial) return;
-      shown = r;
-      // Never leave empty rows below the end of the file while there is
-      // text above: when the screen grows (or was laid out for fewer rows),
-      // the end stays at the bottom.
-      if (r.length < n && (t.seg > o.bom || t.sub > 0)) {
-        const p = await rowsUp(src, o, t, n - r.length);
-        if (mine === serial && top === t && (p.seg !== t.seg || p.sub !== t.sub)) top = p;
-      }
-    });
+    rowsFrom(src, o, t, n)
+      .then(async (r) => {
+        if (mine !== serial) return;
+        shown = r;
+        shownEncoding = o.encoding;
+        failed = null;
+        // Never leave empty rows below the end of the file while there is
+        // text above: when the screen grows (or was laid out for fewer rows),
+        // the end stays at the bottom.
+        if (r.length < n && (t.seg > o.bom || t.sub > 0)) {
+          const p = await rowsUp(src, o, t, n - r.length);
+          if (mine === serial && top === t && (p.seg !== t.seg || p.sub !== t.sub)) top = p;
+        }
+      })
+      .catch((e) => {
+        // Rows of another place must not stay under the new position.
+        if (mine !== serial) return;
+        shown = [];
+        failed = errorMessage(e);
+      });
   });
 
   // Line numbers after a jump: count the lines before the top row.
@@ -137,45 +161,93 @@
     onmove?.(top.seg);
   });
 
-  /** Move the top row by `delta` rows. */
-  export async function scrollBy(delta: number) {
-    const src = source;
-    const o = opts;
-    const from = top;
-    if (delta < 0) {
-      const p = await rowsUp(src, o, from, -delta);
-      if (top === from) top = p;
-      return;
+  /** Rows asked for by scrolling that are not applied yet. */
+  let queued = 0;
+  let scrolling: Promise<void> | null = null;
+
+  /**
+   * Move the top row by `delta` rows. Moves that come while one is reading
+   * add up, so fast keys or wheel turns on a slow source are not lost.
+   */
+  export function scrollBy(delta: number): Promise<void> {
+    queued += delta;
+    if (!scrolling && queued) scrolling = drainScroll();
+    return scrolling ?? Promise.resolve();
+  }
+
+  async function drainScroll() {
+    try {
+      while (queued) {
+        const delta = queued;
+        queued = 0;
+        const mine = ++nav;
+        const src = source;
+        const o = opts;
+        const from = top;
+        let p: Pos | null;
+        if (delta < 0) {
+          p = await rowsUp(src, o, from, -delta);
+        } else {
+          const n = visible;
+          const r = await rowsFrom(src, o, from, delta + n);
+          p = r.length ? r[Math.min(delta, Math.max(0, r.length - n))].pos : null;
+        }
+        if (mine !== nav) return; // a jump came after
+        if (p && top === from) top = p;
+      }
+    } catch (e) {
+      failed = errorMessage(e);
+    } finally {
+      queued = 0;
+      scrolling = null;
     }
-    const n = visible;
-    const r = await rowsFrom(src, o, from, delta + n);
-    if (top !== from || !r.length) return;
-    top = r[Math.min(delta, Math.max(0, r.length - n))].pos;
+  }
+
+  /** Start a jump: it replaces moves on their way. Returns its id. */
+  function jump(): number {
+    queued = 0;
+    return ++nav;
   }
 
   export function scrollToStart() {
+    jump();
     top = startPos(opts);
   }
 
   export async function scrollToEnd() {
+    const mine = jump();
     const src = source;
     const o = opts;
-    const last = await segmentBefore(src, o, src.size);
-    if (!last) return scrollToStart();
-    const end: Pos = { seg: last.start, sub: rowCount(last, o.cols) - 1, cont: last.cont, line: null };
-    top = await rowsUp(src, o, end, visible - 1);
+    try {
+      const last = await segmentBefore(src, o, src.size);
+      if (mine !== nav) return;
+      if (!last) return scrollToStart();
+      const end: Pos = { seg: last.start, sub: rowCount(last, o.cols) - 1, cont: last.cont, line: null };
+      const p = await rowsUp(src, o, end, visible - 1);
+      if (mine === nav) top = p;
+    } catch (e) {
+      if (mine === nav) failed = errorMessage(e);
+    }
   }
 
   /** Show byte `offset`, `context` rows below the top. */
   export async function scrollToOffset(offset: number, context = 3) {
+    const mine = jump();
     const src = source;
     const o = opts;
-    const p = await posAt(src, o, offset);
-    top = await rowsUp(src, o, p, Math.min(context, Math.max(0, visible - 1)));
+    try {
+      const p = await posAt(src, o, offset);
+      const up = await rowsUp(src, o, p, Math.min(context, Math.max(0, visible - 1)));
+      if (mine === nav) top = up;
+    } catch (e) {
+      if (mine === nav) failed = errorMessage(e);
+    }
   }
 
-  /** Byte offset of the top row. */
+  /** Byte offset of the top row; inside its line when the line is wrapped. */
   export function topOffset(): number {
+    const row = shown[0];
+    if (row && row.pos.seg === top.seg && row.pos.sub === top.sub) return rowOffset(row, shownEncoding);
     return top.seg;
   }
 
@@ -221,11 +293,17 @@
   }
 
   const span = $derived(Math.max(1, source.size - bom));
-  const fraction = $derived(Math.min(1, Math.max(0, (top.seg - bom) / span)));
-  const thumb = $derived.by(() => {
-    const last = shown.at(-1);
-    return last ? (last.segment.end - (shown[0]?.segment.start ?? 0)) / span : 1;
-  });
+  /** Bytes on screen. */
+  const onScreen = $derived(shown.length ? shown.at(-1)!.segment.end - shown[0].segment.start : span);
+  /** How far the top can go: at the end, the thumb is at the bottom. */
+  const range = $derived(Math.max(1, span - onScreen));
+  const fraction = $derived(Math.min(1, Math.max(0, (top.seg - bom) / range)));
+  const thumb = $derived(onScreen / span);
+
+  /** Go to a place on the scroll bar, 0 (start) to 1 (end), on a whole byte. */
+  export function scrollToFraction(f: number) {
+    return scrollToOffset(bom + Math.round(f * range), 0);
+  }
 
   /** A row's text split around the highlight. */
   function pieces(row: Row): { text: string; mark: boolean }[] {
@@ -261,6 +339,12 @@
     {onwheel}
   >
     <span class="probe" bind:this={probe} aria-hidden="true">0123456789</span>
+    {#if failed}
+      <p class="failed" role="alert">
+        Could not read the file: {failed}
+        <button onclick={() => ((failed = null), attempt++)}>Retry</button>
+      </p>
+    {/if}
     {#each shown as row (`${row.pos.seg}:${row.pos.sub}`)}
       <div class="row" data-offset={row.pos.seg}>
         {#if lineNumbers}<span class="ln" aria-hidden="true">{lineLabel(row)}</span>{/if}
@@ -268,7 +352,7 @@
       </div>
     {/each}
   </div>
-  <Scrollbar value={fraction} {thumb} label="{label} position" controls={id} onjump={(f) => void scrollToOffset(bom + f * span, 0)} />
+  <Scrollbar value={fraction} {thumb} label="{label} position" controls={id} onjump={(f) => void scrollToFraction(f)} />
 </div>
 
 <style>
@@ -323,6 +407,11 @@
   }
   .tx {
     padding-left: 1ch;
+  }
+  .failed {
+    margin: 8px 12px;
+    color: var(--muted);
+    white-space: normal;
   }
   mark {
     background: var(--accent);

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
@@ -20,9 +20,11 @@ function setup(name: string, content: string | Uint8Array) {
   const mock = installMockBackend(scenario);
   const onclose = vi.fn();
   const { content: _c, bytes: _b, ...entry } = e;
-  render(Viewer, { location: { fs: "local", path }, entry, onclose });
-  return { mock, onclose, path };
+  const { unmount } = render(Viewer, { location: { fs: "local", path }, entry, onclose });
+  return { mock, onclose, path, unmount };
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 const shownText = () => [...document.querySelectorAll("[data-testid=text-view] .row .tx")].map((e) => e.textContent);
 
@@ -127,6 +129,62 @@ describe("UI-UNIT-036 Viewer", () => {
     expect(onclose).toHaveBeenCalled();
   });
 
+  it("tells the search the text encoding, and nothing for hex bytes", async () => {
+    const { mock } = setup("notes.txt", "alpha OK\n");
+    await waitFor(() => expect(shownText()).toEqual(["alpha OK"]));
+    await fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    await userEvent.type(await screen.findByTestId("viewer-search"), "ok{Enter}");
+    await waitFor(() => expect(mock.lastCall("viewer_search")).toMatchObject({ ignoreCase: true, encoding: "utf-8" }));
+    await fireEvent.keyDown(window, { key: "2" });
+    const field = screen.getByTestId("viewer-search");
+    await userEvent.clear(field);
+    await userEvent.type(field, "4F 4B{Enter}");
+    await waitFor(() => expect(mock.lastCall("viewer_search")).toMatchObject({ needle: [0x4f, 0x4b], ignoreCase: false, encoding: null }));
+  });
+
+  it("drops a search on its way when the term changes", async () => {
+    const { mock } = setup("notes.txt", "alpha\nbeta\n");
+    await waitFor(() => expect(shownText()).toEqual(["alpha", "beta"]));
+    let finish: (at: number | null) => void = () => {};
+    const search = vi.spyOn(viewerApi, "search").mockImplementation(() => new Promise((r) => (finish = r)));
+    await fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    const field = await screen.findByTestId("viewer-search");
+    await userEvent.type(field, "beta{Enter}");
+    await waitFor(() => expect(search).toHaveBeenCalled());
+    const request = search.mock.calls[0][1];
+    await userEvent.type(field, "x");
+    expect(mock.calls("viewer_cancel")).toContainEqual({ request });
+    finish(6); // the old term's match
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("text-match")).not.toBeInTheDocument();
+    expect(screen.getByTestId("viewer-search-status").textContent).toBe("");
+  });
+
+  it("stops its line count and its progress listener when it closes", async () => {
+    let listening: (off: () => void) => void = () => {};
+    vi.spyOn(viewerApi, "onSearchProgress").mockImplementation(() => new Promise((r) => (listening = r)));
+    const count = vi.spyOn(viewerApi, "countLines").mockImplementation(() => new Promise(() => {}));
+    const { mock, unmount } = setup("long.log", rows(20_000));
+    await waitFor(() => expect(shownText()[0]).toBe("row 000001"));
+    await fireEvent.keyDown(screen.getByTestId("text-view"), { key: "End" });
+    await waitFor(() => expect(count).toHaveBeenCalled());
+    const request = count.mock.calls.at(-1)![1];
+    unmount();
+    expect(mock.calls("viewer_cancel")).toContainEqual({ request });
+    // The listener arrives after the viewer closed: it is removed at once.
+    const off = vi.fn();
+    listening(off);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(off).toHaveBeenCalled();
+  });
+
+  it("moves the focus into the viewer when it shows media", async () => {
+    mockConvertFileSrc("linux");
+    setup("photo.png", "\u0089PNG");
+    expect(await screen.findByRole("img", { name: "photo.png" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("viewer")).toHaveFocus());
+  });
+
   it("shows an error when the file cannot be opened", async () => {
     const mock = installMockBackend();
     mock.failNext("viewer_open", { kind: "notFound", message: "not found: gone.txt" });
@@ -143,8 +201,10 @@ describe("UI-UNIT-037 viewer api passes exact argument names", () => {
     expect(mock.lastCall("viewer_open")).toEqual({ location: loc });
     expect([...(await viewerApi.read(f.session, 2, 4))]).toEqual([...new TextEncoder().encode("Read")]);
     expect(mock.lastCall("viewer_read")).toEqual({ session: f.session, offset: 2, length: 4 });
-    await viewerApi.search(f.session, 7, new Uint8Array([1, 2]), 5, true, false);
-    expect(mock.lastCall("viewer_search")).toEqual({ session: f.session, request: 7, needle: [1, 2], from: 5, backward: true, ignoreCase: false });
+    await viewerApi.search(f.session, 7, new Uint8Array([1, 2]), 5, true, false, null);
+    expect(mock.lastCall("viewer_search")).toEqual({ session: f.session, request: 7, needle: [1, 2], from: 5, backward: true, ignoreCase: false, encoding: null });
+    await viewerApi.search(f.session, 7, new Uint8Array([1, 0]), 0, false, true, "utf-16le");
+    expect(mock.lastCall("viewer_search")).toMatchObject({ ignoreCase: true, encoding: "utf-16le" });
     await viewerApi.countLines(f.session, 8, 3, "utf-16le");
     expect(mock.lastCall("viewer_count_lines")).toEqual({ session: f.session, request: 8, upto: 3, encoding: "utf-16le" });
     await viewerApi.cancel(8);

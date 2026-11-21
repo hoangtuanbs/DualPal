@@ -1330,7 +1330,7 @@ fn viewer_open_read_close() {
 
 /// CMD-051 — viewer_search finds bytes forwards and backwards (null when
 /// there are none); viewer_count_lines counts line feeds; cancelling an
-/// unknown request is a no-op.
+/// unknown request is a no-op; UTF-16 text searches fold whole code units.
 #[test]
 fn viewer_search_and_count_lines() {
     let TestApp { app, tmp } = app();
@@ -1367,6 +1367,26 @@ fn viewer_search_and_count_lines() {
     .unwrap();
     assert_eq!(lines, 2);
     call_ok(&app, "viewer_cancel", json!({ "request": 99 }));
+
+    // A UTF-16 text search folds whole code units: "Ł" (41 01) is not "š".
+    let wide = tmp.path().join("w.txt");
+    std::fs::write(&wide, [0x41, 0x01, 0x61, 0x01]).unwrap();
+    let file: Value = call(
+        &app,
+        "viewer_open",
+        json!({ "location": local(&wide.to_string_lossy()) }),
+    )
+    .unwrap();
+    let found: Option<u64> = call(
+        &app,
+        "viewer_search",
+        json!({
+            "session": file["session"], "request": 3, "needle": [0x61, 0x01],
+            "from": 0, "backward": false, "ignoreCase": true, "encoding": "utf-16le",
+        }),
+    )
+    .unwrap();
+    assert_eq!(found, Some(2));
 }
 
 /// CMD-060 — diff_open compares two text files (hunks, sides), diff_lines

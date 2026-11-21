@@ -46,7 +46,9 @@ struct SearchProgress {
 
 /// Find `needle` (bytes in the file's encoding) in an open file from
 /// `from`, or before it with `backward`. Returns the offset of the match,
-/// or null. `request` names the search for [`viewer_cancel`].
+/// or null. `request` names the search for [`viewer_cancel`]. `encoding`
+/// is the text encoding of a text search (matches start on a code unit and
+/// ignoring case folds whole ones); null for raw bytes.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn viewer_search<R: tauri::Runtime>(
@@ -58,12 +60,14 @@ pub async fn viewer_search<R: tauri::Runtime>(
     from: u64,
     backward: bool,
     ignore_case: bool,
+    encoding: Option<Encoding>,
 ) -> CmdResult<Option<u64>> {
     use tauri::Emitter;
     let mut last = std::time::Instant::now();
     let options = SearchOptions {
         backward,
         ignore_case,
+        encoding,
         ..Default::default()
     };
     state

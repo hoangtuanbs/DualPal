@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { encode } from "./encoding";
-import { charRange, MAX_LINE, posAt, readSegments, rowsFrom, rowsUp, segmentAt, startPos, type TextOptions } from "./layout";
+import { charRange, MAX_LINE, posAt, readSegments, rowOffset, rowsFrom, rowsUp, segmentAt, startPos, type TextOptions } from "./layout";
 import { memorySource } from "./source";
 import { bigSource, LINE } from "../../../tests/viewer/fixtures";
 
@@ -47,6 +47,30 @@ describe("UI-UNIT-031 viewer text layout", () => {
     const up = await rowsUp(src, opts, rows[3].pos, 1);
     expect(up).toEqual(rows[2].pos);
     expect((await posAt(src, opts, 6)).sub).toBe(1);
+  });
+
+  it("cuts a long UTF-16 line without splitting a surrogate pair", async () => {
+    // 2047 characters put the emoji's high surrogate last in the first MAX_LINE bytes.
+    const text = `${"a".repeat(MAX_LINE / 2 - 1)}😀b`;
+    for (const encoding of ["utf-16le", "utf-16be"] as const) {
+      const opts: TextOptions = { encoding, bom: 0, cols: null };
+      const segs = await readSegments(memorySource(encode(text, encoding)!), opts, 0, false, 10);
+      expect(segs.length).toBe(2);
+      expect(segs.map((s) => s.text).join("")).toBe(text);
+      expect(segs[1].text).toBe("😀b");
+    }
+  });
+
+  it("wraps on whole characters and maps a wrapped row back to its byte", async () => {
+    const opts: TextOptions = { encoding: "utf-8", bom: 0, cols: 3 };
+    const src = memorySource(utf8("ab😀cd\nx")); // the emoji is 2 UTF-16 code units, 4 bytes
+    const rows = await rowsFrom(src, opts, startPos(opts), 10);
+    expect(rows.map((r) => r.text)).toEqual(["ab", "😀c", "d", "x"]);
+    expect(rows.map((r) => rowOffset(r, "utf-8"))).toEqual([0, 2, 7, 9]);
+    expect((await posAt(src, opts, 2)).sub).toBe(1);
+    expect((await posAt(src, opts, 7)).sub).toBe(2);
+    const up = await rowsUp(src, opts, rows[3].pos, 2);
+    expect(up).toEqual(rows[1].pos);
   });
 
   it("goes up and down a big file the same way, reading only near the screen", async () => {

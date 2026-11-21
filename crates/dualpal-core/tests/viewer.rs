@@ -202,6 +202,7 @@ async fn search_across_chunk_boundaries() {
                 backward,
                 ignore_case,
                 chunk: 16,
+                ..Default::default()
             };
             let find = |needle: &'static [u8], from: u64, o: SearchOptions| {
                 let (fs, path, cancel) = (fs.clone(), path.clone(), cancel.clone());
@@ -374,6 +375,107 @@ async fn sessions_open_read_close() {
         sessions.open(fs, &format!("{path}.missing")).await,
         Err(Error::NotFound(_))
     ));
+}
+
+/// VIEW-011 — a UTF-16 text search ignores case on whole code units only
+/// (U+0141 "Ł" is not U+0161 "š" without case) and finds matches on code
+/// units only, forwards and backwards, seekable or not; a raw byte search
+/// still matches anywhere.
+#[tokio::test]
+async fn utf16_search_folds_code_units_on_unit_boundaries() {
+    let cancel = CancellationToken::new();
+    // Each text has the bytes of "ab" across code units at offset 7.
+    for (enc, text) in [
+        (Encoding::Utf16Le, "xŁx\u{6100}\u{6200}\u{0100}aBš"),
+        (Encoding::Utf16Be, "xŁx\u{0100}\u{6100}\u{6201}aBš"),
+    ] {
+        let data = encode(text, enc).unwrap();
+        assert_eq!(&data[7..11], &encode("ab", enc).unwrap()[..]);
+        for seekable in [true, false] {
+            let (fs, path) = mem_file(&data, seekable);
+            let size = data.len() as u64;
+            let find = |needle: &str, from: u64, backward: bool, ignore_case: bool| {
+                let needle = encode(needle, enc).unwrap();
+                let (fs, path, cancel) = (fs.clone(), path.clone(), cancel.clone());
+                async move {
+                    let o = SearchOptions {
+                        backward,
+                        ignore_case,
+                        encoding: Some(enc),
+                        chunk: 3,
+                    };
+                    search(fs.as_ref(), &path, size, &needle, from, o, &cancel, |_| {})
+                        .await
+                        .unwrap()
+                }
+            };
+            // "š" is only the last character, never "Ł".
+            assert_eq!(find("š", 0, false, true).await, Some(16), "{enc:?}");
+            assert_eq!(find("š", size, true, true).await, Some(16), "{enc:?}");
+            assert_eq!(find("Š", 0, false, true).await, None, "{enc:?}");
+            assert_eq!(find("ł", 0, false, true).await, None, "{enc:?}");
+            // "ab": the "aB" at 12, never the bytes across units at 7.
+            assert_eq!(find("ab", 0, false, true).await, Some(12), "{enc:?}");
+            assert_eq!(find("ab", size, true, true).await, Some(12), "{enc:?}");
+            assert_eq!(find("ab", 0, false, false).await, None, "{enc:?}");
+            assert_eq!(find("aB", 0, false, false).await, Some(12), "{enc:?}");
+        }
+    }
+    // A raw byte search matches at any offset.
+    let data = encode("\u{6100}\u{6200}", Encoding::Utf16Le).unwrap(); // 00 61 00 62
+    let (fs, path) = mem_file(&data, true);
+    let raw = search(
+        fs.as_ref(),
+        &path,
+        4,
+        &[0x61, 0x00],
+        0,
+        SearchOptions::default(),
+        &cancel,
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(raw, Some(1));
+}
+
+/// VIEW-012 — a search or line count is cancelled by its request id while it
+/// waits for a page read on the same file to finish.
+#[tokio::test]
+async fn sessions_cancel_while_waiting_for_the_reader() {
+    let sessions = Arc::new(Sessions::new(2));
+    let data = pseudo_random(300_000, 3);
+    let (fs, path) = mem_file(&data, true);
+    let f = sessions.open(fs.clone(), &path).await.unwrap();
+    fs.latency(FaultOp::OpenReadAt, Duration::from_millis(400));
+    // A page that is not cached holds the reader while it is fetched.
+    let reading = {
+        let s = sessions.clone();
+        tokio::spawn(async move { s.read(f.session, 200_000, 10).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let searching = {
+        let s = sessions.clone();
+        tokio::spawn(async move {
+            s.search(f.session, 7, b"zz", 0, SearchOptions::default(), |_| {})
+                .await
+        })
+    };
+    let counting = {
+        let s = sessions.clone();
+        tokio::spawn(async move { s.count_lines(f.session, 8, 300_000, Encoding::Utf8).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let started = Instant::now();
+    sessions.cancel(7);
+    sessions.cancel(8);
+    assert!(matches!(searching.await.unwrap(), Err(Error::Cancelled)));
+    assert!(matches!(counting.await.unwrap(), Err(Error::Cancelled)));
+    assert!(
+        started.elapsed() < Duration::from_millis(300),
+        "stopped without waiting for the read"
+    );
+    assert_eq!(reading.await.unwrap().unwrap(), &data[200_000..200_010]);
 }
 
 /// VIEW-010 — a 1 GiB local file opens and reads its end at once: only the
