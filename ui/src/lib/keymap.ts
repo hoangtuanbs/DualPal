@@ -60,7 +60,9 @@ const NOT_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "OS", "AltGraph", "
 
 /** Punctuation by key position, for presses with Ctrl/⌘ or Alt, where
  *  `key` may be shifted (">" for Shift+.) or a special character (Alt on a
- *  Mac). Letters and digits are read from the key position the same way. */
+ *  Mac). Letters and digits come from `key`, so they follow the layout
+ *  (Ctrl+A on AZERTY), and from the key position only when the modifiers
+ *  turned them into a symbol ("®" for ⌥R on a Mac). */
 const PUNCTUATION: Record<string, string> = {
   Period: ".",
   Comma: ",",
@@ -133,6 +135,7 @@ function eventKey(e: KeyEventLike): string | null {
   if (NOT_KEYS.has(e.key)) return null;
   const withMods = e.ctrlKey || e.metaKey || e.altKey;
   if (withMods) {
+    if (/^[a-z0-9]$/i.test(e.key)) return e.key.toUpperCase();
     if (/^Key[A-Z]$/.test(e.code)) return e.code.slice(3);
     if (/^Digit[0-9]$/.test(e.code)) return e.code.slice(5);
     if (e.code in PUNCTUATION) return PUNCTUATION[e.code];

@@ -724,7 +724,7 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
 | UI-UNIT-021 | `keymap` default bindings equal the README shortcuts (Windows/Linux and Mac, Ctrl in place of ⌘) and display as before | P0 | |
-| UI-UNIT-022 | `keymap` records a press as a combination; reserved keys refused; field-safe keys | P1 | |
+| UI-UNIT-022 | `keymap` records a press as a combination (letters follow the layout, e.g. AZERTY; key position when Alt makes a symbol); reserved keys refused; field-safe keys | P1 | |
 | UI-UNIT-023 | `keymap` conflicts and replacing a key moves it from the other command | P1 | |
 | UI-UNIT-024 | `keymap` reset one / all; defaults stored as nothing | P1 | |
 | UI-UNIT-025 | `SettingsDialog` appearance applies to the document at once and saves through `update_settings` | P1 | |

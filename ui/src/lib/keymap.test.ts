@@ -98,6 +98,13 @@ describe("keymap", () => {
     expect(comboFromEvent(press("k", { ctrlKey: true }), true)).toBe("Ctrl+K");
     // A Mac's Alt turns letters into symbols: the key position wins.
     expect(comboFromEvent(press("®", { altKey: true }, "KeyR"), true)).toBe("Alt+R");
+    // Letters follow the layout: Ctrl A on AZERTY is at the QWERTY Q key.
+    expect(comboFromEvent(press("a", { ctrlKey: true }, "KeyQ"), false)).toBe("Mod+A");
+    expect(lookup(defaults, press("a", { ctrlKey: true }, "KeyQ"), false)?.id).toBe("selectAll");
+    expect(lookup(defaults, press("q", { ctrlKey: true }, "KeyA"), false)).toBeNull();
+    // A letter the layout does not have (Russian) and an AZERTY digit: the key position.
+    expect(comboFromEvent(press("ф", { ctrlKey: true }, "KeyA"), false)).toBe("Mod+A");
+    expect(comboFromEvent(press("&", { ctrlKey: true }, "Digit1"), false)).toBe("Mod+1");
     expect(comboFromEvent(press("F9"), false)).toBe("F9");
     expect(comboFromEvent(press(" "), false)).toBe("Space");
     // A modifier on its own is not a shortcut yet.
