@@ -124,4 +124,28 @@ describe("SettingsDialog", () => {
     expect(within(keyRow("copy")).getByText("F5")).toBeInTheDocument();
     expect(within(keyRow("refresh")).getByText("Ctrl+R")).toBeInTheDocument();
   });
+
+  it("UI-UNIT-029 Tab stays inside Settings, and the focus goes back when it closes", async () => {
+    const outside = document.createElement("button");
+    outside.textContent = "Behind";
+    document.body.append(outside);
+    outside.focus();
+    await prefs.load();
+    const { unmount } = render(SettingsDialog, { commands, mac: false, start: "appearance", onclose: vi.fn() });
+    const user = userEvent.setup();
+    const dialog = screen.getByTestId("settings-dialog");
+    // Shift Tab from the first control goes to the last; Tab from the last to the first.
+    screen.getByTestId("settings-tab-appearance").focus();
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(screen.getByLabelText("Normal", { selector: "[name=density]" }));
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByTestId("settings-tab-appearance"));
+    for (let i = 0; i < 12; i++) {
+      await user.tab();
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    }
+    unmount();
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
 });

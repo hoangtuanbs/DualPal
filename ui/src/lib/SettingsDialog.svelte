@@ -54,6 +54,40 @@
 
   const s = $derived(prefs.settings);
 
+  // A modal window: Tab stays inside it, and the focus goes back where it
+  // was when it closes.
+  let sheet = $state<HTMLDivElement>();
+  const before = document.activeElement as HTMLElement | null;
+  $effect(() => {
+    return () => {
+      if (before?.isConnected) before.focus();
+    };
+  });
+
+  /** The controls Tab reaches, in order; of a radio group only the checked one. */
+  function tabbable(): HTMLElement[] {
+    if (!sheet) return [];
+    const all = [...sheet.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], [tabindex]")];
+    return all.filter((el) => {
+      if (el.tabIndex < 0 || (el as HTMLInputElement).disabled) return false;
+      if (el instanceof HTMLInputElement && el.type === "radio" && !el.checked) {
+        return !all.some((o) => o instanceof HTMLInputElement && o.type === "radio" && o.name === el.name && o.checked);
+      }
+      return true;
+    });
+  }
+
+  function keepFocusInside(e: KeyboardEvent) {
+    const items = tabbable();
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const edge = e.shiftKey ? 0 : items.length - 1;
+    if (at === -1 || at === edge) {
+      e.preventDefault();
+      items[e.shiftKey ? items.length - 1 : 0].focus();
+    }
+  }
+
   async function change(patch: Partial<Settings>) {
     error = null;
     try {
@@ -188,6 +222,7 @@
       if (combo) recorded(combo);
       return;
     }
+    if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) keepFocusInside(e);
     if (e.key === "Escape") {
       e.stopPropagation();
       if (pending) pending = null;
@@ -206,7 +241,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={(e) => e.target === e.currentTarget && onclose()}>
-  <div class="sheet" role="dialog" aria-modal="true" aria-label="Settings" data-testid="settings-dialog">
+  <div class="sheet" bind:this={sheet} role="dialog" aria-modal="true" aria-label="Settings" data-testid="settings-dialog">
     <div class="sections" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
       {#each sections as sec (sec.id)}
         <button
