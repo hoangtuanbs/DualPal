@@ -161,6 +161,8 @@ export function installBrowserMock(scenario: BrowserScenario) {
   // ---- state ----------------------------------------------------------------------
 
   let operations: any[] = [];
+  /** Bytes of the files open in the viewer, by session - 1. */
+  const viewerSessions: Uint8Array[] = [];
   /** Finished operations, newest first, as the activity log keeps them. */
   let activity: any[] = [];
   let presets: any[] = [];
@@ -347,6 +349,42 @@ export function installBrowserMock(scenario: BrowserScenario) {
       return { hits, truncated: false, skipped: 0 };
     },
     cancel_find_files: () => null,
+    // The viewer reads the file's UTF-8 bytes; `\u00XX` characters in the
+    // content stand for single bytes when the content is not valid text.
+    viewer_open: (a) => {
+      const t = fsOf(a.location.fs);
+      if (!t.has(a.location.path) || t.dirs.has(a.location.path)) throw t.notFound(a.location.path);
+      const bytes = new TextEncoder().encode(t.tree.get(a.location.path) ?? "");
+      const session = viewerSessions.length + 1;
+      viewerSessions.push(bytes);
+      const bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+      return {
+        session,
+        size: bytes.length,
+        modifiedMs: 1_700_000_000_000,
+        detected: { encoding: "utf-8", bom, binary: bytes.includes(0) },
+        seekable: true,
+      };
+    },
+    viewer_read: (a) => Array.from((viewerSessions[a.session - 1] ?? new Uint8Array()).subarray(a.offset, a.offset + a.length)),
+    viewer_search: (a) => {
+      const bytes = viewerSessions[a.session - 1] ?? new Uint8Array();
+      const fold = (b: number) => (a.ignoreCase && b >= 65 && b <= 90 ? b + 32 : b);
+      const n: number[] = a.needle.map(fold);
+      const at = (i: number) => n.every((b, j) => fold(bytes[i + j]) === b);
+      if (a.backward) {
+        for (let i = Math.min(a.from - 1, bytes.length - n.length); i >= 0; i--) if (at(i)) return i;
+      } else {
+        for (let i = a.from; i + n.length <= bytes.length; i++) if (at(i)) return i;
+      }
+      return null;
+    },
+    viewer_count_lines: (a) => {
+      const bytes = viewerSessions[a.session - 1] ?? new Uint8Array();
+      return bytes.subarray(0, a.upto).filter((b) => b === 10).length;
+    },
+    viewer_cancel: () => null,
+    viewer_close: () => null,
     parent_location: (a) => {
       const up = fsOf(a.location.fs).parent(a.location.path);
       return up === null ? null : { fs: a.location.fs, path: up };
