@@ -534,6 +534,10 @@ impl FileSystem for MemFs {
         }))
     }
 
+    fn seekable_reads(&self) -> bool {
+        true
+    }
+
     fn resumable_writes(&self) -> bool {
         true
     }

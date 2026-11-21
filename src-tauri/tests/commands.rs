@@ -88,6 +88,12 @@ fn tested_commands() -> HashSet<&'static str> {
         "diff_tools",
         "compare_files",
         "activity_insights",
+        "viewer_open",
+        "viewer_read",
+        "viewer_search",
+        "viewer_count_lines",
+        "viewer_cancel",
+        "viewer_close",
     ]
     .into_iter()
     .collect()
@@ -1256,4 +1262,121 @@ fn find_files_matches_names_and_cancel() {
     assert!(blank["hits"].as_array().unwrap().is_empty());
 
     call_ok(&app, "cancel_find_files", json!({ "request": 99 }));
+}
+
+/// CMD-050 — viewer_open detects the encoding; viewer_read returns raw bytes
+/// for a range, empty past the end; viewer_close forgets the file.
+#[test]
+fn viewer_open_read_close() {
+    let TestApp { app, tmp } = app();
+    let path = tmp.path().join("v.txt");
+    let mut data = b"\xEF\xBB\xBF".to_vec();
+    data.extend((0..2000).flat_map(|i| format!("line {i}\n").into_bytes()));
+    std::fs::write(&path, &data).unwrap();
+
+    let file: Value = call(
+        &app,
+        "viewer_open",
+        json!({ "location": local(&path.to_string_lossy()) }),
+    )
+    .unwrap();
+    assert_eq!(file["size"], data.len() as u64);
+    assert_eq!(file["detected"]["encoding"], "utf-8");
+    assert_eq!(file["detected"]["bom"], 3);
+    assert_eq!(file["detected"]["binary"], false);
+    assert_eq!(file["seekable"], true);
+    let session = file["session"].as_u64().unwrap();
+
+    let bytes: Vec<u8> = call(
+        &app,
+        "viewer_read",
+        json!({ "session": session, "offset": 3, "length": 7 }),
+    )
+    .unwrap();
+    assert_eq!(bytes, b"line 0\n");
+    let past: Vec<u8> = call(
+        &app,
+        "viewer_read",
+        json!({ "session": session, "offset": 1_000_000, "length": 7 }),
+    )
+    .unwrap();
+    assert!(past.is_empty());
+
+    call_ok(&app, "viewer_close", json!({ "session": session }));
+    let err = call::<Vec<u8>>(
+        &app,
+        "viewer_read",
+        json!({ "session": session, "offset": 0, "length": 7 }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "invalid");
+
+    let missing = call::<Value>(
+        &app,
+        "viewer_open",
+        json!({ "location": local(&tmp.path().join("nope").to_string_lossy()) }),
+    )
+    .unwrap_err();
+    assert_eq!(missing["kind"], "notFound");
+}
+
+/// CMD-051 — viewer_search finds bytes forwards and backwards (null when
+/// there are none); viewer_count_lines counts line feeds; cancelling an
+/// unknown request is a no-op; UTF-16 text searches fold whole code units.
+#[test]
+fn viewer_search_and_count_lines() {
+    let TestApp { app, tmp } = app();
+    let path = tmp.path().join("s.txt");
+    std::fs::write(&path, "alpha\nBeta\ngamma beta\n").unwrap();
+    let file: Value = call(
+        &app,
+        "viewer_open",
+        json!({ "location": local(&path.to_string_lossy()) }),
+    )
+    .unwrap();
+    let session = file["session"].as_u64().unwrap();
+    let find = |from: u64, backward: bool, ignore_case: bool| {
+        call::<Option<u64>>(
+            &app,
+            "viewer_search",
+            json!({
+                "session": session, "request": 1, "needle": b"beta".to_vec(),
+                "from": from, "backward": backward, "ignoreCase": ignore_case,
+            }),
+        )
+        .unwrap()
+    };
+    assert_eq!(find(0, false, false), Some(17));
+    assert_eq!(find(0, false, true), Some(6));
+    assert_eq!(find(17, true, true), Some(6));
+    assert_eq!(find(18, false, false), None);
+
+    let lines: u64 = call(
+        &app,
+        "viewer_count_lines",
+        json!({ "session": session, "request": 2, "upto": 12, "encoding": "utf-8" }),
+    )
+    .unwrap();
+    assert_eq!(lines, 2);
+    call_ok(&app, "viewer_cancel", json!({ "request": 99 }));
+
+    // A UTF-16 text search folds whole code units: "Ł" (41 01) is not "š".
+    let wide = tmp.path().join("w.txt");
+    std::fs::write(&wide, [0x41, 0x01, 0x61, 0x01]).unwrap();
+    let file: Value = call(
+        &app,
+        "viewer_open",
+        json!({ "location": local(&wide.to_string_lossy()) }),
+    )
+    .unwrap();
+    let found: Option<u64> = call(
+        &app,
+        "viewer_search",
+        json!({
+            "session": file["session"], "request": 3, "needle": [0x61, 0x01],
+            "from": 0, "backward": false, "ignoreCase": true, "encoding": "utf-16le",
+        }),
+    )
+    .unwrap();
+    assert_eq!(found, Some(2));
 }
