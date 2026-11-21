@@ -47,6 +47,8 @@ describe("UI-UNIT-008 api passes exact argument names", () => {
 
     await api.saveSettings({ editor: "/v", diffTool: null });
     expect(mock.lastCall("save_settings")).toEqual({ settings: { editor: "/v", diffTool: null } });
+    await api.updateSettings({ theme: "dark" });
+    expect(mock.lastCall("update_settings")).toEqual({ patch: { theme: "dark" } });
 
     await api.reorderFavorites(1, 0);
     expect(mock.lastCall("reorder_favorites")).toEqual({ from: 1, to: 0 });
