@@ -4,6 +4,7 @@
 //! to the UI as `operation-updated` events.
 
 mod commands;
+mod diff;
 mod remote;
 mod tools;
 mod upgrade;
@@ -63,6 +64,8 @@ pub struct AppState {
     pub find_cancel: Mutex<HashMap<u64, CancellationToken>>,
     /// Files open in the viewer (F3), with their page caches.
     pub viewer: dualpal_core::viewer::Sessions,
+    /// Files open in the built-in compare view.
+    pub diff: dualpal_core::diff::DiffSessions,
 }
 
 /// Build the whole application state on `dirs`. The shell calls this with the
@@ -122,6 +125,7 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
         folder_size_cancel: Mutex::new(HashMap::new()),
         find_cancel: Mutex::new(HashMap::new()),
         viewer: dualpal_core::viewer::Sessions::default(),
+        diff: dualpal_core::diff::DiffSessions::default(),
     })
 }
 
@@ -253,6 +257,14 @@ pub const COMMANDS: &[&str] = &[
     "viewer_count_lines",
     "viewer_cancel",
     "viewer_close",
+    "diff_open",
+    "diff_lines",
+    "diff_set_options",
+    "diff_set_encoding",
+    "diff_apply",
+    "diff_save",
+    "diff_cancel",
+    "diff_close",
 ];
 
 /// The single `generate_handler!` list, shared by the app and the tests.
@@ -336,6 +348,14 @@ macro_rules! all_commands {
             viewer::viewer_count_lines,
             viewer::viewer_cancel,
             viewer::viewer_close,
+            diff::diff_open,
+            diff::diff_lines,
+            diff::diff_set_options,
+            diff::diff_set_encoding,
+            diff::diff_apply,
+            diff::diff_save,
+            diff::diff_cancel,
+            diff::diff_close,
         ]
     };
 }
