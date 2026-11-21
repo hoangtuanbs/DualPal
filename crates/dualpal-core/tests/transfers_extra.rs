@@ -98,13 +98,8 @@ async fn full_disk_fails_without_retrying() {
 }
 
 /// OPS-COPY-020 — overwriting works even when the backend's rename refuses to
-/// replace an existing file.
-///
-/// The current implementation writes to a temporary name and then renames it
-/// over the target, so a rename that refuses to replace makes the overwrite
-/// fail.
+/// replace an existing file: the old file is moved aside, then removed.
 #[tokio::test]
-#[ignore = "BUG: overwriting a file fails when the backend's rename refuses to replace"]
 async fn overwrite_works_when_rename_refuses_to_replace() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("doc.txt");
@@ -126,4 +121,50 @@ async fn overwrite_works_when_rename_refuses_to_replace() {
 
     assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
     assert_eq!(std::fs::read_to_string(dst.join("doc.txt")).unwrap(), "new");
+    let names: Vec<_> = std::fs::read_dir(&dst)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["doc.txt"], "no temporary files are left");
+}
+
+/// OPS-COPY-020 — when the new file cannot be renamed into place after the
+/// old one was moved aside, the old one is put back and nothing is left.
+#[tokio::test]
+async fn overwrite_restores_the_old_file_when_the_rename_fails() {
+    use dualpal_core::Error;
+    use dualpal_testkit::FaultOp;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("doc.txt");
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    std::fs::write(&src, "new").unwrap();
+    std::fs::write(dst.join("doc.txt"), "old").unwrap();
+
+    let remote = Arc::new(FaultyFs::with_id(LocalFs::new(), "remote"));
+    remote.set_rename_replaces(false);
+    // Renames: part over doc.txt (refused), doc.txt aside (ok), part to
+    // doc.txt (fails here), aside back to doc.txt.
+    remote.fail_later(
+        FaultOp::Rename,
+        2,
+        Error::PermissionDenied("doc.txt".into()),
+    );
+    let q = setup(&remote);
+    let id = q.enqueue(copy(
+        &src.to_string_lossy(),
+        &dst.to_string_lossy(),
+        ConflictPolicy::Overwrite,
+    ));
+    let info = q.wait(id).await.unwrap();
+
+    assert_eq!(info.status, OperationStatus::Failed);
+    assert_eq!(info.error.unwrap().kind, "permissionDenied");
+    assert_eq!(std::fs::read_to_string(dst.join("doc.txt")).unwrap(), "old");
+    let names: Vec<_> = std::fs::read_dir(&dst)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["doc.txt"], "no temporary files are left");
 }
