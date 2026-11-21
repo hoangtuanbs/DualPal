@@ -18,6 +18,10 @@ export interface NavEntry {
 
 const sameLocation = (a: Location, b: Location | null) => !!b && a.fs === b.fs && a.path === b.path;
 
+/** Errors that mean a folder in the history cannot be opened again, so back
+ *  and forward skip it: it was deleted, or its server is no longer connected. */
+const GONE = new Set(["notFound", "unknownFileSystem"]);
+
 /** Push onto a history list, dropping the oldest step past the limit. */
 function pushStep(stack: NavEntry[], entry: NavEntry) {
   stack.push(entry);
@@ -302,29 +306,47 @@ export class PaneState {
   }
 
   /** Take the next step of the history: open each folder in turn, skipping
-   *  those that cannot be opened (deleted, or on a server no longer connected). */
+   *  those that are gone for good (deleted, or on a server that is no longer
+   *  connected). Any other failure, such as a denied permission or a dropped
+   *  connection, stops here with its own error and keeps the step, so that it
+   *  can be tried again. */
   private async walk(dir: "back" | "forward") {
     const from = dir === "back" ? this.history : this.future;
     const to = dir === "back" ? this.future : this.history;
-    const error = this.error;
+    const here = this.location;
+    if (!here) return;
+    // The cursor where we leave this folder, so that going back again lands on it.
+    const leaving = this.current?.name;
     const skipped: string[] = [];
+    const report = () => {
+      if (skipped.length > 0) this.notice = `Skipped “${skipped.join("”, “")}”: it is no longer available.`;
+    };
     while (from.length > 0) {
-      const entry = from.pop()!;
-      const here = this.location;
-      if (!here) break;
-      // The cursor where we leave this folder, so that going back again lands on it.
-      const leaving = this.current?.name;
-      await this.open(entry.loc, { record: false, focusName: entry.focus });
-      if (this.error === null) {
-        pushStep(to, { loc: here, focus: leaving });
-        if (skipped.length > 0) this.notice = `Skipped “${skipped.join("”, “")}”: it is no longer available.`;
-        return;
+      const entry = from[from.length - 1];
+      let entries: Entry[];
+      try {
+        entries = await api.listDir(entry.loc);
+      } catch (e) {
+        // The user went somewhere else meanwhile: that wins, and the history
+        // it replaced is not walked any further.
+        if (this.location !== here) return;
+        if (!GONE.has(errorKind(e) ?? "")) {
+          report();
+          this.error = errorMessage(e);
+          return;
+        }
+        from.pop();
+        skipped.push(this.nameOf(entry.loc));
+        continue;
       }
-      skipped.push(this.nameOf(entry.loc));
-      this.error = null;
+      if (this.location !== here) return;
+      from.pop();
+      await this.open(entry.loc, { record: false, focusName: entry.focus, entries });
+      pushStep(to, { loc: here, focus: leaving });
+      report();
+      return;
     }
-    this.error = error;
-    if (skipped.length > 0) this.notice = `Skipped “${skipped.join("”, “")}”: it is no longer available.`;
+    report();
   }
 
   /** A short name for a folder, for notices. */

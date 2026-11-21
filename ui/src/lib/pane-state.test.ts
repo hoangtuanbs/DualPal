@@ -485,7 +485,7 @@ describe("UI-UNIT-017 PaneState back and forward", () => {
     const server: Location = { fs: "conn:box", path: "/srv" };
     const real = api.listDir;
     vi.spyOn(api, "listDir").mockImplementation((loc: Location) =>
-      loc.fs === "conn:box" ? Promise.reject({ kind: "disconnected", message: "not connected" }) : real(loc),
+      loc.fs === "conn:box" ? Promise.reject({ kind: "unknownFileSystem", message: "unknown file system: conn:box" }) : real(loc),
     );
     try {
       const p = new PaneState();
@@ -496,6 +496,72 @@ describe("UI-UNIT-017 PaneState back and forward", () => {
       expect(p.location).toEqual(at("/a"));
       expect(p.notice).toContain("“srv”");
       expect(p.canBack).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps a folder that fails for another reason, and shows that error", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", folders("/a", "/b", "/c"));
+    const real = api.listDir;
+    let denied = false;
+    vi.spyOn(api, "listDir").mockImplementation((loc: Location) =>
+      denied && loc.path === "/b"
+        ? Promise.reject({ kind: "permissionDenied", message: "permission denied: /b" })
+        : real(loc),
+    );
+    try {
+      const p = new PaneState();
+      await p.open(at("/a"));
+      await p.open(at("/b"));
+      await p.open(at("/c"));
+      denied = true;
+
+      await p.back();
+      expect(p.location).toEqual(at("/c"));
+      expect(p.error).toBe("permission denied: /b");
+      expect(p.notice).toBeNull();
+
+      // Once it can be read again, back still goes there.
+      denied = false;
+      await p.back();
+      expect(p.location).toEqual(at("/b"));
+      expect(p.error).toBeNull();
+      await p.back();
+      expect(p.location).toEqual(at("/a"));
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("stops going back when the user opens another folder meanwhile", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", folders("/a", "/b", "/c", "/d"));
+    const real = api.listDir;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let hold = false;
+    vi.spyOn(api, "listDir").mockImplementation(async (loc: Location) => {
+      if (hold && loc.path === "/b") {
+        await held;
+        throw { kind: "notFound", message: "not found: /b" };
+      }
+      return real(loc);
+    });
+    try {
+      const p = new PaneState();
+      await p.open(at("/a"));
+      await p.open(at("/b"));
+      await p.open(at("/c"));
+      hold = true;
+
+      const step = p.back();
+      await p.open(at("/d")); // the user picks a folder while /b is still loading
+      release();
+      await step;
+      expect(p.location).toEqual(at("/d"));
+      expect(p.notice).toBeNull();
     } finally {
       vi.restoreAllMocks();
     }
