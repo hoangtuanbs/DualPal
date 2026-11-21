@@ -4,6 +4,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { exit, relaunch } from "@tauri-apps/plugin-process";
 import { installMockBackend, type MockHandle } from "../../tests/mock-backend";
 import { ABOUT } from "./about";
+import { api } from "./api";
 import {
   activeOperationCount,
   compareVersions,
@@ -101,7 +102,7 @@ describe("updates store", () => {
     mock.setSettings({ editor: null, diffTool: null, lastUpdateCheck: NOW - 60_000 });
     await updates.checkAutomatically(NOW);
     expect(check).not.toHaveBeenCalled();
-    expect(mock.lastCall("save_settings")).toBeUndefined();
+    expect(mock.lastCall("update_settings")).toBeUndefined();
   });
 
   it("records the check time and offers a release found at start-up", async () => {
@@ -111,9 +112,8 @@ describe("updates store", () => {
 
     await updates.checkAutomatically(NOW);
 
-    expect(mock.lastCall("save_settings")).toEqual({
-      settings: { editor: "/bin/ed", diffTool: null, lastUpdateCheck: NOW },
-    });
+    expect(mock.lastCall("update_settings")).toEqual({ patch: { lastUpdateCheck: NOW } });
+    expect(await api.settings()).toEqual({ editor: "/bin/ed", diffTool: null, lastUpdateCheck: NOW });
     expect(updates.phase).toBe("available");
     expect(updates.update?.version).toBe("0.2.0");
   });
@@ -335,7 +335,7 @@ describe("release notice from GitHub", () => {
 
     expect(updates.autoCheck).toBe(false);
     expect(mock.calls("latest_release")).toHaveLength(0);
-    expect(mock.lastCall("save_settings")).toBeUndefined();
+    expect(mock.lastCall("update_settings")).toBeUndefined();
   });
 
   it("announces a newer release found by the automatic check", async () => {
@@ -356,9 +356,7 @@ describe("release notice from GitHub", () => {
 
     await updates.skip();
     expect(updates.dismissed).toBe(true);
-    expect(mock.lastCall("save_settings")).toEqual({
-      settings: { editor: null, diffTool: null, lastUpdateCheck: null, skippedVersion: "0.3.0" },
-    });
+    expect(mock.lastCall("update_settings")).toEqual({ patch: { skippedVersion: "0.3.0" } });
 
     await updates.checkAutomatically(NOW);
     expect(mock.calls("latest_release")).toHaveLength(2);
@@ -392,12 +390,27 @@ describe("release notice from GitHub", () => {
     expect(updates.dismissed).toBe(true);
   });
 
+  // UI-UNIT-028 — the update check writes only its own fields, so a Settings
+  // change made while it runs is kept.
+  it("UI-UNIT-028 keeps a Settings change made while the automatic check runs", async () => {
+    mock.setSettings({ editor: "/bin/ed", diffTool: null, lastUpdateCheck: NOW - DAY - 1 });
+    vi.mocked(check).mockResolvedValue(null);
+    const running = updates.checkAutomatically(NOW);
+    // The check has read the settings; the Settings screen changes one now.
+    await api.updateSettings({ theme: "dark" });
+    await running;
+    await updates.setAutoCheck(false);
+    expect(mock.calls("save_settings")).toEqual([]);
+    expect(await api.settings()).toEqual({ editor: "/bin/ed", diffTool: null, lastUpdateCheck: NOW, theme: "dark", updateChecks: false });
+  });
+
   it("saves the automatic check switch", async () => {
     mock.setSettings({ editor: "/bin/ed", diffTool: null });
 
     await updates.setAutoCheck(false);
     expect(updates.autoCheck).toBe(false);
-    expect(mock.lastCall("save_settings")).toEqual({ settings: { editor: "/bin/ed", diffTool: null, updateChecks: false } });
+    expect(mock.lastCall("update_settings")).toEqual({ patch: { updateChecks: false } });
+    expect(await api.settings()).toEqual({ editor: "/bin/ed", diffTool: null, updateChecks: false });
 
     await updates.setAutoCheck(true);
     expect(updates.autoCheck).toBe(true);

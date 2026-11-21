@@ -256,6 +256,10 @@ const handlers: Record<string, Handler> = {
     s.scenario.settings = a.settings;
     return null;
   },
+  update_settings: (a, s) => {
+    s.scenario.settings = { ...s.scenario.settings, ...a.patch };
+    return s.scenario.settings;
+  },
   operations: (_a, s) => [...s.operations.values()],
   activity: (_a, s) => s.scenario.activity,
   activity_insights: (_a, s) =>
