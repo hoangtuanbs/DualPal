@@ -19,6 +19,8 @@
     nameOf = (fs: string) => fs,
     onclose,
     onexternal,
+    onsaved,
+    onpending,
   }: {
     left: Location;
     right: Location;
@@ -27,6 +29,10 @@
     onclose: () => void;
     /** Open the two files in the external compare app. */
     onexternal?: (left: Location, right: Location) => Promise<void>;
+    /** A side was saved to its file. */
+    onsaved?: () => void;
+    /** Whether there are unsaved changes or a copy or save is running. */
+    onpending?: (pending: boolean) => void;
   } = $props();
 
   const lineHeight = 18;
@@ -276,7 +282,9 @@
     const s = diff;
     if (!s) return false;
     const i = side === "left" ? 0 : 1;
-    return run(() => diffApi.save(s.session, side), `Saved ${fileName((i ? right : left).path)}.`);
+    const ok = await run(() => diffApi.save(s.session, side), `Saved ${fileName((i ? right : left).path)}.`);
+    if (ok) onsaved?.();
+    return ok;
   }
 
   async function setOption(key: keyof DiffOptions, value: boolean) {
@@ -306,7 +314,13 @@
 
   const dirty = $derived(!!diff && (diff.sides[0].dirty || diff.sides[1].dirty));
 
+  $effect(() => {
+    onpending?.(dirty || busy);
+  });
+
   function requestClose() {
+    // A copy or save still running may be about to make a side dirty.
+    if (busy) return;
     if (dirty) confirming = true;
     else onclose();
   }

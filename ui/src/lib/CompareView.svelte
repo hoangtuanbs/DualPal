@@ -26,6 +26,7 @@
     onsavefavorite,
     oncomparefiles,
     paused = false,
+    refresh = 0,
   }: {
     left: Location;
     right: Location;
@@ -39,6 +40,9 @@
     oncomparefiles: (left: Location, right: Location) => Promise<void>;
     /** Another window (the file compare view) is open over this one: keys are its own. */
     paused?: boolean;
+    /** Bumped when files were saved elsewhere (the file compare view): the
+     *  plan and its overrides are stale, so compare again. */
+    refresh?: number;
   } = $props();
 
   // svelte-ignore state_referenced_locally
@@ -161,6 +165,14 @@
       off2?.();
       if (loading) api.cancelCompare();
     };
+  });
+
+  // svelte-ignore state_referenced_locally
+  let planned = refresh;
+  $effect(() => {
+    if (refresh === planned) return;
+    planned = refresh;
+    untrack(run);
   });
 
   function swap() {

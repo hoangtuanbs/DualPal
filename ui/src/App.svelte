@@ -118,10 +118,14 @@
   let importing = $state(false);
 
   let operations = $state<OperationInfo[]>([]);
-  // An update waits for queued and running file operations, and for saves
-  // of files edited on a server that are still uploading.
+  // An update waits for queued and running file operations, for saves
+  // of files edited on a server that are still uploading, and for the
+  // compare view's unsaved changes or running save.
   updates.setBusyCheck(
-    () => activeOperationCount(operations) + editSessions.filter((s) => s.status === "uploading").length,
+    () =>
+      activeOperationCount(operations) +
+      editSessions.filter((s) => s.status === "uploading").length +
+      (diffing && diffPending ? 1 : 0),
   );
   let activity = $state<ActivityRecord[]>([]);
   /** The request behind each operation id, so a failed one can be retried. */
@@ -159,6 +163,10 @@
   let viewing = $state<{ location: Location; entry: Entry } | null>(null);
   /** The two files in the built-in compare view. */
   let diffing = $state<{ left: Location; right: Location } | null>(null);
+  /** The compare view has unsaved changes or a copy or save running. */
+  let diffPending = $state(false);
+  /** Saves made in the compare view; Compare & Sync plans again on each. */
+  let diffSaves = $state(0);
   /** Compare Files opens the external compare app instead (a setting). */
   let externalCompare = $state(false);
   let aboutPage = $state<"about" | "donate" | null>(null);
@@ -1721,6 +1729,7 @@
     onclose={() => (comparing = null)}
     onsavefavorite={saveSync}
     paused={!!diffing}
+    refresh={diffSaves}
     oncomparefiles={openCompare}
   />
 {/if}
@@ -1778,7 +1787,15 @@
 {/if}
 
 {#if diffing}
-  <DiffView left={diffing.left} right={diffing.right} {nameOf} onclose={() => (diffing = null)} onexternal={(l, r) => api.compareFiles(l, r)} />
+  <DiffView
+    left={diffing.left}
+    right={diffing.right}
+    {nameOf}
+    onpending={(p) => (diffPending = p)}
+    onclose={() => (diffing = null)}
+    onsaved={() => diffSaves++}
+    onexternal={(l, r) => api.compareFiles(l, r)}
+  />
 {/if}
 
 {#if showInsights}

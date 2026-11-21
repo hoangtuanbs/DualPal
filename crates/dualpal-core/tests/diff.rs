@@ -1,4 +1,4 @@
-//! The built-in file compare view's core (DIFF-010…021): line diffs and
+//! The built-in file compare view's core (DIFF-010…023): line diffs and
 //! their options, intra-line changes, binary files, the size limit, copying
 //! changes and saving through the file system.
 
@@ -537,4 +537,80 @@ async fn lossy_sides_are_not_saved() {
     );
     assert_eq!(state.sides[0].encoding, Encoding::Windows1252);
     assert!(state.sides[0].saveable);
+}
+
+/// DIFF-022 — a same-size edit that keeps the modification time (a coarse
+/// server clock) is still caught before saving over it.
+#[tokio::test]
+async fn same_size_edit_with_same_time_is_not_overwritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("a.txt");
+    std::fs::write(&path, "one\ntwo\n").unwrap();
+    let when = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let local: Arc<dyn FileSystem> = Arc::new(LocalFs::new());
+    let server = mem(&[("/b.txt", b"one\n2\n")]);
+    let s = DiffSessions::default();
+    let state = text_state(
+        s.open(
+            1,
+            (local, path.to_string_lossy().into_owned()),
+            at(&server, "/b.txt"),
+            NONE,
+            [None, None],
+        )
+        .await
+        .unwrap(),
+    );
+    let state = s
+        .apply(state.session, state.revision, 0, Side::Left)
+        .await
+        .unwrap();
+    // Someone else edits it: same size, same modification time.
+    std::fs::write(&path, "one\nTWO\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+    let err = s.save(state.session, Side::Left).await.unwrap_err();
+    assert!(err.to_string().contains("changed since"), "{err}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\nTWO\n");
+}
+
+/// DIFF-023 — a side that is a symbolic link is not saved: the link would
+/// be replaced by a plain file and its target left as it was.
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_side_is_not_saved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("target.txt");
+    let link = tmp.path().join("link.txt");
+    std::fs::write(&target, "one\ntwo\n").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let local: Arc<dyn FileSystem> = Arc::new(LocalFs::new());
+    let server = mem(&[("/b.txt", b"one\n2\n")]);
+    let s = DiffSessions::default();
+    let state = text_state(
+        s.open(
+            1,
+            (local, link.to_string_lossy().into_owned()),
+            at(&server, "/b.txt"),
+            NONE,
+            [None, None],
+        )
+        .await
+        .unwrap(),
+    );
+    let state = s
+        .apply(state.session, state.revision, 0, Side::Left)
+        .await
+        .unwrap();
+    let err = s.save(state.session, Side::Left).await.unwrap_err();
+    assert!(err.to_string().contains("link"), "{err}");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "one\ntwo\n");
 }
