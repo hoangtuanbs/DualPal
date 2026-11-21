@@ -739,6 +739,13 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-014 | `PaneState.navigated` hook fires (linked browsing) | P1 | |
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
+| UI-UNIT-030 | viewer `encoding.ts` | P0 | decode/encode each encoding, € in Windows-1252, unmappable → null, hex search terms |
+| UI-UNIT-031 | viewer `layout.ts` | P0 | lines, CR, empty lines; long lines cut without splitting UTF-8 and numbered once; UTF-16 after a BOM; wrap; up and down agree on a 1 GB source and read only near the place |
+| UI-UNIT-032 | viewer `PagedSource` | P0 | joins pages, reads each once, shares a fetch on its way, evicts, retries a failed page |
+| UI-UNIT-034 | `TextView` | P0 | 1 GB source: PageDown/arrows/wheel/End/Home read only around the screen; line numbers counted after End; scroll to offset + highlight; wrap and line-number toggles; encoding switch |
+| UI-UNIT-035 | `HexView` | P1 | offset / 16 bytes / ASCII columns; End/Home; highlight and scroll to offset |
+| UI-UNIT-036 | `Viewer` | P0 | opens through `viewer_open`; 1/2/3 and buttons switch modes; images show as images; binary opens in hex; reads only the pages on screen; find beyond the loaded pages with next/previous (Enter, F3, Shift F3); hex search; Esc closes find, then the viewer; F3 closes; open error |
+| UI-UNIT-037 | viewer api argument names | P0 | every `viewer_*` call's exact argument object |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
 | UI-CMP-003 | `CommandPalette` fuzzy filter, arrow keys, Enter runs, lists servers/favorites/syncs | P0 | |
@@ -793,6 +800,8 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-KEY-028 | Ctrl/⌘ Shift L | linked browsing toggles; entering folder in one pane enters same name in other |
 | UI-KEY-029 | shortcuts ignored while typing in an input/editor | F5 inside rename prompt does not copy |
 | UI-KEY-030 | shortcuts disabled while auto-sync locks panes (`frozen`) | F5/F6/F8 make no calls |
+| UI-KEY-040 | F3 | viewer opens on the cursor file (`viewer_open`), Esc and F3 close it (`viewer_close`); nothing on a folder |
+| UI-KEY-041 | 1 / 2 / 3, Ctrl/⌘ F, F3 / Shift F3 in the viewer | text/hex switch (3 needs media); find focuses the field; Enter/F3 next, Shift F3 previous (`viewer_search` backward); Esc closes find, then the viewer |
 
 **Mouse**
 
@@ -845,6 +854,8 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-E2E-028 | narrow window (800×480 min size): names readable, toolbar wraps, no horizontal scroll in panes | P1 | |
 | UI-E2E-029 | Windows path scenario: `C:\Users\…` breadcrumbs and parent navigation | P1 | scenario "windows-paths" |
 | UI-E2E-030 | 5 000 entries render and scroll; cursor End reaches last | P1 | |
+| UI-E2E-040 | *View* in the item menu and the command palette opens the viewer | P1 | |
+| UI-E2E-041 | the viewer has no serious axe violations in text and hex view | P1 | |
 | UI-E2E-031 | unsaved state survives nothing unexpected: reload restores favorites/servers from backend, not localStorage | P2 | |
 
 ### 8.15 Full-stack desktop E2E — `DESK` (L7)

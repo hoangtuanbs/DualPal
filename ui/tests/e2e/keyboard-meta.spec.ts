@@ -21,6 +21,8 @@ const COVERED_BY: Record<string, string> = {
   "Menu key / Shift F10": "UI-KEY-008",
   "F2": "UI-KEY-009",
   "Shift F2": "UI-KEY-010",
+  "F3": "UI-KEY-040",
+  "1 / 2 / 3, Ctrl/⌘ F, F3 / Shift F3 (in the viewer)": "UI-KEY-041",
   "F4": "UI-KEY-011",
   "F5 / F6": "UI-KEY-012", // F6: UI-KEY-013
   "F7": "UI-KEY-014",
