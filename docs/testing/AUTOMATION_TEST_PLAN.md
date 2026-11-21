@@ -730,6 +730,8 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-013 | `PaneState` folder disappears → nearest existing ancestor | P0 | mock: listDir(notFound) for `/a/b/c`, `/a/b` → opens `/a`; error message shown |
 | UI-UNIT-014 | `PaneState.navigated` hook fires (linked browsing) | P1 | |
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
+| UI-UNIT-019 | archive names recognised (`isArchiveName`, `archiveStem`) | P1 | |
+| UI-UNIT-020 | `PaneState` enters an archive on activate, leaves it from the top onto the archive, closes it once no pane shows it, nested archives return to the outer one, damaged archive → error | P0 | |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
@@ -838,6 +840,8 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-E2E-029 | Windows path scenario: `C:\Users\…` breadcrumbs and parent navigation | P1 | scenario "windows-paths" |
 | UI-E2E-030 | 5 000 entries render and scroll; cursor End reaches last | P1 | |
 | UI-E2E-031 | unsaved state survives nothing unexpected: reload restores favorites/servers from backend, not localStorage | P2 | |
+| UI-E2E-032 | Enter on a zip opens it in the pane (`open_archive`), crumbs start at the folder holding it, Backspace at its top returns with the cursor on the archive and calls `close_archive` | P1 | |
+| UI-E2E-033 | F5 in an archive copies out to the other pane; context menu "Extract Here" / "Extract to …" copy the archive's top; F7 inside an archive says read-only | P1 | |
 
 ### 8.15 Full-stack desktop E2E — `DESK` (L7)
 
@@ -1167,7 +1171,7 @@ cargo insta review
 | About / Donate / Email | UI-UNIT-016, UI-CMP-013, UI-E2E-027, CMD-011/012 |
 | Favorites (local, server, sync) | PLC-*, CON-004, SYNC-013, CMD-010/019/029, UI-E2E-007/013/017, DESK-006 |
 | Windows / WSL specifics | VFS-LOC-002/005/006, VFS-WSL-*, UI-E2E-029, DESK-018 |
-| Archives as folders | VFS-ARC-*, CMD-041, UI-UNIT-ARC-* |
+| Archives as folders | VFS-ARC-*, CMD-041, UI-UNIT-019/020, UI-E2E-032/033 |
 | Installers & release | INS-* |
 
 ### 11.4 Definition of done for the whole plan
