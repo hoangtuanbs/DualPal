@@ -168,3 +168,49 @@ async fn overwrite_restores_the_old_file_when_the_rename_fails() {
         .collect();
     assert_eq!(names, ["doc.txt"], "no temporary files are left");
 }
+
+/// OPS-COPY-020 — if the old file cannot be put back either, the error
+/// names the hidden name it was left under, and it is still there.
+#[tokio::test]
+async fn overwrite_reports_where_the_old_file_was_left() {
+    use dualpal_core::Error;
+    use dualpal_testkit::FaultOp;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("doc.txt");
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    std::fs::write(&src, "new").unwrap();
+    std::fs::write(dst.join("doc.txt"), "old").unwrap();
+
+    let remote = Arc::new(FaultyFs::with_id(LocalFs::new(), "remote"));
+    remote.set_rename_replaces(false);
+    // The third rename (part to doc.txt) fails, then so does the fourth
+    // (aside back to doc.txt).
+    remote.fail_later(
+        FaultOp::Rename,
+        2,
+        Error::PermissionDenied("doc.txt".into()),
+    );
+    remote.fail_later(FaultOp::Rename, 0, Error::Connection("lost".into()));
+    let q = setup(&remote);
+    let id = q.enqueue(copy(
+        &src.to_string_lossy(),
+        &dst.to_string_lossy(),
+        ConflictPolicy::Overwrite,
+    ));
+    let info = q.wait(id).await.unwrap();
+
+    assert_eq!(info.status, OperationStatus::Failed);
+    let err = info.error.unwrap();
+    assert_eq!(err.kind, "permissionDenied");
+    let aside: Vec<_> = std::fs::read_dir(&dst)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), "old");
+    let name = aside[0].file_name().unwrap().to_string_lossy().into_owned();
+    assert!(err.message.contains(&name), "{}", err.message);
+    assert!(err.message.contains("lost"), "{}", err.message);
+}

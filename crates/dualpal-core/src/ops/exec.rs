@@ -794,7 +794,8 @@ fn part_path(fs: &Fs, dst: &str) -> String {
 /// Rename `from` onto the existing file `to`. Where the backend's rename
 /// will not replace a file (some servers), the old file is moved aside
 /// first, removed once the new one is in place, and put back if the new
-/// one cannot be.
+/// one cannot be. If it cannot be put back either, the error says where
+/// it was left.
 async fn rename_over(fs: &Fs, from: &str, to: &str) -> Result<()> {
     let first = match fs.rename(from, to).await {
         Ok(()) => return Ok(()),
@@ -811,10 +812,18 @@ async fn rename_over(fs: &Fs, from: &str, to: &str) -> Result<()> {
             let _ = fs.remove_file(&aside).await;
             Ok(())
         }
-        Err(e) => {
-            let _ = fs.rename(&aside, to).await;
-            Err(e)
-        }
+        Err(e) => match fs.rename(&aside, to).await {
+            Ok(()) => Err(e),
+            Err(back) => Err(Error::Several(vec![
+                e,
+                Error::Io {
+                    path: aside,
+                    source: std::io::Error::other(format!(
+                        "the old {to} was left here and could not be put back ({back})"
+                    )),
+                },
+            ])),
+        },
     }
 }
 
