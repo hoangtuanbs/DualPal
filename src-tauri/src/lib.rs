@@ -3,6 +3,7 @@
 //! Commands are thin wrappers around the core; operation progress is pushed
 //! to the UI as `operation-updated` events.
 
+mod archive;
 mod commands;
 mod remote;
 mod tools;
@@ -21,6 +22,7 @@ use dualpal_core::rename::RenamePresets;
 use dualpal_core::settings::SettingsStore;
 use dualpal_core::sync::{SyncEngine, SyncFavorites};
 use dualpal_core::vault::ProtectedSecrets;
+use dualpal_core::vfs::Archives;
 use dualpal_core::{ActivityLog, CancellationToken, OperationQueue, Registry};
 use tauri::{Emitter, Manager};
 
@@ -60,6 +62,10 @@ pub struct AppState {
     pub folder_size_cancel: Mutex<HashMap<u64, CancellationToken>>,
     /// Name searches that are running, by request id.
     pub find_cancel: Mutex<HashMap<u64, CancellationToken>>,
+    /// Archives open as folders, with their downloads and unpacked tars.
+    pub archives: Archives,
+    /// Archives being opened, by request id.
+    pub archive_cancel: Mutex<HashMap<u64, CancellationToken>>,
 }
 
 /// Build the whole application state on `dirs`. The shell calls this with the
@@ -100,6 +106,8 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
     let live = LiveSync::new(sync.clone(), queue.clone());
     let sync_favorites = SyncFavorites::open(data_dir.join("syncs.json"));
     let rename_presets = RenamePresets::open(data_dir.join("rename-presets.json"));
+    // Like previews, archive copies are only useful for one run.
+    let archives = Archives::new(registry.clone(), queue.clone(), cache_dir.join("archives"));
 
     Ok(AppState {
         registry,
@@ -118,6 +126,8 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
         compare_cancel: Mutex::new(None),
         folder_size_cancel: Mutex::new(HashMap::new()),
         find_cancel: Mutex::new(HashMap::new()),
+        archives,
+        archive_cancel: Mutex::new(HashMap::new()),
     })
 }
 
@@ -131,6 +141,12 @@ pub fn spawn_event_forwarders<R: tauri::Runtime>(app: &tauri::AppHandle<R>, stat
         loop {
             match rx.recv().await {
                 Ok(info) => {
+                    // Archives closed while an operation used them close now.
+                    if info.status.is_finished() {
+                        if let Some(state) = handle.try_state::<AppState>() {
+                            state.archives.reap();
+                        }
+                    }
                     let _ = handle.emit("operation-updated", info);
                 }
                 Err(RecvError::Lagged(_)) => continue,
@@ -243,6 +259,9 @@ pub const COMMANDS: &[&str] = &[
     "diff_tools",
     "compare_files",
     "activity_insights",
+    "open_archive",
+    "cancel_open_archive",
+    "close_archive",
 ];
 
 /// The single `generate_handler!` list, shared by the app and the tests.
@@ -320,6 +339,9 @@ macro_rules! all_commands {
             tools::diff_tools,
             tools::compare_files,
             tools::activity_insights,
+            archive::open_archive,
+            archive::cancel_open_archive,
+            archive::close_archive,
         ]
     };
 }
@@ -425,6 +447,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(all_commands!())
-        .run(tauri::generate_context!())
-        .expect("error while running Dual Pal");
+        .build(tauri::generate_context!())
+        .expect("error while running Dual Pal")
+        .run(|app, event| {
+            // Remove downloaded and unpacked archives.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.archives.close_all();
+                }
+            }
+        });
 }
