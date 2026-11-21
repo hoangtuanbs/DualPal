@@ -317,3 +317,39 @@ async fn unknown_checksum_file_is_not_found() {
     .unwrap_err();
     assert_eq!(err.kind(), "notFound");
 }
+
+/// Replacing a checksum file goes through a temporary sibling, so a save that
+/// fails part way leaves the old file as it was.
+#[tokio::test]
+async fn failed_overwrite_keeps_the_old_checksum_file() {
+    use dualpal_testkit::{FaultyFs, MemFs};
+    let mem = MemFs::new("mem");
+    mem.seed_dir("/d");
+    mem.seed_file("/d/SUMS.md5", "old contents\n");
+    let fs = Arc::new(FaultyFs::with_id(mem, "mem"));
+    let registry = Registry::new();
+    registry.register(fs.clone());
+    let folder = Location::new("mem", "/d");
+    let entries = vec![checksum::ChecksumEntry {
+        path: "a.txt".into(),
+        hash: Some(MD5_ABC.into()),
+        error: None,
+    }];
+
+    fs.fail_write_after(4);
+    let err = checksum::write_file(
+        &registry,
+        &folder,
+        "SUMS.md5",
+        Algorithm::Md5,
+        &entries,
+        true,
+    )
+    .await;
+    assert!(err.is_err());
+    fs.heal_writes();
+    let text = dualpal_core::vfs::read_text(fs.as_ref(), "/d/SUMS.md5", 1024)
+        .await
+        .unwrap();
+    assert_eq!(text.text, "old contents\n");
+}

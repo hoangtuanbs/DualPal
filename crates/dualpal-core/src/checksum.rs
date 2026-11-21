@@ -459,6 +459,12 @@ pub async fn write_file(
         return Err(Error::AlreadyExists(path));
     }
     let text = format_lines(entries);
+    if fs.exists(&path).await? {
+        // Replacing a checksum file: write a temporary sibling and rename it
+        // over the old one, so a failed save never leaves it half-written.
+        crate::vfs::write_text(fs.as_ref(), &path, &text).await?;
+        return Ok(Location::new(folder.fs.clone(), path));
+    }
     let mut writer = fs.open_write(&path).await?;
     writer
         .write_all(text.as_bytes())
