@@ -28,7 +28,7 @@
   let box: HTMLDivElement | undefined = $state();
   let height = $state(0);
   const LINE = 18;
-  const visible = $derived(fixedRows ?? (height > 0 ? Math.max(1, Math.floor(height / LINE)) : 30));
+  const visible = $derived(fixedRows ?? (height > 0 ? Math.max(1, Math.floor((height - 4) / LINE)) : 30));
   const totalRows = $derived(Math.max(1, Math.ceil(source.size / BYTES_PER_ROW)));
   const maxTop = $derived(Math.max(0, totalRows - visible));
   const digits = $derived(Math.max(8, Math.ceil(Math.log2(Math.max(2, source.size)) / 4)));
