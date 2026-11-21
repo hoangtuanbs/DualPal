@@ -440,7 +440,9 @@ pub fn parse_lines(text: &str, algorithm: Algorithm) -> Result<Vec<ChecksumLine>
 /// Write the checksum file `file_name` in `folder`, holding the hashes in
 /// `entries`. The name always ends with the extension of `algorithm`: a
 /// checksum extension already on the name is replaced. With `overwrite` off,
-/// an existing file gives [`Error::AlreadyExists`]. Returns the new file.
+/// an existing file gives [`Error::AlreadyExists`]; with it on, the old file
+/// is replaced through a temporary sibling, so a failed save keeps it whole.
+/// Returns the new file.
 pub async fn write_file(
     registry: &Registry,
     folder: &Location,
@@ -455,11 +457,11 @@ pub async fn write_file(
         return Err(Error::Invalid(format!("not a file name: {file_name}")));
     }
     let path = fs.join(&folder.path, &name);
-    if !overwrite && fs.exists(&path).await? {
-        return Err(Error::AlreadyExists(path));
-    }
     let text = format_lines(entries);
     if fs.exists(&path).await? {
+        if !overwrite {
+            return Err(Error::AlreadyExists(path));
+        }
         // Replacing a checksum file: write a temporary sibling and rename it
         // over the old one, so a failed save never leaves it half-written.
         crate::vfs::write_text(fs.as_ref(), &path, &text).await?;
