@@ -842,9 +842,10 @@ impl FileSystem for FtpFs {
         self.open_read_at(path, 0).await
     }
 
-    /// REST before RETR starts the download at the offset.
+    /// REST before RETR starts the download at the offset. A server that
+    /// did not announce REST is read from the start instead.
     fn seekable_reads(&self) -> bool {
-        true
+        self.rest
     }
 
     async fn open_read_at(&self, path: &str, offset: u64) -> Result<Reader> {
