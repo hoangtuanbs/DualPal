@@ -40,7 +40,10 @@
 
   $effect(() => {
     const el = box;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!el) return;
+    // Measure now too: the first observer callback can come late (WebKit).
+    height = el.clientHeight;
+    if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => (height = el.clientHeight));
     ro.observe(el);
     return () => ro.disconnect();
@@ -52,6 +55,11 @@
       lastSource = source;
       top = 0;
     }
+  });
+
+  // A taller screen moves the top up rather than show empty rows after the end.
+  $effect(() => {
+    if (top > maxTop) top = maxTop;
   });
 
   $effect(() => {

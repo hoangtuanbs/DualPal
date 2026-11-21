@@ -50,6 +50,21 @@ describe("UI-UNIT-034 TextView pages through big files", () => {
     await waitFor(() => expect(rowsText()[0]).toBe(label(1)));
   });
 
+  it("keeps the end at the bottom when the screen grows after End", async () => {
+    const src = bigSource(1000);
+    const { rerender } = render(TextView, { source: src, encoding: "utf-8", rows: 5 });
+    await waitFor(() => expect(rowsText()[0]).toBe(label(1)));
+    await fireEvent.keyDown(screen.getByTestId("text-view"), { key: "End" });
+    await waitFor(() => expect(rowsText()[0]).toBe(label(996)));
+    await rerender({ rows: 9 });
+    await waitFor(() => expect(rowsText()).toHaveLength(9));
+    expect(rowsText()[0]).toBe(label(992));
+    expect(rowsText().at(-1)).toBe(label(1000));
+    // A file shorter than the screen still starts at the top.
+    await rerender({ source: bigSource(3) });
+    await waitFor(() => expect(rowsText()).toEqual([label(1), label(2), label(3)]));
+  });
+
   it("scrolls to an offset and marks the highlight", async () => {
     const src = bigSource(1000);
     const { component, rerender } = render(TextView, { source: src, encoding: "utf-8", rows: 10 });
@@ -99,6 +114,16 @@ describe("UI-UNIT-035 HexView", () => {
     await waitFor(() => expect(hexRows()[1]).toMatch(/^00000060 90 91 92 93 \.\.\.\.$/));
     await fireEvent.keyDown(view, { key: "Home" });
     await waitFor(() => expect(hexRows()[0]).toMatch(/^00000000/));
+  });
+
+  it("keeps the last row at the bottom when the screen grows after End", async () => {
+    const { rerender } = render(HexView, { source: memorySource(new Uint8Array(160)), rows: 3 });
+    await fireEvent.keyDown(screen.getByTestId("hex-view"), { key: "End" });
+    await waitFor(() => expect(hexRows()[0]).toMatch(/^00000070/));
+    await rerender({ rows: 6 });
+    await waitFor(() => expect(hexRows()).toHaveLength(6));
+    expect(hexRows()[0]).toMatch(/^00000040/);
+    expect(hexRows().at(-1)).toMatch(/^00000090/);
   });
 
   it("marks the highlighted bytes and scrolls to an offset", async () => {
