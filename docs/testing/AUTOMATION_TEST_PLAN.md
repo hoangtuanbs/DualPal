@@ -730,6 +730,7 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-025 | `SettingsDialog` appearance applies to the document at once and saves through `update_settings` | P1 | |
 | UI-UNIT-026 | `SettingsDialog` panes and apps fields save; Esc closes | P1 | |
 | UI-UNIT-027 | `SettingsDialog` keyboard: record, conflict → Replace, reserved key note, Reset, Reset All | P1 | |
+| UI-UNIT-028 | the update check, About switch, Skip, Editor… and Compare App flows write only their fields (`update_settings`), so a Settings change made meanwhile is kept | P1 | |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
 | UI-CMP-003 | `CommandPalette` fuzzy filter, arrow keys, Enter runs, lists servers/favorites/syncs | P0 | |

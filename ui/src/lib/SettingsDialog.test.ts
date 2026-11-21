@@ -71,7 +71,7 @@ describe("SettingsDialog", () => {
     await user.tab();
     await waitFor(() => expect(lastPatch()).toEqual({ editor: "/usr/bin/code" }));
     await user.click(screen.getByTestId("settings-auto-update"));
-    await waitFor(() => expect(mock.lastCall("save_settings")).toMatchObject({ settings: { updateChecks: false } }));
+    await waitFor(() => expect(lastPatch()).toEqual({ updateChecks: false }));
 
     await user.keyboard("{Escape}");
     expect(onclose).toHaveBeenCalled();

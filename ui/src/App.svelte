@@ -792,13 +792,12 @@
       input: s.diffTool ?? diffTools[0]?.command ?? "",
       allowEmpty: true,
       confirmLabel: "Save",
-      onconfirm: (cmd) => api.saveSettings({ ...s, diffTool: cmd || null }).catch((e) => (notice = errorMessage(e))),
+      onconfirm: (cmd) => prefs.update({ diffTool: cmd || null }).catch((e) => (notice = errorMessage(e))),
     };
   }
 
   async function useDiffTool(t: DiffTool) {
-    const s = await api.settings();
-    await api.saveSettings({ ...s, diffTool: t.command }).catch((e) => (notice = errorMessage(e)));
+    await prefs.update({ diffTool: t.command }).catch((e) => (notice = errorMessage(e)));
   }
 
   /** Path segments, for comparing folder paths on any system. */
@@ -1024,7 +1023,7 @@
       input: s.editor ?? "",
       allowEmpty: true,
       confirmLabel: "Save",
-      onconfirm: (editor) => api.saveSettings({ ...s, editor: editor || null }).catch((e) => (notice = errorMessage(e))),
+      onconfirm: (editor) => prefs.update({ editor: editor || null }).catch((e) => (notice = errorMessage(e))),
     };
   }
 
