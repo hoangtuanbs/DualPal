@@ -64,6 +64,7 @@ fn tested_commands() -> HashSet<&'static str> {
         "edit_sessions",
         "stop_edit_session",
         "upload_edit_session",
+        "resolve_edit_conflict",
         "preview_path",
         "settings",
         "save_settings",
@@ -824,6 +825,15 @@ fn edit_sessions_and_stop() {
         &app,
         "upload_edit_session",
         json!({ "id": uuid::Uuid::new_v4().to_string() }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "notFound", "{err}");
+
+    // So does resolving a conflict on one.
+    let err = call::<Value>(
+        &app,
+        "resolve_edit_conflict",
+        json!({ "id": uuid::Uuid::new_v4().to_string(), "overwrite": false }),
     )
     .unwrap_err();
     assert_eq!(err["kind"], "notFound", "{err}");
