@@ -40,7 +40,8 @@ class Prefs {
       // A later change is on its way; its answer will include this one.
       if (seq === this.#seq) this.settings = saved;
     } catch (e) {
-      await this.load().catch(() => {});
+      // Read back only when no later change is on its way: its answer is newer.
+      if (seq === this.#seq) await this.load().catch(() => {});
       throw e;
     }
     applyAppearance(this.settings);

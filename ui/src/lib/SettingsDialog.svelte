@@ -43,6 +43,13 @@
 
   // svelte-ignore state_referenced_locally
   let section = $state<SettingsSection>(start);
+  // The dialog stays open when the app asks for another section (the macOS
+  // Settings menu): follow it.
+  $effect(() => {
+    section = start;
+    recording = null;
+    pending = null;
+  });
   let error = $state<string | null>(null);
 
   const sections: { id: SettingsSection; label: string }[] = [
@@ -249,7 +256,14 @@
           aria-selected={section === sec.id}
           class:current={section === sec.id}
           data-testid={`settings-tab-${sec.id}`}
-          onclick={() => (section = sec.id)}>{sec.label}</button
+          onclick={() => {
+            if (section === sec.id) return;
+            section = sec.id;
+            // A shortcut being recorded belongs to the Keyboard section.
+            recording = null;
+            pending = null;
+            keyNote = null;
+          }}>{sec.label}</button
         >
       {/each}
     </div>

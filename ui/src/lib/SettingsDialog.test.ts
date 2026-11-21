@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { installMockBackend, type MockHandle } from "../../tests/mock-backend";
 import SettingsDialog, { type KeyCommand } from "./SettingsDialog.svelte";
 import { applyAppearance, prefs } from "./prefs.svelte";
+import { api, type Settings } from "./api";
 
 const commands: KeyCommand[] = [
   { id: "copy", title: "Copy to Other Pane", group: "File" },
@@ -147,5 +148,45 @@ describe("SettingsDialog", () => {
     unmount();
     expect(document.activeElement).toBe(outside);
     outside.remove();
+  });
+
+  it("UI-UNIT-027 switching section stops recording, and the dialog follows the section asked for", async () => {
+    await prefs.load();
+    const onclose = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(SettingsDialog, { commands, mac: false, start: "keyboard", onclose });
+    await user.click(screen.getByRole("button", { name: "Add a shortcut for Swap Panes" }));
+    expect(within(keyRow("swap")).getByText("Press keys…")).toBeInTheDocument();
+    // Typing in Apps goes to the field, not to the shortcut.
+    await user.click(screen.getByRole("tab", { name: "Apps" }));
+    const before = mock.calls("update_settings").length;
+    await user.keyboard("{F9}");
+    expect(mock.calls("update_settings").length).toBe(before);
+    await user.click(screen.getByRole("tab", { name: "Keyboard" }));
+    expect(within(keyRow("swap")).queryByText("Press keys…")).toBeNull();
+    expect(within(keyRow("swap")).queryByText("F9")).toBeNull();
+
+    // The app asks for Appearance while the dialog is open.
+    await rerender({ commands, mac: false, start: "appearance", onclose });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument());
+  });
+
+  it("UI-UNIT-025 a failed save does not read back over a later change", async () => {
+    await prefs.load();
+    let fail!: (e: unknown) => void;
+    const spy = vi.spyOn(api, "updateSettings");
+    spy.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
+    spy.mockImplementationOnce(async (patch) => ({ ...prefs.settings, ...patch }) as Settings);
+    const read = vi.spyOn(api, "settings");
+    try {
+      const first = prefs.update({ theme: "dark" });
+      await prefs.update({ density: "compact" });
+      fail({ kind: "io", message: "disk full" });
+      await expect(first).rejects.toBeTruthy();
+      expect(read).not.toHaveBeenCalled();
+      expect(prefs.settings.density).toBe("compact");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

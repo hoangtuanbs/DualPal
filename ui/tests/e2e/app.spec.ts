@@ -24,6 +24,12 @@ test.describe("UI-E2E app shell", () => {
     await page.keyboard.press("Backspace");
     await expect(row(page, "left", "docs")).toBeVisible();
     await expect(row(page, "left", "readme.md")).toBeVisible();
+    // Ctrl+Shift+↑ goes up too, as Ctrl+↑ does.
+    await row(page, "left", "docs").dblclick();
+    await expect(row(page, "left", "notes.txt")).toBeVisible();
+    await page.keyboard.press("Control+Shift+ArrowUp");
+    await expect(row(page, "left", "docs")).toBeVisible();
+    await expect(row(page, "left", "notes.txt")).toHaveCount(0);
   });
 
   test("UI-KEY-014 F7 opens the new-folder dialog and closes it on OK", async ({ page }) => {
