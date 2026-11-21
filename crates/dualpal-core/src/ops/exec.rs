@@ -448,7 +448,13 @@ impl Job {
             let _ = dst_fs.set_mode(&part, mode).await;
         }
         if part != item.dst {
-            if let Err(e) = dst_fs.rename(&part, &item.dst).await {
+            // Only a file is moved aside; a folder in the way is never
+            // replaced by a rename.
+            let renamed = match existing {
+                Some(e) if !e.is_dir() => rename_over(dst_fs, &part, &item.dst).await,
+                _ => dst_fs.rename(&part, &item.dst).await,
+            };
+            if let Err(e) = renamed {
                 let _ = dst_fs.remove_file(&part).await;
                 return Err(e);
             }
@@ -783,6 +789,33 @@ fn part_path(fs: &Fs, dst: &str) -> String {
         format!(".dualpal-{tag}.part")
     };
     fs.join(&parent, &part)
+}
+
+/// Rename `from` onto the existing file `to`. Where the backend's rename
+/// will not replace a file (some servers), the old file is moved aside
+/// first, removed once the new one is in place, and put back if the new
+/// one cannot be.
+async fn rename_over(fs: &Fs, from: &str, to: &str) -> Result<()> {
+    let first = match fs.rename(from, to).await {
+        Ok(()) => return Ok(()),
+        Err(Error::Cancelled) => return Err(Error::Cancelled),
+        Err(e) => e,
+    };
+    // A temporary name like a partial copy's, so auto-sync ignores it too.
+    let aside = part_path(fs, to);
+    if fs.rename(to, &aside).await.is_err() {
+        return Err(first);
+    }
+    match fs.rename(from, to).await {
+        Ok(()) => {
+            let _ = fs.remove_file(&aside).await;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = fs.rename(&aside, to).await;
+            Err(e)
+        }
+    }
 }
 
 async fn make_dir(fs: &Fs, path: &str) -> Result<()> {
