@@ -48,6 +48,7 @@
   import { updates } from "./lib/updates.svelte";
   import { UPDATE_CHECK_DELAY_MS, UPDATE_RECHECK_POLL_MS, activeOperationCount } from "./lib/updates";
   import { SPLIT_DEFAULT, clampSplit, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
+  import { historyKey } from "./lib/history-keys";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -856,8 +857,8 @@
       { id: "evenPanes", group: "View", title: "Make Panes Equal Width", run: splitReset },
       { id: "same", group: "View", title: "Same Folder in Other Pane", run: sameFolderInOther },
       { id: "favorite", group: "Go", title: isFavorite ? "Remove Folder from Favorites" : "Add Folder to Favorites", run: toggleFavorite },
-      { id: "back", group: "Go", title: "Back", run: () => active.back() },
-      { id: "forward", group: "Go", title: "Forward", run: () => active.forward() },
+      { id: "back", group: "Go", title: "Go Back", shortcut: isMac ? "⌘[" : "Alt+←", run: () => active.back() },
+      { id: "forward", group: "Go", title: "Go Forward", shortcut: isMac ? "⌘]" : "Alt+→", run: () => active.forward() },
       { id: "up", group: "Go", title: "Enclosing Folder", shortcut: `${MOD}↑`, run: () => active.up() },
       { id: "insights", group: "Activity", title: "Activity Insights…", run: () => (showInsights = true) },
       { id: "about", group: "Help", title: "About Dual Pal", run: () => (aboutPage = "about") },
@@ -1313,6 +1314,12 @@
     }
     if (e.altKey && e.shiftKey && e.key === "Enter") {
       active.calculateSizes();
+      return handled();
+    }
+    const step = historyKey(e, isMac);
+    if (step) {
+      if (step === "back") active.back();
+      else active.forward();
       return handled();
     }
     switch (e.key) {
