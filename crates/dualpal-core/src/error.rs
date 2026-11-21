@@ -37,6 +37,25 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    /// Several items failed (an operation carried on past each failure).
+    /// Holds at least two errors; its kind is the first one's.
+    #[error("{} items failed: {}", .0.len(), list_errors(.0))]
+    Several(Vec<Error>),
+}
+
+/// The first few errors, then how many more.
+fn list_errors(errors: &[Error]) -> String {
+    const SHOWN: usize = 5;
+    let mut s = errors
+        .iter()
+        .take(SHOWN)
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if errors.len() > SHOWN {
+        s.push_str(&format!("; and {} more", errors.len() - SHOWN));
+    }
+    s
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -69,6 +88,17 @@ impl Error {
             Error::HostKeyChanged { .. } => "hostKeyChanged",
             Error::Locked => "locked",
             Error::Io { .. } => "io",
+            Error::Several(errors) => errors.first().map_or("io", Error::kind),
+        }
+    }
+
+    /// One error for a list of failures: `None` when empty, the error
+    /// itself when there is one, [`Error::Several`] otherwise.
+    pub fn combine(mut errors: Vec<Error>) -> Option<Error> {
+        match errors.len() {
+            0 => None,
+            1 => errors.pop(),
+            _ => Some(Error::Several(errors)),
         }
     }
 }
