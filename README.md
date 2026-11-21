@@ -99,6 +99,18 @@ npm run test:unit                    # L5 UI unit/component tests
 | Ctrl/⌘ Shift Y | Compare & Sync the folders of both panes |
 | Ctrl/⌘ Shift D | Compare two files in your compare app |
 | Ctrl/⌘ Shift L | Synchronized browsing on / off |
+| Ctrl/⌘ , | Settings (also in the command palette, and in the app menu on macOS) |
+
+These are the default keys. Any command in the command palette can get its own keys under **Settings → Keyboard**; the palette shows the keys in use.
+
+## Settings
+
+Open **Settings** with Ctrl/⌘ , (comma), the gear button in the toolbar, *Settings…* in the command palette, or *Dual Pal → Settings…* on macOS. Changes apply at once and are kept in `settings.json` in the app data folder.
+
+- **Appearance**: theme (follow the system, light or dark), text size (small, normal, large) and the height of the rows in the file lists (normal or compact).
+- **Panes**: show hidden files in every pane, which list view columns to show (Size, Date Modified), and what each pane opens at start: the home folder (the default), the folder it showed last, or a folder you choose. Only folders on this computer are remembered; a pane starts in the home folder when its folder is gone.
+- **Apps**: the editor used by Edit (F4), the compare app used by Compare Files, and whether to check for updates automatically. *Choose Editor…*, *Choose Compare App…* and the About window still work too.
+- **Keyboard**: every command of the command palette with its keys. Click a key, or **+** to add one, then press the new keys (Esc stops). A key another command already has asks before it moves over. **Reset** puts one command back on its default keys, **Reset All** all of them. The keys that move the cursor and mark items (arrows, Page Up/Down, Home, End, Enter, Space, Insert, Esc, the Menu key and Shift F10) cannot be changed.
 
 ## Servers (SFTP, FTP, WebDAV and S3)
 
@@ -169,7 +181,7 @@ Dual Pal looks for a new release at most once a day, a few seconds after it star
   Installs wait while file operations are running.
 - When neither is possible (no installer for this platform, or an install Dual Pal does not recognise), the bar offers **Download…**, which opens the release page.
 - **Skip this version** stops the automatic check from announcing that release; a newer one is announced as usual, and a manual check still shows it. **Later** hides the bar until the next check.
-- To turn the automatic check off, untick **Check for updates automatically** in the **About** window, or choose **Stop Checking for Updates Automatically** in the command palette.
+- To turn the automatic check off, untick **Check for updates automatically** in **Settings → Apps** or the **About** window, or choose **Stop Checking for Updates Automatically** in the command palette.
 
 Signed updates are read from `latest.json` on the newest GitHub release and verified against the public key built into the app, so only releases signed with the maintainer's key are installed that way. Set up signing (below) to use it; installer upgrades rely on GitHub's HTTPS and published digest instead.
 
