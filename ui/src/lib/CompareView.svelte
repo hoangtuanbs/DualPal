@@ -25,6 +25,7 @@
     onclose,
     onsavefavorite,
     oncomparefiles,
+    paused = false,
   }: {
     left: Location;
     right: Location;
@@ -36,6 +37,8 @@
     /** Save (or update) a sync favorite from the current settings. */
     onsavefavorite: (fav: SyncFavorite) => Promise<SyncFavorite | null>;
     oncomparefiles: (left: Location, right: Location) => Promise<void>;
+    /** Another window (the file compare view) is open over this one: keys are its own. */
+    paused?: boolean;
   } = $props();
 
   // svelte-ignore state_referenced_locally
@@ -269,6 +272,7 @@
   }
 
   function keydown(e: KeyboardEvent) {
+    if (paused) return;
     const t = e.target as HTMLElement;
     if (e.key === "Escape") {
       e.stopPropagation();

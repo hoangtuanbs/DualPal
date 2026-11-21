@@ -153,7 +153,8 @@ test.describe("UI-MOUSE mouse", () => {
     await row(page, "left", "c.txt").click({ modifiers: [MOD] });
     await clearCalls(page);
     await choose("c.txt", "Compare Files");
-    await expect.poll(() => calls(page, "compare_files")).toHaveLength(1);
+    await expect(page.getByTestId("diff-view")).toBeVisible();
+    await expect.poll(() => calls(page, "diff_open")).toHaveLength(1);
   });
 
   test("UI-MOUSE-004 the menu of a marked item acts on all marked items", async ({ page }) => {

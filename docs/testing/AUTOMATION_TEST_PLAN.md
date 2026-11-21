@@ -635,6 +635,23 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | DIFF-005 | detect finds a fake tool on PATH | P1 | NEW | put `meld` (shell script) in a temp dir on PATH → detected |
 | DIFF-006 | compare_files downloads remote files first | P1 | NEW (L4) | PREP-04 log lists two local paths whose contents equal the remote files |
 
+Built-in file compare (`dualpal_core::diff`), in `crates/dualpal-core/tests/diff.rs`.
+
+| ID | Title | P | Status | Assert |
+|---|---|---|---|---|
+| DIFF-010 | identical files | P0 | NEW | no hunks, `identical`; split/join keeps LF, CRLF and a last line without a line feed |
+| DIFF-011 | insert, delete, change | P0 | NEW | hunk line numbers on both sides; neighbouring delete + insert is one hunk |
+| DIFF-012 | ignore whitespace / ignore case | P0 | NEW | differences disappear with the option; changing options recomputes |
+| DIFF-013 | CRLF vs LF | P0 | NEW | differ unless line endings are ignored (also a missing final line feed); endings per side |
+| DIFF-014 | empty files | P1 | NEW | empty vs empty identical; empty vs text is all added / removed |
+| DIFF-015 | binary files | P0 | NEW | byte comparison, identical and not, on a backend without seeking; no session kept |
+| DIFF-016 | size limit | P0 | NEW | over 20 MB or 500 000 lines → `tooLarge` with the limits |
+| DIFF-017 | intra-line marks | P0 | NEW | whole words, UTF-16 offsets (emoji), insert-only, options; marks per changed line pair |
+| DIFF-018 | copy a change left / right | P0 | NEW | lines replaced, side dirty, stale revision refused; deleting lines; copied lines take the file's line ending when endings are ignored |
+| DIFF-019 | sessions: apply and save through the file system | P0 | NEW | local + server (MemFs) sides; save writes each side, no temp file left; a file changed since it was read is not overwritten; closed session |
+| DIFF-020 | encodings per side | P0 | NEW | UTF-16 BOM saved back as UTF-16; Windows-1252 side refuses characters it lacks; another encoding per side; refused while dirty |
+| DIFF-021 | lossy decoding is not saved | P1 | NEW | UTF-8 forced on invalid bytes → not saveable; detection falls back to Windows-1252 |
+
 ### 8.11.1 File viewer — `VIEW`
 
 Core of the F3 viewer (`dualpal_core::vfs::range`, `dualpal_core::viewer`), in `crates/dualpal-core/tests/viewer.rs`. The non-seeking backend is `FaultyFs::set_seekable(false)` over `MemFs`.
@@ -718,6 +735,8 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-040 | `apply_upgrade` needs a finished `download_upgrade`; `download_upgrade` refuses a version that is no longer the newest release | P1 | |
 | CMD-050 | `viewer_open`, `viewer_read`, `viewer_close` | P0 | encoding and BOM detected; raw bytes for a range, empty past the end; closed session → `invalid`; missing file → `notFound` |
 | CMD-051 | `viewer_search`, `viewer_count_lines`, `viewer_cancel` | P0 | forward / backward / ignore case, null when none; line feeds before an offset; UTF-16 `encoding` folds whole code units |
+| CMD-060 | `diff_open`, `diff_lines`, `diff_set_options`, `diff_set_encoding`, `diff_cancel`, `diff_close` | P0 | text outcome with hunks and sides; lines with marks; options and encoding recompute; binary outcome; closed → `invalid` |
+| CMD-061 | `diff_apply`, `diff_save` | P0 | change copied, side dirty, stale revision `invalid`; save writes the file |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
@@ -748,6 +767,9 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-035 | `HexView` | P1 | offset / 16 bytes / ASCII columns; End/Home; highlight and scroll to offset; read error + retry |
 | UI-UNIT-036 | `Viewer` | P0 | opens through `viewer_open`; 1/2/3 and buttons switch modes; images show as images; binary opens in hex; reads only the pages on screen; find beyond the loaded pages with next/previous (Enter, F3, Shift F3); hex search; Esc closes find, then the viewer; F3 closes; open error; text encoding passed to search (none for hex); a changed term drops the search on its way; closing cancels the line count and a late progress listener; focus moves into the media view |
 | UI-UNIT-037 | viewer api argument names | P0 | every `viewer_*` call's exact argument object |
+| UI-UNIT-040 | compare view `rows.ts` | P0 | side-by-side rows with fillers, inline rows, hunk rows, a million lines without a row each |
+| UI-UNIT-041 | `DiffView` | P0 | opens through `diff_open`; tints and marked words; inline mode; Alt ↓/↑ and F7/Shift F7; copy a change both ways and save; unsaved prompt (Cancel, Save, Don't Save); options recompute; binary message and external app; open error |
+| UI-UNIT-042 | compare view api argument names | P0 | every `diff_*` call's exact argument object |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
 | UI-CMP-003 | `CommandPalette` fuzzy filter, arrow keys, Enter runs, lists servers/favorites/syncs | P0 | |
@@ -798,11 +820,12 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-KEY-024 | Ctrl/⌘ Shift . | hidden files shown |
 | UI-KEY-025 | Ctrl/⌘ Shift P | palette opens and focuses input |
 | UI-KEY-026 | Ctrl/⌘ Shift Y | compare view with `sync_plan(left,right)` |
-| UI-KEY-027 | Ctrl/⌘ Shift D | `compare_files` with the two cursor files |
+| UI-KEY-027 | Ctrl/⌘ Shift D | compare view (`diff_open`) with the two cursor files; *Open in external app…* → `compare_files` |
 | UI-KEY-028 | Ctrl/⌘ Shift L | linked browsing toggles; entering folder in one pane enters same name in other |
 | UI-KEY-029 | shortcuts ignored while typing in an input/editor | F5 inside rename prompt does not copy |
 | UI-KEY-030 | shortcuts disabled while auto-sync locks panes (`frozen`) | F5/F6/F8 make no calls |
 | UI-KEY-040 | F3 | viewer opens on the cursor file (`viewer_open`), Esc and F3 close it (`viewer_close`); nothing on a folder |
+| UI-KEY-045 | Alt ↓ / Alt ↑, F7 / Shift F7, Alt → / Alt ← in file compare | next / previous change; copy the current change right / left (`diff_apply`); unsaved prompt saves both sides |
 | UI-KEY-041 | 1 / 2 / 3, Ctrl/⌘ F, F3 / Shift F3 in the viewer | text/hex switch (3 needs media); find focuses the field; Enter/F3 next, Shift F3 previous (`viewer_search` backward); Esc closes find, then the viewer |
 
 **Mouse**
@@ -858,6 +881,8 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-E2E-030 | 5 000 entries render and scroll; cursor End reaches last | P1 | |
 | UI-E2E-040 | *View* in the item menu and the command palette opens the viewer | P1 | |
 | UI-E2E-041 | the viewer has no serious axe violations in text and hex view | P1 | |
+| UI-E2E-050 | double-click a changed file in Compare & Sync opens the compare view; Esc closes only it | P1 | |
+| UI-E2E-051 | palette "Compare Files" opens the compare view; "Use External Compare App" makes Ctrl/⌘ Shift D call `compare_files` | P1 | |
 | UI-E2E-031 | unsaved state survives nothing unexpected: reload restores favorites/servers from backend, not localStorage | P2 | |
 
 ### 8.15 Full-stack desktop E2E — `DESK` (L7)
@@ -1181,7 +1206,7 @@ cargo insta review
 | Compare & Sync | CMP-*, SYNC-*, CMD-025…029, UI-CMP-007, UI-E2E-015…017, DESK-009 |
 | Auto-sync | LIVE-*, CMD-033, UI-E2E-018/019, UI-KEY-030, DESK-010/011 |
 | Linked browsing | UI-UNIT-014, UI-KEY-028 |
-| Compare Files | DIFF-*, CMD-032, UI-KEY-027, DESK-013 |
+| Compare Files | DIFF-*, CMD-032, CMD-060/061, UI-UNIT-040…042, UI-KEY-027, UI-KEY-045, UI-E2E-050/051, DESK-013 |
 | Multi Rename | REN-*, OPS-BREN-001, CMD-030/031, UI-CMP-006, UI-E2E-020 |
 | Command palette | UI-CMP-003, UI-KEY-025, UI-E2E-024 |
 | Activity & insights | ACT-*, OPS-Q-005, CMD-008, UI-CMP-012, UI-E2E-026 |
