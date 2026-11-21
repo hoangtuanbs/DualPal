@@ -674,6 +674,10 @@ impl FileSystem for SftpFs {
         4
     }
 
+    fn copies_modes(&self) -> bool {
+        true
+    }
+
     async fn open_write(&self, path: &str) -> Result<Writer> {
         let live = self.sftp().await?;
         let f = live

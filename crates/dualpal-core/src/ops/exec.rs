@@ -29,6 +29,8 @@ struct Item {
     dir: bool,
     size: u64,
     modified_ms: Option<i64>,
+    /// Unix permission bits of the source, when its backend reports them.
+    mode: Option<u32>,
 }
 
 struct Job {
@@ -242,6 +244,7 @@ impl Job {
                         dir: true,
                         size: 0,
                         modified_ms: entry.modified_ms,
+                        mode: entry.mode,
                     });
                     for child in children.into_iter().rev() {
                         check_name(dst_fs, &child.name)?;
@@ -256,6 +259,7 @@ impl Job {
                     dir: false,
                     size: entry.size,
                     modified_ms: entry.modified_ms,
+                    mode: entry.mode,
                 }),
                 _ => self.prog().skipped += 1,
             }
@@ -430,13 +434,27 @@ impl Job {
             }
             return Err(e);
         }
+        // A file that replaces another gets the old one's permissions, as
+        // writing into it would have kept them. A new file gets the
+        // source's permission bits where the target keeps modes.
+        let mode = match &existing {
+            Some(e) => e.mode.filter(|_| part != item.dst).map(|m| m & 0o7777),
+            None => item
+                .mode
+                .filter(|_| dst_fs.copies_modes())
+                .map(|m| m & 0o777),
+        };
+        if let Some(mode) = mode {
+            let _ = dst_fs.set_mode(&part, mode).await;
+        }
         if part != item.dst {
-            // The new file replaces the old one, so give it the old one's
-            // permissions, as writing into it would have kept them.
-            if let Some(mode) = existing.and_then(|e| e.mode) {
-                let _ = dst_fs.set_mode(&part, mode & 0o7777).await;
-            }
-            if let Err(e) = dst_fs.rename(&part, &item.dst).await {
+            // Only a file is moved aside; a folder in the way is never
+            // replaced by a rename.
+            let renamed = match existing {
+                Some(e) if !e.is_dir() => rename_over(dst_fs, &part, &item.dst).await,
+                _ => dst_fs.rename(&part, &item.dst).await,
+            };
+            if let Err(e) = renamed {
                 let _ = dst_fs.remove_file(&part).await;
                 return Err(e);
             }
@@ -512,19 +530,37 @@ impl Job {
 
     // ---- delete ------------------------------------------------------------
 
+    /// Delete every target. An item that cannot be removed does not stop
+    /// the others; the folders holding it are left, and every failure is
+    /// reported at the end.
     async fn delete(&mut self, targets: Vec<Location>) -> Result<()> {
+        let mut failed: Vec<Error> = Vec::new();
         // (fs, path, is_real_dir) in pre-order; deleted in reverse so that
         // folder contents go before the folder itself.
         let mut items: Vec<(Fs, String, bool)> = Vec::new();
+        // Paths that are still there, so the folders holding them stay too.
+        let mut kept: Vec<(Fs, String)> = Vec::new();
         for t in &targets {
             let fs = self.fs(&t.fs)?;
-            let root = fs.stat(&t.path).await?;
+            let root = match fs.stat(&t.path).await {
+                Ok(root) => root,
+                Err(e) => {
+                    failed.push(e);
+                    continue;
+                }
+            };
             let mut stack = vec![root];
             while let Some(e) = stack.pop() {
                 self.check()?;
                 let real_dir = e.is_dir() && !e.symlink;
                 if real_dir {
-                    stack.extend(fs.list(&e.path).await?);
+                    match fs.list(&e.path).await {
+                        Ok(children) => stack.extend(children),
+                        Err(err) => {
+                            failed.push(err);
+                            kept.push((fs.clone(), e.path.clone()));
+                        }
+                    }
                 }
                 items.push((fs.clone(), e.path, real_dir));
             }
@@ -533,15 +569,30 @@ impl Job {
         self.emit(true);
         for (fs, path, dir) in items.into_iter().rev() {
             self.check()?;
-            self.set_current(&path);
-            if dir {
-                fs.remove_dir(&path).await?;
-            } else {
-                fs.remove_file(&path).await?;
+            if dir
+                && kept
+                    .iter()
+                    .any(|(kfs, k)| kfs.id() == fs.id() && fs.is_within(k, &path))
+            {
+                kept.push((fs, path));
+                continue;
             }
-            self.prog().files_done += 1;
+            self.set_current(&path);
+            let removed = if dir {
+                fs.remove_dir(&path).await
+            } else {
+                fs.remove_file(&path).await
+            };
+            match removed {
+                Ok(()) => self.prog().files_done += 1,
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(e) => {
+                    failed.push(e);
+                    kept.push((fs, path));
+                }
+            }
         }
-        Ok(())
+        Error::combine(failed).map_or(Ok(()), Err)
     }
 
     // ---- compress -----------------------------------------------------------
@@ -738,6 +789,42 @@ fn part_path(fs: &Fs, dst: &str) -> String {
         format!(".dualpal-{tag}.part")
     };
     fs.join(&parent, &part)
+}
+
+/// Rename `from` onto the existing file `to`. Where the backend's rename
+/// will not replace a file (some servers), the old file is moved aside
+/// first, removed once the new one is in place, and put back if the new
+/// one cannot be. If it cannot be put back either, the error says where
+/// it was left.
+async fn rename_over(fs: &Fs, from: &str, to: &str) -> Result<()> {
+    let first = match fs.rename(from, to).await {
+        Ok(()) => return Ok(()),
+        Err(Error::Cancelled) => return Err(Error::Cancelled),
+        Err(e) => e,
+    };
+    // A temporary name like a partial copy's, so auto-sync ignores it too.
+    let aside = part_path(fs, to);
+    if fs.rename(to, &aside).await.is_err() {
+        return Err(first);
+    }
+    match fs.rename(from, to).await {
+        Ok(()) => {
+            let _ = fs.remove_file(&aside).await;
+            Ok(())
+        }
+        Err(e) => match fs.rename(&aside, to).await {
+            Ok(()) => Err(e),
+            Err(back) => Err(Error::Several(vec![
+                e,
+                Error::Io {
+                    path: aside,
+                    source: std::io::Error::other(format!(
+                        "the old {to} was left here and could not be put back ({back})"
+                    )),
+                },
+            ])),
+        },
+    }
 }
 
 async fn make_dir(fs: &Fs, path: &str) -> Result<()> {

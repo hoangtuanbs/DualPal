@@ -28,15 +28,20 @@ fn corrupt_favorites_falls_back() {
     assert!(std::fs::read_to_string(&path).unwrap().contains("Work"));
 }
 
-/// PLC-004 — reordering out of range should error, not silently clamp.
-///
-/// The current implementation clamps the index instead of failing.
+/// PLC-004 — reordering out of range errors and changes nothing.
 #[test]
-#[ignore = "BUG: Favorites::reorder clamps out-of-range indices instead of erroring"]
 fn reorder_out_of_range_errors() {
     let favs = Favorites::in_memory(vec![fav("A", "/a"), fav("B", "/b")]);
     assert!(favs.reorder(5, 0).is_err());
-    assert_eq!(favs.list().len(), 2);
+    assert_eq!(
+        favs.reorder(0, 2).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    let names: Vec<_> = favs.list().into_iter().map(|f| f.name).collect();
+    assert_eq!(names, ["A", "B"]);
+    // Moving to the last position is in range.
+    let moved = favs.reorder(0, 1).unwrap();
+    assert_eq!(moved[1].name, "A");
 }
 
 /// PLC-006 — the home folder reports available space when it exists.

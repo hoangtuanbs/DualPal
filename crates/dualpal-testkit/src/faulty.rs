@@ -48,7 +48,9 @@ struct State {
     /// Every write fails to open, as on a full disk.
     broken: AtomicBool,
     latency: Mutex<HashMap<FaultOp, Duration>>,
-    fail_next: Mutex<Vec<(FaultOp, Error)>>,
+    /// Faults to inject: the op, how many of its calls to let through
+    /// first, and the error.
+    fail_next: Mutex<Vec<(FaultOp, usize, Error)>>,
     open_writers: AtomicUsize,
     most_writers: AtomicUsize,
     resumed: Mutex<Vec<u64>>,
@@ -112,7 +114,12 @@ impl<F: FileSystem> FaultyFs<F> {
 
     /// Fail the next call of `op` with `err`.
     pub fn fail_next(&self, op: FaultOp, err: Error) {
-        self.state.fail_next.lock().unwrap().push((op, err));
+        self.fail_later(op, 0, err);
+    }
+
+    /// Let `skip` calls of `op` through, then fail the next one with `err`.
+    pub fn fail_later(&self, op: FaultOp, skip: usize, err: Error) {
+        self.state.fail_next.lock().unwrap().push((op, skip, err));
     }
 
     /// Sleep before every call of `op`.
@@ -187,9 +194,13 @@ impl<F: FileSystem> FaultyFs<F> {
             tokio::time::sleep(delay).await;
         }
         let mut queue = self.state.fail_next.lock().unwrap();
-        if let Some(i) = queue.iter().position(|(o, _)| *o == op) {
-            let (_, err) = queue.remove(i);
-            return Err(err);
+        if let Some(i) = queue.iter().position(|(o, _, _)| *o == op) {
+            if queue[i].1 > 0 {
+                queue[i].1 -= 1;
+            } else {
+                let (_, _, err) = queue.remove(i);
+                return Err(err);
+            }
         }
         Ok(())
     }

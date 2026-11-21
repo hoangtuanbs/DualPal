@@ -7,7 +7,14 @@
     sessions,
     onstop,
     onupload,
-  }: { sessions: EditSession[]; onstop: (id: string) => void; onupload: (id: string) => void } = $props();
+    onresolve,
+  }: {
+    sessions: EditSession[];
+    onstop: (id: string) => void;
+    onupload: (id: string) => void;
+    /** A save held as a conflict: overwrite the server copy, or skip this save. */
+    onresolve: (id: string, overwrite: boolean) => void;
+  } = $props();
 
   function name(s: EditSession) {
     return s.remote.path.split("/").filter(Boolean).pop() ?? s.remote.path;
@@ -21,6 +28,8 @@
         return `Uploaded ${s.lastUploadMs ? formatTime(s.lastUploadMs) : ""}`;
       case "failed":
         return `Upload failed: ${s.error ?? ""}`;
+      case "conflict":
+        return "Changed on the server since you opened it; not uploaded";
       default:
         return "Uploads when you save";
     }
@@ -31,11 +40,26 @@
   <div class="edits" aria-label="Files being edited" data-testid="edit-sessions">
     <span class="label">Editing</span>
     {#each sessions as s (s.id)}
-      <span class="chip" class:failed={s.status === "failed"} title="{s.remote.path}\nLocal copy: {s.localPath}">
+      <span
+        class="chip"
+        class:failed={s.status === "failed" || s.status === "conflict"}
+        title="{s.remote.path}\nLocal copy: {s.localPath}"
+      >
         <span class="file">{name(s)}</span>
         <span class="status">{status(s)}</span>
         {#if s.status === "failed"}
           <button class="upload" title="Upload this save now" onclick={() => onupload(s.id)}>Upload</button>
+        {:else if s.status === "conflict"}
+          <button
+            class="upload"
+            title="Upload your save, replacing the newer copy on the server"
+            onclick={() => onresolve(s.id, true)}>Overwrite server copy</button
+          >
+          <button
+            class="upload"
+            title="Leave the server copy as it is; your local copy keeps your edits"
+            onclick={() => onresolve(s.id, false)}>Skip this save</button
+          >
         {/if}
         <button title="Stop uploading changes and delete the local copy" aria-label="Stop editing {name(s)}" onclick={() => onstop(s.id)}
           >×</button

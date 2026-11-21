@@ -249,6 +249,7 @@
     conflict: "Changed on both sides: choose which to keep",
     changedAndDeleted: "Changed on one side, deleted on the other: it is copied back",
     kindMismatch: "A file on one side and a folder on the other: choose which to keep",
+    caseConflict: "Another item here has the same name in different case: rename one first",
   };
 
   const STATE: Record<string, string> = {

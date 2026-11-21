@@ -25,7 +25,8 @@ pub enum CompareBy {
     /// Same size and modification time (within `tolerance_ms`).
     #[default]
     SizeAndDate,
-    /// Same size; dates are only used to say which side is newer.
+    /// Same size, whatever the dates. When the sizes differ, dates say
+    /// which side is newer.
     Size,
     /// Same bytes. Reads both files when their sizes match.
     Content,

@@ -414,11 +414,11 @@ fn next_snapshot_records_matches_and_deletions() {
 /// SYNC-017 — after a two-way sync of two disjoint sets, both sides are equal.
 #[test]
 fn two_way_sync_makes_both_sides_equal() {
-    // Names differ in case only per side, so the sets are always disjoint on
-    // the case-sensitive memory backend and can never conflict.
+    // Left names start with a letter and right names with a digit, so the
+    // sets are always disjoint, even ignoring case, and can never conflict.
     proptest::proptest!(|(
         left in proptest::collection::vec(("[a-z][a-z0-9]{0,5}", "[a-z0-9]{0,8}"), 0..6),
-        right in proptest::collection::vec(("[A-Z][A-Z0-9]{0,5}", "[A-Z0-9]{0,8}"), 0..6),
+        right in proptest::collection::vec(("[0-9][A-Z0-9]{0,5}", "[A-Z0-9]{0,8}"), 0..6),
     )| {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

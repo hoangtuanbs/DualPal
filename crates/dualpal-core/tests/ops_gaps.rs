@@ -64,7 +64,6 @@ fn leftovers(dir: &Path) -> Vec<String> {
 /// OPS-COPY-004 — a copied file keeps its permission bits (`script.sh` 0755).
 #[cfg(unix)]
 #[tokio::test]
-#[ignore = "BUG: a copy to a new file does not carry the source's permission bits over; only a replaced file keeps the old target's mode"]
 async fn copy_keeps_mode_bits() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
@@ -449,7 +448,6 @@ async fn partial_delete_failure_names_the_path() {
 
 /// OPS-DEL-003 — the other targets are deleted even when one of them fails.
 #[tokio::test]
-#[ignore = "BUG: a delete stops at the first item it cannot remove, so the targets after it in the queue's order are left in place"]
 async fn partial_delete_failure_still_deletes_the_other_targets() {
     let tmp = tempfile::tempdir().unwrap();
     let (targets, blocker) = partial_delete_tree(tmp.path());
@@ -469,6 +467,50 @@ async fn partial_delete_failure_still_deletes_the_other_targets() {
     assert_eq!(info.status, OperationStatus::Failed);
     assert!(!targets[0].exists(), "first target deleted");
     assert!(!targets[2].exists(), "last target deleted");
+}
+
+/// OPS-DEL-003 — on any backend, a delete carries on past items it cannot
+/// remove, keeps the folders that still hold them, and reports every failure.
+#[tokio::test]
+async fn delete_reports_every_failure_and_removes_the_rest() {
+    use dualpal_core::vfs::FileSystem as _;
+    use dualpal_core::Error;
+    use dualpal_testkit::FaultOp;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(&root.join("a.txt"), "a");
+    write(&root.join("dir/x.txt"), "x");
+    write(&root.join("dir/y.txt"), "y");
+    write(&root.join("c.txt"), "c");
+    let faulty = Arc::new(FaultyFs::with_id(LocalFs::new(), "faulty"));
+    // Files go last target first: c.txt, then inside dir.
+    faulty.fail_next(FaultOp::RemoveFile, Error::PermissionDenied("c.txt".into()));
+    faulty.fail_next(
+        FaultOp::RemoveFile,
+        Error::PermissionDenied("dir/y.txt".into()),
+    );
+    let registry = Registry::with_local();
+    registry.register(faulty.clone());
+    let at = |p: &str| Location::new("faulty", faulty.join(&root.to_string_lossy(), p));
+
+    let info = run(
+        &queue_over(registry, 1),
+        Operation::Delete {
+            targets: vec![at("a.txt"), at("dir"), at("c.txt")],
+        },
+    )
+    .await;
+
+    assert_eq!(info.status, OperationStatus::Failed);
+    let err = info.error.unwrap();
+    assert_eq!(err.kind, "permissionDenied", "{err:?}");
+    assert!(err.message.starts_with("2 items failed"), "{err:?}");
+    assert!(!root.join("a.txt").exists(), "first target deleted");
+    assert!(root.join("c.txt").exists());
+    // One of the folder's files went, the other stayed, so the folder stays.
+    let left: Vec<_> = std::fs::read_dir(root.join("dir")).unwrap().collect();
+    assert_eq!(left.len(), 1);
 }
 
 // ---- OPS-MOVE-004 -----------------------------------------------------------
