@@ -319,7 +319,8 @@ export type SyncReason =
   | "targetChanged"
   | "conflict"
   | "changedAndDeleted"
-  | "kindMismatch";
+  | "kindMismatch"
+  | "caseConflict";
 
 export interface Totals {
   files: number;
