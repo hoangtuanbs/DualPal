@@ -1643,6 +1643,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "insta",
+ "md-5",
  "notify",
  "opendal",
  "proptest",
@@ -1655,6 +1656,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha1 0.10.7",
  "sha2 0.10.9",
  "suppaftp",
  "sysinfo",
@@ -1666,6 +1668,7 @@ dependencies = [
  "trash",
  "uuid",
  "windows-sys 0.61.2",
+ "xxhash-rust",
  "zeroize",
 ]
 
@@ -7833,6 +7836,12 @@ dependencies = [
  "libc",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40de123dbb523ebcc00d61ec01840ad192578afc378d859f3429caa38308fad5"
 
 [[package]]
 name = "yoke"
