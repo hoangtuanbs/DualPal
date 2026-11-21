@@ -389,6 +389,7 @@ Each case runs in `unique_base(fs)`.
 | VFS-CON-028 | empty folders survive | P1 | NEW | S3 marker semantics: create empty dir, list parent shows it, remove_dir removes it |
 | VFS-CON-029 | display_name and id stable | P2 | NEW | |
 | VFS-CON-030 | errors serialise as `{kind, message}` | P0 | NEW | for each Error variant `serde_json::to_value` → snapshot (insta) |
+| VFS-CON-031 | `read_range` | P0 | NEW | bytes inside the file; cut at the end; empty at and past the end, for 0 bytes and for an empty file; a folder is an error |
 
 ### 8.2 Local backend and path helpers — `VFS-LOC`, `VFS-PATH`, `VFS-WSL`, `VFS-TXT`
 
@@ -634,6 +635,23 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | DIFF-005 | detect finds a fake tool on PATH | P1 | NEW | put `meld` (shell script) in a temp dir on PATH → detected |
 | DIFF-006 | compare_files downloads remote files first | P1 | NEW (L4) | PREP-04 log lists two local paths whose contents equal the remote files |
 
+### 8.11.1 File viewer — `VIEW`
+
+Core of the F3 viewer (`dualpal_core::vfs::range`, `dualpal_core::viewer`), in `crates/dualpal-core/tests/viewer.rs`. The non-seeking backend is `FaultyFs::set_seekable(false)` over `MemFs`.
+
+| ID | Title | P | Status | Assert |
+|---|---|---|---|---|
+| VIEW-001 | `RangeReader` on the local disk | P0 | NEW | ranges inside, across a page boundary, cut at the end, past the end, 0 bytes, empty file; a second read of the same range opens nothing |
+| VIEW-002 | `RangeReader` without seeking | P0 | NEW | reading forwards and skipping ahead use one stream; skipped pages are cached; every byte is read once |
+| VIEW-003 | `RangeReader` faults and eviction | P1 | NEW | a failed open is reported and the next read works; never more than the page limit cached |
+| VIEW-004 | encoding detection | P0 | NEW | UTF-8/UTF-16 BOMs, UTF-16 without BOM, UTF-8 cut at the sample end, Windows-1252 fallback, binary |
+| VIEW-005 | decode / encode | P0 | NEW | round trip in each encoding; € in Windows-1252; unmappable characters → None; serde labels are TextDecoder names |
+| VIEW-006 | streamed search across chunk boundaries | P0 | NEW | needle at every offset around 16-byte chunks; forward/backward, seekable or not, ignore case; stepping next/previous |
+| VIEW-007 | search cancel and progress | P1 | NEW | progress reaches the end; cancelled → `Cancelled` |
+| VIEW-008 | line counts | P1 | NEW | UTF-8 and UTF-16 with chunks that cut code units; cancel |
+| VIEW-009 | `Sessions` | P0 | NEW | open detects BOM; read; limit closes the oldest; closed/unknown → invalid; folder and missing file are errors |
+| VIEW-010 | 1 GiB local file | P0 | NEW | open + read at the end and the middle under 2 s; backward search from the end finds the marker |
+
 ### 8.12 Tauri command layer — `CMD` (L4)
 
 New folder `src-tauri/tests/` with `common/mod.rs` that builds the app:
@@ -696,6 +714,8 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
 | CMD-039 | `latest_release` reads GitHub's latest release (tag, page, date) from `DUALPAL_RELEASES_URL` and sends a User-Agent | P1 | |
 | CMD-040 | `apply_upgrade` needs a finished `download_upgrade`; `download_upgrade` refuses a version that is no longer the newest release | P1 | |
+| CMD-050 | `viewer_open`, `viewer_read`, `viewer_close` | P0 | encoding and BOM detected; raw bytes for a range, empty past the end; closed session → `invalid`; missing file → `notFound` |
+| CMD-051 | `viewer_search`, `viewer_count_lines`, `viewer_cancel` | P0 | forward / backward / ignore case, null when none; line feeds before an offset |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
