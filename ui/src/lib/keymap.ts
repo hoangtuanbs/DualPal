@@ -190,19 +190,48 @@ export function withBinding(overrides: Record<string, string[]> | null | undefin
   return out;
 }
 
-/** Overrides with `id` back on its default keys. */
-export function resetBinding(overrides: Record<string, string[]> | null | undefined, id: string): Record<string, string[]> {
-  const out = { ...(overrides ?? {}) };
-  delete out[id];
-  return out;
+/** The press a combination stands for, as `lookup` matches it: without
+ *  Ctrl/⌘ or Alt, Shift on a punctuation key gives the same character
+ *  ("Shift++" is "+", which often needs Shift). */
+function pressOf(text: string, mac: boolean): string {
+  const c = parseCombo(normalizeCombo(text, mac));
+  if (c.shift && !c.ctrl && !c.mod && !c.alt && c.key.length === 1 && !/[A-Z0-9]/.test(c.key)) c.shift = false;
+  return comboText(c);
 }
 
 /** The commands other than `except` that `combo` already runs. */
 export function conflicts(bindings: Record<string, string[]>, combo: string, except: string | null, mac = isMacPlatform()): string[] {
-  const want = normalizeCombo(combo, mac);
+  const want = pressOf(combo, mac);
   return Object.entries(bindings)
-    .filter(([id, keys]) => id !== except && keys.some((k) => normalizeCombo(k, mac) === want))
+    .filter(([id, keys]) => id !== except && keys.some((k) => pressOf(k, mac) === want))
     .map(([id]) => id);
+}
+
+/** Overrides after taking `combo` away from every command but `id`. */
+function takeAway(overrides: Record<string, string[]>, id: string, combo: string, mac: boolean): Record<string, string[]> {
+  let out = overrides;
+  const bindings = effectiveBindings(out);
+  const want = pressOf(combo, mac);
+  for (const other of conflicts(bindings, combo, id, mac)) {
+    out = withBinding(out, other, bindings[other].filter((k) => pressOf(k, mac) !== want), mac);
+  }
+  return out;
+}
+
+/** The default keys of `id` that other commands have now, and those commands. */
+export function resetConflicts(bindings: Record<string, string[]>, id: string, mac = isMacPlatform()): { combos: string[]; others: string[] } {
+  const combos = (DEFAULT_KEYS[id] ?? []).filter((k) => conflicts(bindings, k, id, mac).length);
+  const others = [...new Set(combos.flatMap((k) => conflicts(bindings, k, id, mac)))];
+  return { combos, others };
+}
+
+/** Overrides with `id` back on its default keys, taking them away from any
+ *  command that had one. */
+export function resetBinding(overrides: Record<string, string[]> | null | undefined, id: string, mac = isMacPlatform()): Record<string, string[]> {
+  let out = { ...(overrides ?? {}) };
+  delete out[id];
+  for (const k of DEFAULT_KEYS[id] ?? []) out = takeAway(out, id, k, mac);
+  return out;
 }
 
 /** Overrides after binding `combo` to `id` (in place of `replacing`, or
@@ -214,12 +243,8 @@ export function assignCombo(
   replacing: string | null = null,
   mac = isMacPlatform(),
 ): Record<string, string[]> {
-  let out = { ...(overrides ?? {}) };
-  const bindings = effectiveBindings(out);
-  const want = normalizeCombo(combo, mac);
-  for (const other of conflicts(bindings, combo, id, mac)) {
-    out = withBinding(out, other, bindings[other].filter((k) => normalizeCombo(k, mac) !== want), mac);
-  }
+  const bindings = effectiveBindings(overrides);
+  const out = takeAway({ ...(overrides ?? {}) }, id, combo, mac);
   const mine = bindings[id] ?? [];
   const at = replacing === null ? -1 : mine.findIndex((k) => normalizeCombo(k, mac) === normalizeCombo(replacing, mac));
   const next = at >= 0 ? mine.map((k, i) => (i === at ? combo : k)) : [...mine, combo];

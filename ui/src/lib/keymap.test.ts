@@ -10,6 +10,7 @@ import {
   lookup,
   normalizeCombo,
   resetBinding,
+  resetConflicts,
   unbindable,
   withBinding,
   worksInFields,
@@ -136,6 +137,13 @@ describe("keymap", () => {
     expect(conflicts(defaults, "Ctrl+R", null, true)).toEqual([]);
     expect(conflicts(defaults, "Mod+R", "refresh", false)).toEqual([]);
     expect(conflicts(defaults, "F9", null, false)).toEqual([]);
+    // "+" often needs Shift: the recorded Shift + is the same press as Select by Name's +.
+    expect(conflicts(defaults, "Shift++", null, false)).toEqual(["selectPattern"]);
+    const plus = assignCombo({}, "copy", "Shift++", null, false);
+    expect(plus).toEqual({ copy: ["F5", "Shift++"], selectPattern: [] });
+    expect(lookup(effectiveBindings(plus), press("+", { shiftKey: true }, "Equal"), false)?.id).toBe("copy");
+    // With Ctrl/⌘ the key position counts, so Shift is a different press.
+    expect(conflicts(defaults, "Mod+.", null, false)).toEqual([]);
 
     // Give Ctrl R to Copy: Refresh loses it, Copy keeps F5 too.
     const next = assignCombo({}, "copy", "Mod+R", null, false);
@@ -158,6 +166,13 @@ describe("keymap", () => {
     expect(lookup(effectiveBindings(o), press("F5"), false)).toBeNull();
     o = resetBinding(o, "refresh");
     expect(o).toEqual({ copy: [] });
+    // A default key another command has now is taken back from it.
+    const taken = assignCombo({}, "copy", "Mod+R", "F5", false);
+    expect(resetConflicts(effectiveBindings(taken), "refresh", false)).toEqual({ combos: ["Mod+R"], others: ["copy"] });
+    expect(resetConflicts(defaults, "refresh", false)).toEqual({ combos: [], others: [] });
+    o = resetBinding(taken, "refresh", false);
+    expect(o).toEqual({ copy: [] });
+    expect(lookup(effectiveBindings(o), press("r", { ctrlKey: true }), false)?.id).toBe("refresh");
     expect(effectiveBindings(o).refresh).toEqual(["Mod+R"]);
     expect(effectiveBindings({})).toEqual(Object.fromEntries(Object.entries(DEFAULT_KEYS).map(([k, v]) => [k, [...v]])));
     // The same keys as the defaults, in another spelling, store nothing.

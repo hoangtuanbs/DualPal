@@ -22,6 +22,7 @@
     isMacPlatform,
     normalizeCombo,
     resetBinding,
+    resetConflicts,
     unbindable,
     withBinding,
   } from "./keymap";
@@ -102,8 +103,9 @@
   let query = $state("");
   /** The command whose new shortcut is being recorded, and the key it replaces (null adds one). */
   let recording = $state<{ id: string; replacing: string | null } | null>(null);
-  /** A recorded shortcut that another command has, waiting for Replace or Cancel. */
-  let pending = $state<{ id: string; combo: string; replacing: string | null; others: string[] } | null>(null);
+  /** A recorded shortcut, or the default keys of a command being reset,
+   *  that another command has, waiting for Replace or Cancel. */
+  let pending = $state<{ id: string; combos: string[]; replacing: string | null; others: string[]; reset?: boolean } | null>(null);
   let keyNote = $state<string | null>(null);
 
   const titleOf = (id: string) => commands.find((c) => c.id === id)?.title ?? id;
@@ -143,7 +145,7 @@
     }
     const others = conflicts(prefs.bindings, combo, id, mac);
     if (others.length) {
-      pending = { id, combo, replacing, others };
+      pending = { id, combos: [combo], replacing, others };
       return;
     }
     saveBindings(assignCombo(s.keyBindings, id, combo, replacing, mac));
@@ -151,9 +153,21 @@
 
   function replaceConflict() {
     if (!pending) return;
-    const { id, combo, replacing } = pending;
+    const { id, combos, replacing, reset } = pending;
     pending = null;
-    saveBindings(assignCombo(s.keyBindings, id, combo, replacing, mac));
+    saveBindings(reset ? resetBinding(s.keyBindings, id, mac) : assignCombo(s.keyBindings, id, combos[0], replacing, mac));
+  }
+
+  /** Back to the default keys; asks first when another command has one now. */
+  function reset(id: string) {
+    keyNote = null;
+    const { combos, others } = resetConflicts(prefs.bindings, id, mac);
+    if (others.length) {
+      pending = { id, combos, replacing: null, others, reset: true };
+      return;
+    }
+    pending = null;
+    saveBindings(resetBinding(s.keyBindings, id, mac));
   }
 
   function removeKey(id: string, combo: string) {
@@ -335,7 +349,7 @@
         {#if pending}
           <div class="note conflict" role="alert" data-testid="key-conflict">
             <span
-              >{formatCombo(pending.combo, mac)} is used by {pending.others.map((o) => `“${titleOf(o)}”`).join(", ")}. Use it for “{titleOf(pending.id)}”
+              >{pending.combos.map((k) => formatCombo(k, mac)).join(", ")} {pending.combos.length > 1 ? "are" : "is"} used by {pending.others.map((o) => `“${titleOf(o)}”`).join(", ")}. Use it for “{titleOf(pending.id)}”
               instead?</span
             >
             <button class="primary" onclick={replaceConflict}>Replace</button>
@@ -364,7 +378,7 @@
                   <button class="add" aria-label={`Add a shortcut for ${c.title}`} title="Add a shortcut" onclick={() => record(c.id, null)}>+</button>
                 {/if}
                 {#if changed(c.id)}
-                  <button class="text" onclick={() => saveBindings(resetBinding(s.keyBindings, c.id))}>Reset</button>
+                  <button class="text" onclick={() => reset(c.id)}>Reset</button>
                 {/if}
               </span>
             </li>
