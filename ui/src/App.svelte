@@ -1751,7 +1751,12 @@
 {/if}
 
 {#if checksumJob && checksumJob.kind === "calculate"}
-  <ChecksumDialog folder={checksumJob.folder} names={checksumJob.names} onclose={() => (checksumJob = null)} />
+  <ChecksumDialog
+    folder={checksumJob.folder}
+    names={checksumJob.names}
+    onclose={() => (checksumJob = null)}
+    onsaved={() => allPanes().forEach((p) => p.refresh())}
+  />
 {:else if checksumJob && checksumJob.kind === "verify"}
   <VerifyDialog file={checksumJob.file} onclose={() => (checksumJob = null)} />
 {/if}

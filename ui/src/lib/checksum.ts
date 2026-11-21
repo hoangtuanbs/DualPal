@@ -33,11 +33,27 @@ export function folderNameOf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? "";
 }
 
-/** Checksum lines for the entries that have a hash, in the GNU coreutils layout. */
+/** Ids of checksum runs, unique across both dialogs and every time they open. */
+let nextRequest = 1;
+
+/** A new id for a checksum calculation or verification. */
+export function nextChecksumRequest(): number {
+  return nextRequest++;
+}
+
+/**
+ * Checksum lines for the entries that have a hash, in the GNU coreutils layout.
+ * A name with a backslash, newline or carriage return is escaped, and its line
+ * starts with a backslash.
+ */
 export function checksumText(entries: ChecksumEntry[]): string {
   return entries
     .filter((e) => e.hash)
-    .map((e) => `${e.hash}  ${e.path}\n`)
+    .map((e) => {
+      if (!/[\\\n\r]/.test(e.path)) return `${e.hash}  ${e.path}\n`;
+      const path = e.path.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+      return `\\${e.hash}  ${path}\n`;
+    })
     .join("");
 }
 

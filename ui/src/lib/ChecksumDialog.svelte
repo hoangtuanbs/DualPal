@@ -3,18 +3,21 @@
   import { api, errorKind, errorMessage, type ChecksumAlgorithm, type ChecksumEntry, type ChecksumProgress, type Location } from "./api";
   import { copyText } from "./about";
   import { formatBytes } from "./format";
-  import { CHECKSUM_ALGORITHMS, checksumText, defaultChecksumName, folderNameOf, withChecksumExtension } from "./checksum";
+  import { CHECKSUM_ALGORITHMS, checksumText, defaultChecksumName, folderNameOf, nextChecksumRequest, withChecksumExtension } from "./checksum";
 
   /** Hash the marked items (or the cursor item) of `folder`, folders recursively. */
   let {
     folder,
     names,
     onclose,
+    onsaved = () => {},
   }: {
     folder: Location;
     /** Names of the items, directly inside `folder`. */
     names: string[];
     onclose: () => void;
+    /** Called after a checksum file is written, so the panes can show it. */
+    onsaved?: () => void;
   } = $props();
 
   // svelte-ignore state_referenced_locally
@@ -45,7 +48,7 @@
 
   function start() {
     if (running) void api.cancelChecksum(latest);
-    const id = ++latest;
+    const id = (latest = nextChecksumRequest());
     entries = [];
     progress = null;
     error = "";
@@ -71,7 +74,7 @@
     if (!running) return;
     void api.cancelChecksum(latest);
     // A new id makes the answer of the stopped run count as stale.
-    latest++;
+    latest = nextChecksumRequest();
     running = false;
     progress = null;
     notice = "Stopped.";
@@ -98,6 +101,7 @@
       const file = await api.checksumSave(folder, name, algorithm, entries, false);
       notice = `Saved ${file.path.split(/[\\/]/).pop()}`;
       saveName = file.path.split(/[\\/]/).pop() ?? name;
+      onsaved();
     } catch (e) {
       error = errorKind(e) === "alreadyExists" ? `${name} already exists. Choose another name.` : errorMessage(e);
     }
@@ -177,7 +181,8 @@
       </form>
       <div class="buttons">
         <button type="button" class="secondary" disabled={running || !hashed} onclick={copy}>Copy</button>
-        <button type="button" class="primary" onclick={onclose}>Close</button>
+        <!-- svelte-ignore a11y_autofocus -->
+        <button type="button" class="primary" onclick={onclose} autofocus>Close</button>
       </div>
     </footer>
   </div>

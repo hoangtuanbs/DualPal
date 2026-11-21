@@ -30,6 +30,15 @@ describe("checksum helpers", () => {
     ).toBe("aa  a.txt\nbb  sub/b c\n");
   });
 
+  it("escapes names with backslashes, newlines and carriage returns", () => {
+    expect(
+      checksumText([
+        { path: "a\r", hash: "aa", error: null },
+        { path: "b\nc\\d", hash: "bb", error: null },
+      ]),
+    ).toBe("\\aa  a\\r\n\\bb  b\\nc\\\\d\n");
+  });
+
   it("puts failures first, then missing files, then matches", () => {
     const entry = (path: string, status: "ok" | "failed" | "missing") => ({ path, status, expected: "", actual: null, error: null });
     const sorted = sortVerifyEntries([entry("c", "ok"), entry("b", "missing"), entry("z", "failed"), entry("a", "failed")]);

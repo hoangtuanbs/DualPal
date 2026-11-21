@@ -29,17 +29,18 @@ function backend({ hold = false }: { hold?: boolean } = {}) {
 }
 
 const setup = () => {
-  const props = { folder: { fs: "local", path: "/home/u" }, names: ["a.txt", "bad"], onclose: vi.fn() };
-  render(ChecksumDialog, { props });
-  return props;
+  const props = { folder: { fs: "local", path: "/home/u" }, names: ["a.txt", "bad"], onclose: vi.fn(), onsaved: vi.fn() };
+  const view = render(ChecksumDialog, { props });
+  return { ...props, unmount: view.unmount };
 };
 
 describe("ChecksumDialog", () => {
   it("lists each file with its hash, and saves a checksum file with the chosen algorithm", async () => {
     const user = userEvent.setup();
     const be = backend();
-    setup();
+    const props = setup();
     await waitFor(() => expect(screen.getByText("a.txt")).toBeInTheDocument());
+    expect(props.onsaved).not.toHaveBeenCalled();
     expect(be.calls("checksum_calculate")[0]).toEqual({
       folder: { fs: "local", path: "/home/u" },
       names: ["a.txt", "bad"],
@@ -57,6 +58,8 @@ describe("ChecksumDialog", () => {
     expect(saved).toMatchObject({ folder: { fs: "local", path: "/home/u" }, fileName: "u.sha256", algorithm: "sha256", overwrite: false });
     expect(saved.entries).toEqual([{ path: "a.txt", hash: "f".repeat(64), error: null }, { path: "bad", hash: null, error: "denied" }]);
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved u.sha256"));
+    // The panes refresh so the new file shows up.
+    expect(props.onsaved).toHaveBeenCalledTimes(1);
   });
 
   it("runs again with the new algorithm and renames the save file to match", async () => {
@@ -85,5 +88,26 @@ describe("ChecksumDialog", () => {
     expect(be.calls("cancel_checksum")).toEqual([{ request }]);
     expect(screen.getByRole("status")).toHaveTextContent("Stopped.");
     expect(screen.getByRole("button", { name: "Save as checksum file" })).toBeDisabled();
+  });
+
+  it("takes the focus when it opens, so Escape reaches it", async () => {
+    backend();
+    const props = setup();
+    const close = screen.getByRole("button", { name: "Close" });
+    await waitFor(() => expect(close).toHaveFocus());
+    await waitFor(() => expect(screen.getByText("a.txt")).toBeInTheDocument());
+    await userEvent.setup().keyboard("{Escape}");
+    expect(props.onclose).toHaveBeenCalled();
+  });
+
+  it("never reuses a request id when opened again while a run is still going", async () => {
+    const be = backend({ hold: true });
+    const first = setup();
+    await waitFor(() => expect(be.calls("checksum_calculate")).toHaveLength(1));
+    first.unmount();
+    setup();
+    await waitFor(() => expect(be.calls("checksum_calculate")).toHaveLength(2));
+    const [a, b] = be.calls("checksum_calculate").map((c) => c.request);
+    expect(b).not.toBe(a);
   });
 });

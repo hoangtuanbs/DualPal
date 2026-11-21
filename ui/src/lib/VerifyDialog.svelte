@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api, errorKind, errorMessage, type ChecksumAlgorithm, type ChecksumProgress, type Location, type VerifyEntry, type VerifyReport } from "./api";
-  import { checksumAlgorithmOf, sortVerifyEntries } from "./checksum";
+  import { checksumAlgorithmOf, nextChecksumRequest, sortVerifyEntries } from "./checksum";
 
   /** Check the files listed in the checksum file `file` against their digests. */
   let {
@@ -38,7 +38,7 @@
   });
 
   function start(alg: ChecksumAlgorithm) {
-    const id = ++latest;
+    const id = (latest = nextChecksumRequest());
     report = null;
     progress = null;
     error = "";
@@ -62,7 +62,7 @@
   function stop() {
     if (!running) return;
     void api.cancelChecksum(latest);
-    latest++;
+    latest = nextChecksumRequest();
     running = false;
     progress = null;
     error = "Stopped. The results so far are not complete.";
@@ -113,7 +113,7 @@
 
     {#if sorted.length}
       <ul class="rows" aria-label="Results">
-        {#each sorted as e (e.path)}
+        {#each sorted as e, i (i)}
           <li class={e.status}>
             <span class="badge">{label[e.status]}</span>
             <span class="path" title={e.path}>{e.path}</span>
@@ -130,7 +130,8 @@
     {/if}
 
     <footer>
-      <button type="button" class="primary" onclick={onclose}>Close</button>
+      <!-- svelte-ignore a11y_autofocus -->
+      <button type="button" class="primary" onclick={onclose} autofocus>Close</button>
     </footer>
   </div>
 </div>
