@@ -22,8 +22,9 @@
 //! Safety: entry names are cleaned so that none can point outside the
 //! archive (`../x` and `/etc/x` become `x` and `etc/x`), a file never yields
 //! more bytes than the archive declares, zip entries whose data overlap (a
-//! common zip bomb) are refused, and unpacking a compressed tar stops before
-//! it fills the disk.
+//! common zip bomb) are refused, more than [`BOMB_MIN_SIZE`] unpacked at over
+//! [`MAX_RATIO`]:1 (a zip file, a compressed tar, a 7z block) is refused, and
+//! unpacking a compressed tar stops before it fills the disk.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -54,6 +55,12 @@ pub const ID_PREFIX: &str = "archive:";
 /// [`MAX_RATIO`] times its compressed size, is refused as a likely zip bomb.
 const BOMB_MIN_SIZE: u64 = 1 << 30;
 const MAX_RATIO: u64 = 1000;
+
+/// Whether `size` bytes unpacked from `compressed` bytes look like a bomb:
+/// over `min_size` and more than [`MAX_RATIO`] times bigger.
+fn looks_like_bomb(size: u64, compressed: u64, min_size: u64) -> bool {
+    size > min_size && size / compressed.max(1) > MAX_RATIO
+}
 /// Unpacking a compressed tar leaves at least this much space free.
 const KEEP_FREE: u64 = 512 << 20;
 const CHUNK: usize = 256 * 1024;
@@ -283,10 +290,10 @@ fn damaged(name: &str, e: impl std::fmt::Display) -> Error {
 
 fn index_zip(path: &Path, name: &str) -> Result<Index> {
     let file = File::open(path).map_err(|e| Error::io(path.to_string_lossy(), e))?;
-    let za = zip::ZipArchive::new(file).map_err(|e| damaged(name, e))?;
+    let mut za = zip::ZipArchive::new(file).map_err(|e| damaged(name, e))?;
     let mut index = Index::new();
-    // (start of local header, compressed size) of each file with data.
-    let mut spans = Vec::new();
+    // Each file with data.
+    let mut with_data = Vec::new();
     for i in 0..za.len() {
         let e = za.by_index_data(i).map_err(|e| damaged(name, e))?;
         if e.encrypted() {
@@ -317,7 +324,7 @@ fn index_zip(path: &Path, name: &str) -> Result<Index> {
         } else {
             let symlink = e.is_symlink();
             if !symlink && e.compressed_size() > 0 {
-                spans.push((e.header_start(), e.compressed_size()));
+                with_data.push(i);
             }
             Node {
                 kind: if symlink {
@@ -342,12 +349,18 @@ fn index_zip(path: &Path, name: &str) -> Result<Index> {
         index.insert(&parts, node);
     }
     // Entries whose data run into the next entry's header share bytes: the
-    // trick behind overlapping-file zip bombs. 30 bytes is the smallest
-    // local header.
+    // trick behind overlapping-file zip bombs. The data starts after the
+    // local header's name and extra field, so it is looked up.
+    let mut spans = Vec::new();
+    for i in with_data {
+        let e = za.by_index_raw(i).map_err(|e| damaged(name, e))?;
+        let start = e.header_start();
+        let data = e.data_start().unwrap_or(start.saturating_add(30));
+        spans.push((start, data.saturating_add(e.compressed_size())));
+    }
     spans.sort_unstable();
     for w in spans.windows(2) {
-        let (start, len) = w[0];
-        if start.saturating_add(30).saturating_add(len) > w[1].0 {
+        if w[0].1 > w[1].0 {
             return Err(Error::Invalid(format!(
                 "{name} has overlapping entries and may be a zip bomb, so it is not opened"
             )));
@@ -493,6 +506,7 @@ fn unpack_tar(
     name: &str,
     cancel: &CancellationToken,
     progress: &(dyn Fn(u64, u64) + Sync),
+    bomb_min: u64,
 ) -> Result<()> {
     let file = File::open(src).map_err(|e| Error::io(src.to_string_lossy(), e))?;
     let total = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -528,6 +542,11 @@ fn unpack_tar(
         if written > limit {
             return Err(Error::Invalid(format!(
                 "{name} unpacks to more than the free disk space, so it is not opened"
+            )));
+        }
+        if looks_like_bomb(written, read.load(Ordering::Relaxed), bomb_min) {
+            return Err(Error::Invalid(format!(
+                "{name} unpacks to over {MAX_RATIO} times its size and may be a zip bomb, so it is not opened"
             )));
         }
         out.write_all(&buf[..n])
@@ -699,6 +718,8 @@ struct Inner {
     file: PathBuf,
     backing: Backing,
     index: Index,
+    /// Files bigger than this are refused when they look like a bomb.
+    bomb_min: u64,
     /// Held by every read, so the scratch folder outlives them.
     _scratch: Arc<Scratch>,
 }
@@ -745,6 +766,7 @@ impl ArchiveFs {
         cancel: &CancellationToken,
         progress: &ProgressFn,
     ) -> Result<Self> {
+        let bomb_min = BOMB_MIN_SIZE;
         let format = detect(&file, &name)
             .map_err(|e| Error::io(file.to_string_lossy(), e))?
             .ok_or_else(|| Error::Unsupported(format!("opening {name} as an archive")))?;
@@ -767,7 +789,7 @@ impl ArchiveFs {
                         total,
                     })
                 };
-                unpack_tar(format, &file, &tar, &name, cancel, &report)?;
+                unpack_tar(format, &file, &tar, &name, cancel, &report, bomb_min)?;
                 // The download is not needed once unpacked.
                 if file.starts_with(&scratch.0) {
                     let _ = std::fs::remove_file(&file);
@@ -788,6 +810,7 @@ impl ArchiveFs {
                 file,
                 backing,
                 index,
+                bomb_min,
                 _scratch: Arc::new(scratch),
             }),
         })
@@ -840,6 +863,13 @@ impl ArchiveFs {
             readonly: true,
             mode: node.mode,
         }
+    }
+
+    fn bomb(&self, path: &str) -> Error {
+        Error::Invalid(format!(
+            "{}{path} unpacks to over {MAX_RATIO} times its size and may be a zip bomb, so it is not extracted",
+            self.name
+        ))
     }
 
     fn read_only(&self, path: &str) -> Error {
@@ -960,11 +990,8 @@ impl FileSystem for ArchiveFs {
                 Ok(())
             }),
             Data::Zip { index, compressed } => {
-                if size > BOMB_MIN_SIZE && size / compressed.max(1) > MAX_RATIO {
-                    return Err(Error::Invalid(format!(
-                        "{}{p} unpacks to over {MAX_RATIO} times its size and may be a zip bomb, so it is not extracted",
-                        self.name
-                    )));
+                if looks_like_bomb(size, compressed, inner.bomb_min) {
+                    return Err(self.bomb(&p));
                 }
                 stream(size, move |w| {
                     let Backing::Zip { pool } = &inner.backing else {
@@ -983,9 +1010,9 @@ impl FileSystem for ArchiveFs {
                     Ok(())
                 })
             }
-            Data::SevenZ { index } => stream(size, move |w| {
+            Data::SevenZ { index } => {
                 let Backing::SevenZ(archive) = &inner.backing else {
-                    return Err(io::Error::other("not a 7z archive"));
+                    return Err(Error::Invalid("not a 7z archive".into()));
                 };
                 let block = archive
                     .stream_map
@@ -993,30 +1020,49 @@ impl FileSystem for ArchiveFs {
                     .get(index)
                     .copied()
                     .flatten()
-                    .ok_or_else(|| io::Error::other("the file has no data block"))?;
-                let target: *const sevenz_rust2::ArchiveEntry = &archive.files[index];
-                let mut f = File::open(&inner.file)?;
-                let password = sevenz_rust2::Password::empty();
-                let decoder = sevenz_rust2::BlockDecoder::new(1, block, archive, &password, &mut f);
-                let mut found = false;
-                decoder
-                    .for_each_entries(&mut |entry, r| {
-                        if std::ptr::eq(entry, target) {
-                            found = true;
-                            io::copy(r, w)?;
-                            Ok(false)
-                        } else {
-                            Ok(true)
-                        }
-                    })
-                    .map_err(to_io)?;
-                if !found {
-                    return Err(io::Error::other("the file is missing from its block"));
+                    .ok_or_else(|| Error::Invalid(format!("{}{p} has no data block", self.name)))?;
+                // Reading a file decodes its block up to it, so the whole
+                // block is checked.
+                let first = archive.stream_map.block_first_pack_stream_index();
+                let packs = archive.pack_sizes();
+                let start = first.get(block).copied().unwrap_or(packs.len());
+                let end = first.get(block + 1).copied().unwrap_or(packs.len());
+                let packed: u64 = packs.get(start..end).unwrap_or_default().iter().sum();
+                let unpacked = archive.blocks[block].get_unpack_size();
+                if looks_like_bomb(unpacked, packed, inner.bomb_min) {
+                    return Err(self.bomb(&p));
                 }
-                Ok(())
-            }),
+                stream(size, move |w| seven_read(&inner, index, block, w))
+            }
         })
     }
+}
+
+/// Write the 7z file `index`, which is in `block`, to `w`.
+fn seven_read(inner: &Inner, index: usize, block: usize, w: &mut ChannelWriter) -> io::Result<()> {
+    let Backing::SevenZ(archive) = &inner.backing else {
+        return Err(io::Error::other("not a 7z archive"));
+    };
+    let target: *const sevenz_rust2::ArchiveEntry = &archive.files[index];
+    let mut f = File::open(&inner.file)?;
+    let password = sevenz_rust2::Password::empty();
+    let decoder = sevenz_rust2::BlockDecoder::new(1, block, archive, &password, &mut f);
+    let mut found = false;
+    decoder
+        .for_each_entries(&mut |entry, r| {
+            if std::ptr::eq(entry, target) {
+                found = true;
+                io::copy(r, w)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        })
+        .map_err(to_io)?;
+    if !found {
+        return Err(io::Error::other("the file is missing from its block"));
+    }
+    Ok(())
 }
 
 // ---- opening and closing ---------------------------------------------------
@@ -1109,6 +1155,8 @@ async fn download(
 /// An archive the panes no longer show is closed with [`Archives::close`].
 /// When a queued or running operation still uses it (an extraction), it
 /// stays registered until that operation ends and [`Archives::reap`] runs.
+/// An extraction that stopped on an existing file keeps it until the
+/// finished operations are cleared, so that it can be retried.
 pub struct Archives {
     registry: Arc<Registry>,
     queue: OperationQueue,
@@ -1163,9 +1211,14 @@ impl Archives {
         v
     }
 
+    /// Whether an operation uses the archive `id`: one queued or running,
+    /// or one that stopped on an existing file, which can be retried with
+    /// "Replace existing" or "Skip existing" until it is cleared.
     fn busy(&self, id: &str) -> bool {
         self.queue.list().iter().any(|o| {
-            matches!(o.status, OperationStatus::Queued | OperationStatus::Running)
+            let retryable = o.status == OperationStatus::Failed
+                && o.error.as_ref().is_some_and(|e| e.kind == "alreadyExists");
+            (retryable || matches!(o.status, OperationStatus::Queued | OperationStatus::Running))
                 && o.places.iter().any(|p| p == id)
         })
     }
@@ -1182,7 +1235,8 @@ impl Archives {
         }
     }
 
-    /// Close the archives waiting for their operations to end.
+    /// Close the archives waiting for their operations to end (or to be
+    /// cleared).
     pub fn reap(&self) {
         let ids: Vec<String> = self.closing.lock().unwrap().iter().cloned().collect();
         for id in ids {
@@ -1226,6 +1280,73 @@ mod tests {
         for part in clean_parts("x/\0y/..\\..\\z", true) {
             assert!(is_safe_local_name(&part), "{part}");
         }
+    }
+
+    /// Open the 7z `file`, then treat more than 1 MiB as big.
+    fn open_small_limit(file: &Path) -> ArchiveFs {
+        let scratch = Scratch::create(file.with_extension("scratch")).unwrap();
+        let progress: ProgressFn = Arc::new(|_| {});
+        let mut fs = ArchiveFs::open_blocking(
+            "archive:t".into(),
+            file.to_path_buf(),
+            "bomb.7z".into(),
+            Location::new(LocalFs::ID, file.to_string_lossy()),
+            scratch,
+            &CancellationToken::new(),
+            &progress,
+        )
+        .unwrap();
+        Arc::get_mut(&mut fs.inner).unwrap().bomb_min = 1 << 20;
+        fs
+    }
+
+    const ZEROS: usize = 8 << 20;
+
+    #[test]
+    /// VFS-ARC-007: a compressed tar that unpacks to more than 1000 times its
+    /// size is refused while it unpacks.
+    fn compressed_tar_bombs_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut b = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(ZEROS as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "zeros.bin", io::repeat(0).take(ZEROS as u64))
+            .unwrap();
+        let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::best());
+        e.write_all(&b.into_inner().unwrap()).unwrap();
+        let path = tmp.path().join("bomb.tar.bz2");
+        std::fs::write(&path, e.finish().unwrap()).unwrap();
+        let e = unpack_tar(
+            Format::TarBz2,
+            &path,
+            &tmp.path().join("unpacked.tar"),
+            "bomb.tar.bz2",
+            &CancellationToken::new(),
+            &|_, _| {},
+            1 << 20,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("zip bomb"), "{e}");
+    }
+
+    #[tokio::test]
+    /// VFS-ARC-007: a 7z file whose block unpacks to more than 1000 times
+    /// its size is refused before it is decoded.
+    async fn seven_z_bombs_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bomb.7z");
+        let mut w = sevenz_rust2::ArchiveWriter::new(File::create(&path).unwrap()).unwrap();
+        w.push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("zeros.bin"),
+            Some(io::repeat(0).take(ZEROS as u64)),
+        )
+        .unwrap();
+        w.finish().unwrap();
+        let fs = open_small_limit(&path);
+        let e = fs.open_read("/zeros.bin").await.err().expect("read");
+        assert!(e.to_string().contains("zip bomb"), "{e}");
     }
 
     #[test]
