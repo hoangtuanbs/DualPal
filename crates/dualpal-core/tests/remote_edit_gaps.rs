@@ -274,3 +274,68 @@ async fn conflict_resolved_by_skipping() {
     assert_eq!(mem.contents("/shared.txt").unwrap(), b"theirs, longer");
     editor.stop(s.id);
 }
+
+fn faulty_setup(mem: &MemFs) -> (Arc<FaultyFs<MemFs>>, RemoteEditor, tempfile::TempDir) {
+    let faulty = Arc::new(FaultyFs::with_id(mem.clone(), "mem"));
+    let registry = Arc::new(Registry::with_local());
+    registry.register(faulty.clone());
+    let tmp = tempfile::tempdir().unwrap();
+    let editor = RemoteEditor::new(registry, tmp.path());
+    (faulty, editor, tmp)
+}
+
+/// EDIT-007 — an upload whose result cannot be read back is not taken as
+/// a baseline that turns checking off: the next save is checked and held.
+#[tokio::test]
+async fn unverified_upload_keeps_later_saves_checked() {
+    let mem = MemFs::new("inner");
+    mem.seed_file("/f.txt", "old");
+    let (faulty, editor, _tmp) = faulty_setup(&mem);
+    let s = editor.start(Location::new("mem", "/f.txt")).await.unwrap();
+
+    // The check before the upload passes; the stat after it fails.
+    faulty.fail_later(FaultOp::Stat, 1, Error::Connection("dropped".into()));
+    std::fs::write(&s.local_path, "mine").unwrap();
+    let e = editor.clone();
+    eventually("the save is uploaded", WAIT, move || {
+        session(&e, s.id).is_some_and(|s| s.uploads == 1)
+    })
+    .await;
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"mine");
+
+    mem.seed_file("/f.txt", "theirs, meanwhile");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    std::fs::write(&s.local_path, "mine, edited more").unwrap();
+    let e = editor.clone();
+    eventually("the next save is handled", WAIT, move || {
+        session(&e, s.id).is_some_and(|s| matches!(s.status, EditStatus::Conflict) || s.uploads > 1)
+    })
+    .await;
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"theirs, meanwhile");
+    assert_eq!(session(&editor, s.id).unwrap().status, EditStatus::Conflict);
+    editor.stop(s.id);
+}
+
+/// EDIT-007 — an upload that fails part way (after the server file was
+/// truncated) is retried without being mistaken for someone else's change.
+#[tokio::test]
+async fn retry_after_a_partial_upload_is_not_a_conflict() {
+    let mem = MemFs::new("inner");
+    mem.seed_file("/f.txt", "old content");
+    let (faulty, editor, _tmp) = faulty_setup(&mem);
+    let s = editor.start(Location::new("mem", "/f.txt")).await.unwrap();
+
+    faulty.fail_write_after(3);
+    std::fs::write(&s.local_path, "new content").unwrap();
+    let e = editor.clone();
+    eventually("the upload fails", WAIT, move || {
+        session(&e, s.id).is_some_and(|s| s.status == EditStatus::Failed)
+    })
+    .await;
+    assert_ne!(mem.contents("/f.txt").unwrap(), b"old content");
+
+    let done = editor.upload_now(s.id).await.unwrap();
+    assert_eq!(done.status, EditStatus::Uploaded, "{:?}", done.error);
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"new content");
+    editor.stop(s.id);
+}
