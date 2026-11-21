@@ -155,6 +155,14 @@ impl LiveSync {
                 "both panes show the same folder; open another folder in one of them".into(),
             ));
         }
+        if from.fs == to.fs {
+            let fs = self.queue.registry().get(&from.fs)?;
+            if fs.is_within(&from.path, &to.path) || fs.is_within(&to.path, &from.path) {
+                return Err(Error::Invalid(
+                    "one folder is inside the other; auto-sync two separate folders".into(),
+                ));
+            }
+        }
         let _switching = self.switching.lock().await;
         self.halt().await;
         let changed = Arc::new(Notify::new());
