@@ -147,6 +147,31 @@ describe("UI-CMP-007 CompareView", () => {
     expect(p.oncomparefiles).toHaveBeenCalledTimes(1);
   });
 
+  it("plans again, dropping its overrides, when files were saved in the compare view", async () => {
+    const user = userEvent.setup();
+    const be = backend();
+    const props = {
+      left: { fs: "local", path: "/a" },
+      right: { fs: "local", path: "/b" },
+      nameOf: (fs: string) => fs,
+      onclose: vi.fn(),
+      onsavefavorite: vi.fn(async (f: any) => f),
+      oncomparefiles: vi.fn(async () => {}),
+      refresh: 0,
+    };
+    const { rerender } = render(CompareView, { props });
+    const select = await screen.findByRole("combobox", { name: "Action for both.txt" });
+    await user.selectOptions(select, "copyToLeft");
+    expect(be.calls("sync_plan")).toHaveLength(1);
+    await rerender({ ...props, refresh: 1 });
+    await waitFor(() => expect(be.calls("sync_plan")).toHaveLength(2));
+    await waitFor(() => expect((screen.getByRole("combobox", { name: "Action for both.txt" }) as HTMLSelectElement).value).toBe("skip"));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Action for extra.txt" }), "skip");
+    await user.click(screen.getByRole("button", { name: "Synchronize" }));
+    await waitFor(() => expect(be.calls("run_sync")).toHaveLength(1));
+    expect(be.calls("run_sync")[0]).toEqual({ plan: "plan-1", overrides: { "extra.txt": "skip" } });
+  });
+
   it("changing the mode plans again in that mode", async () => {
     const user = userEvent.setup();
     const be = backend();

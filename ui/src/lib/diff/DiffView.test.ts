@@ -8,7 +8,7 @@ import { defaultScenario, file, installMockBackend } from "../../../tests/mock-b
 const L = { fs: "local", path: "/home/user/left.txt" };
 const R = { fs: "local", path: "/home/user/right.txt" };
 
-function setup(left: string | Uint8Array, right: string | Uint8Array) {
+function setup(left: string | Uint8Array, right: string | Uint8Array, extra: Record<string, unknown> = {}) {
   try {
     localStorage.clear();
   } catch {
@@ -25,7 +25,7 @@ function setup(left: string | Uint8Array, right: string | Uint8Array) {
   const mock = installMockBackend(scenario);
   const onclose = vi.fn();
   const onexternal = vi.fn(async () => {});
-  render(DiffView, { left: L, right: R, onclose, onexternal });
+  render(DiffView, { left: L, right: R, onclose, onexternal, ...extra });
   return { mock, onclose, onexternal };
 }
 
@@ -120,6 +120,42 @@ describe("UI-UNIT-041 DiffView", () => {
     await userEvent.click(within("diff-unsaved", "Save"));
     await waitFor(() => expect(onclose).toHaveBeenCalledTimes(2));
     expect(mock.lastCall("diff_save")).toEqual({ session: 1, side: "left" });
+  });
+
+  it("does not close while a copy is still running, then asks", async () => {
+    const { onclose } = setup(LEFT, RIGHT);
+    await waitFor(() => expect(status()).toBe("2 changes"));
+    let release!: () => void;
+    const original = diffApi.apply;
+    vi.spyOn(diffApi, "apply").mockImplementationOnce(async (...a) => {
+      await new Promise<void>((r) => (release = r));
+      return original(...a);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Copy change 1 to the left" }));
+    await waitFor(() => expect(release).toBeTypeOf("function"));
+    await fireEvent.keyDown(window, { key: "Escape" });
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onclose).not.toHaveBeenCalled();
+    release();
+    await waitFor(() => expect(status()).toBe("Change 1 of 1"));
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(await screen.findByTestId("diff-unsaved")).toBeInTheDocument();
+    expect(onclose).not.toHaveBeenCalled();
+  });
+
+  it("reports unsaved or running work, and each save", async () => {
+    const onpending = vi.fn();
+    const onsaved = vi.fn();
+    setup(LEFT, RIGHT, { onpending, onsaved });
+    await waitFor(() => expect(status()).toBe("2 changes"));
+    expect(onpending).toHaveBeenLastCalledWith(false);
+    await userEvent.click(screen.getByRole("button", { name: "Copy change 1 to the right" }));
+    await waitFor(() => expect(status()).toBe("Change 1 of 1"));
+    expect(onpending).toHaveBeenLastCalledWith(true);
+    expect(onsaved).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Save right" }));
+    await waitFor(() => expect(onsaved).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onpending).toHaveBeenLastCalledWith(false));
   });
 
   it("closes without saving on Don’t Save", async () => {

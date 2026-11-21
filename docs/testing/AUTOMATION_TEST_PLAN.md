@@ -651,6 +651,8 @@ Built-in file compare (`dualpal_core::diff`), in `crates/dualpal-core/tests/diff
 | DIFF-019 | sessions: apply and save through the file system | P0 | NEW | local + server (MemFs) sides; save writes each side, no temp file left; a file changed since it was read is not overwritten; closed session |
 | DIFF-020 | encodings per side | P0 | NEW | UTF-16 BOM saved back as UTF-16; Windows-1252 side refuses characters it lacks; another encoding per side; refused while dirty |
 | DIFF-021 | lossy decoding is not saved | P1 | NEW | UTF-8 forced on invalid bytes → not saveable; detection falls back to Windows-1252 |
+| DIFF-022 | same-size edit within the clock's resolution | P0 | NEW | an edit that keeps size and modification time is still caught by comparing bytes; file not overwritten |
+| DIFF-023 | symbolic link side is not saved | P1 | NEW | save refused; the link stays a link and its target is unchanged |
 
 ### 8.11.1 File viewer — `VIEW`
 
@@ -766,7 +768,7 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-036 | `Viewer` | P0 | opens through `viewer_open`; 1/2/3 and buttons switch modes; images show as images; binary opens in hex; reads only the pages on screen; find beyond the loaded pages with next/previous (Enter, F3, Shift F3); hex search; Esc closes find, then the viewer; F3 closes; open error |
 | UI-UNIT-037 | viewer api argument names | P0 | every `viewer_*` call's exact argument object |
 | UI-UNIT-040 | compare view `rows.ts` | P0 | side-by-side rows with fillers, inline rows, hunk rows, a million lines without a row each |
-| UI-UNIT-041 | `DiffView` | P0 | opens through `diff_open`; tints and marked words; inline mode; Alt ↓/↑ and F7/Shift F7; copy a change both ways and save; unsaved prompt (Cancel, Save, Don't Save); options recompute; binary message and external app; open error |
+| UI-UNIT-041 | `DiffView` | P0 | opens through `diff_open`; tints and marked words; inline mode; Alt ↓/↑ and F7/Shift F7; copy a change both ways and save; unsaved prompt (Cancel, Save, Don't Save); no close while a copy runs; reports unsaved work and saves; options recompute; binary message and external app; open error |
 | UI-UNIT-042 | compare view api argument names | P0 | every `diff_*` call's exact argument object |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
@@ -774,7 +776,7 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-CMP-004 | `ConnectionDialog` fields per protocol (SFTP auth methods, FTP security, WebDAV URL, S3 endpoint/region/path-style); validation errors; secret field type=password; save calls `save_connection` with correct Endpoint shape | P0 | |
 | UI-CMP-005 | `ConnectionDialog` ssh-config host picker fills fields | P1 | |
 | UI-CMP-006 | `MultiRename` live preview, issues highlighted, apply disabled with issues, preset save/load | P0 | |
-| UI-CMP-007 | `CompareView` renders states, per-row action change, deletions require confirmation, double-click changed file → `compare_files` | P0 | |
+| UI-CMP-007 | `CompareView` renders states, per-row action change, deletions require confirmation, double-click changed file → `compare_files`, plans again (overrides dropped) after a save in the compare view | P0 | |
 | UI-CMP-008 | `OperationsPanel` statuses, progress bar %, cancel, clear, activity tab | P0 | |
 | UI-CMP-009 | `Inspector` preview by type, quick edit dirty state + Ctrl/⌘ S save, binary/truncated warning | P1 | |
 | UI-CMP-010 | `Sidebar` sections, collapse server favorites, connected dot, remove asks | P1 | |

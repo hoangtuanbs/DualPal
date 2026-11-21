@@ -948,12 +948,28 @@ impl DiffSessions {
             ))
         })?;
         let now = fs.stat(&path).await?;
+        if now.symlink {
+            // Saving renames a new file over the entry, which would replace
+            // the link and leave the file it points to unchanged.
+            return Err(Error::Unsupported(format!(
+                "saving {name}: it is a link; compare the file it points to instead"
+            )));
+        }
+        let changed = || {
+            Error::Invalid(format!(
+                "{name} changed since it was compared; compare again before saving"
+            ))
+        };
         let was = &s.meta[i];
         if now.size != was.size || (was.modified_ms.is_some() && now.modified_ms != was.modified_ms)
         {
-            return Err(Error::Invalid(format!(
-                "{name} changed since it was compared; compare again before saving"
-            )));
+            return Err(changed());
+        }
+        // Times can be coarse (a second on SFTP) or missing, so a same-size
+        // edit can keep them: check the bytes too.
+        let current = read_all(fs.as_ref(), &path, MAX_BYTES, &CancellationToken::new()).await?;
+        if current.as_deref() != Some(&s.doc.sides[i].original[..]) {
+            return Err(changed());
         }
         crate::vfs::write_bytes(fs.as_ref(), &path, &bytes).await?;
         let after = fs.stat(&path).await.ok();
