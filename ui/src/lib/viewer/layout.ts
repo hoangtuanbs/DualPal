@@ -128,6 +128,11 @@ export async function readSegments(
         while (back > rel + 1 && back > end - 4 && (buf[back] & 0xc0) === 0x80) back--;
         end = back;
       }
+      // Nor a UTF-16 surrogate pair: each segment is decoded on its own.
+      if (unit === 2 && end === rel + MAX_LINE && end - 2 > rel) {
+        const u = enc === "utf-16le" ? buf[end - 2] | (buf[end - 1] << 8) : (buf[end - 2] << 8) | buf[end - 1];
+        if (u >= 0xd800 && u <= 0xdbff) end -= 2;
+      }
       contentEnd = end;
     }
     if (end <= rel) break;
@@ -176,8 +181,26 @@ export async function segmentAt(src: ByteSource, opts: TextOptions, offset: numb
   return segs.find((s) => s.end > o) ?? segs.at(-1) ?? null;
 }
 
+/**
+ * Where each wrapped row of a text starts, in UTF-16 code units: every
+ * `cols`, but a row ends a unit early rather than split a surrogate pair.
+ */
+export function wrapStarts(text: string, cols: number | null): number[] {
+  const starts = [0];
+  if (!cols) return starts;
+  for (let at = 0; ; ) {
+    let next = at + cols;
+    if (next >= text.length) break;
+    const c = text.charCodeAt(next - 1);
+    if (c >= 0xd800 && c <= 0xdbff && next - 1 > at) next--;
+    starts.push(next);
+    at = next;
+  }
+  return starts;
+}
+
 /** How many screen rows a segment takes. */
-export const rowCount = (seg: Segment, cols: number | null) => (cols ? Math.max(1, Math.ceil(seg.text.length / cols)) : 1);
+export const rowCount = (seg: Segment, cols: number | null) => wrapStarts(seg.text, cols).length;
 
 /** The first position of the text. */
 export const startPos = (opts: TextOptions): Pos => ({ seg: opts.bom, sub: 0, cont: false, line: 1 });
@@ -192,10 +215,10 @@ export async function rowsFrom(src: ByteSource, opts: TextOptions, top: Pos, cou
   while (rows.length < count && segs.length) {
     for (const seg of segs) {
       if (!first) line = line === null ? null : seg.cont ? line : line + 1;
-      const n = rowCount(seg, opts.cols);
-      for (let sub = first ? top.sub : 0; sub < n && rows.length < count; sub++) {
-        const from = opts.cols ? sub * opts.cols : 0;
-        const text = opts.cols ? seg.text.slice(from, from + opts.cols) : seg.text;
+      const starts = wrapStarts(seg.text, opts.cols);
+      for (let sub = first ? top.sub : 0; sub < starts.length && rows.length < count; sub++) {
+        const from = starts[sub];
+        const text = seg.text.slice(from, starts[sub + 1] ?? seg.text.length);
         rows.push({ pos: { seg: seg.start, sub, cont: seg.cont, line }, segment: seg, from, text });
       }
       first = false;
@@ -237,9 +260,28 @@ export async function posAt(src: ByteSource, opts: TextOptions, offset: number):
   let sub = 0;
   if (opts.cols && offset > seg.start) {
     const chars = textOf(seg.bytes.subarray(0, Math.min(seg.bytes.length, offset - seg.start)), opts.encoding).length;
-    sub = Math.min(rowCount(seg, opts.cols) - 1, Math.floor(chars / opts.cols));
+    const starts = wrapStarts(seg.text, opts.cols);
+    while (sub + 1 < starts.length && starts[sub + 1] <= chars) sub++;
   }
   return { seg: seg.start, sub, cont: seg.cont, line: seg.start <= opts.bom ? 1 : null };
+}
+
+/**
+ * The byte offset a row starts at: the end of the longest start of its
+ * segment that decodes to no more than the characters before the row.
+ */
+export function rowOffset(row: Row, enc: TextEncoding): number {
+  const seg = row.segment;
+  if (row.from <= 0) return seg.start;
+  const unit = unitOf(enc);
+  let lo = 0;
+  let hi = Math.floor(seg.bytes.length / unit);
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (textOf(seg.bytes.subarray(0, mid * unit), enc).length <= row.from) lo = mid;
+    else hi = mid - 1;
+  }
+  return seg.start + lo * unit;
 }
 
 /** Character range [from, to) of a byte range inside a segment, or null if they do not meet. */

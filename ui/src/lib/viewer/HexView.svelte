@@ -6,6 +6,7 @@
 
 <script lang="ts">
   // Offset, 16 bytes in hex and the same bytes as ASCII, a screen at a time.
+  import { errorMessage } from "../api";
   import Scrollbar from "./Scrollbar.svelte";
   import type { ByteSource } from "./source";
 
@@ -37,6 +38,9 @@
   let bytes = $state<Uint8Array>(new Uint8Array());
   let shownTop = $state(0);
   let serial = 0;
+  /** A read failed (e.g. a server connection dropped); bumping `attempt` tries again. */
+  let failed = $state<string | null>(null);
+  let attempt = $state(0);
 
   $effect(() => {
     const el = box;
@@ -66,12 +70,22 @@
     const t = top;
     const n = visible;
     const src = source;
+    void attempt;
     const mine = ++serial;
-    void src.read(t * BYTES_PER_ROW, n * BYTES_PER_ROW).then((b) => {
-      if (mine !== serial) return;
-      bytes = b;
-      shownTop = t;
-    });
+    src.read(t * BYTES_PER_ROW, n * BYTES_PER_ROW).then(
+      (b) => {
+        if (mine !== serial) return;
+        bytes = b;
+        shownTop = t;
+        failed = null;
+      },
+      (e) => {
+        // Rows of another place must not stay under the new position.
+        if (mine !== serial) return;
+        bytes = new Uint8Array();
+        failed = errorMessage(e);
+      },
+    );
   });
 
   $effect(() => {
@@ -138,6 +152,12 @@
 <div class="view">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div class="rows" {id} bind:this={box} role="document" aria-label={label} tabindex="0" data-testid="hex-view" data-top={top * BYTES_PER_ROW} {onkeydown} {onwheel}>
+    {#if failed}
+      <p class="failed" role="alert">
+        Could not read the file: {failed}
+        <button onclick={() => ((failed = null), attempt++)}>Retry</button>
+      </p>
+    {/if}
     {#each lines as line (line.offset)}
       <div class="row" data-offset={line.offset}>
         <span class="off">{line.offset.toString(16).padStart(digits, "0").toUpperCase()}</span>
@@ -189,6 +209,10 @@
   }
   .hex {
     min-width: 48ch;
+  }
+  .failed {
+    margin: 8px 12px;
+    color: var(--muted);
   }
   .m {
     background: var(--accent);
