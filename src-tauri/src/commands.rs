@@ -1,3 +1,4 @@
+use dualpal_core::checksum::{Algorithm, ChecksumEntry, ChecksumProgress, VerifyReport};
 use dualpal_core::folder_size::FolderSize;
 use dualpal_core::places::Favorite;
 use dualpal_core::search::{SearchOptions, SearchResult};
@@ -290,6 +291,123 @@ pub fn cancel_find_files(state: State<'_, AppState>, request: u64) {
     if let Some(c) = state.find_cancel.lock().unwrap().remove(&request) {
         c.cancel();
     }
+}
+
+/// Checksum progress for `request`, sent as `checksum-progress` events.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecksumProgressEvent {
+    request: u64,
+    #[serde(flatten)]
+    progress: ChecksumProgress,
+}
+
+/// Forward progress to the window, at most every 150 ms (the last state of a
+/// burst can still be dropped; the command's result carries the final state).
+fn checksum_reporter<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: u64,
+) -> impl FnMut(ChecksumProgress) {
+    use tauri::Emitter;
+    let mut last: Option<std::time::Instant> = None;
+    move |progress| {
+        if last.is_some_and(|t| t.elapsed().as_millis() < 150) {
+            return;
+        }
+        last = Some(std::time::Instant::now());
+        let _ = app.emit(
+            "checksum-progress",
+            ChecksumProgressEvent { request, progress },
+        );
+    }
+}
+
+/// Hash `names` (items inside `folder`) with `algorithm`, folders recursively.
+/// `request` names this calculation for [`cancel_checksum`].
+#[tauri::command]
+pub async fn checksum_calculate<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, AppState>,
+    folder: Location,
+    names: Vec<String>,
+    algorithm: Algorithm,
+    request: u64,
+) -> CmdResult<Vec<ChecksumEntry>> {
+    let cancel = CancellationToken::new();
+    state
+        .checksum_cancel
+        .lock()
+        .unwrap()
+        .insert(request, cancel.clone());
+    let result = dualpal_core::checksum::calculate(
+        &state.registry,
+        &folder,
+        &names,
+        algorithm,
+        &cancel,
+        checksum_reporter(app, request),
+    )
+    .await;
+    state.checksum_cancel.lock().unwrap().remove(&request);
+    result
+}
+
+/// Check the files listed in the checksum file `file`. `request` names this
+/// check for [`cancel_checksum`].
+#[tauri::command]
+pub async fn checksum_verify<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, AppState>,
+    file: Location,
+    algorithm: Algorithm,
+    request: u64,
+) -> CmdResult<VerifyReport> {
+    let cancel = CancellationToken::new();
+    state
+        .checksum_cancel
+        .lock()
+        .unwrap()
+        .insert(request, cancel.clone());
+    let result = dualpal_core::checksum::verify(
+        &state.registry,
+        &file,
+        algorithm,
+        &cancel,
+        checksum_reporter(app, request),
+    )
+    .await;
+    state.checksum_cancel.lock().unwrap().remove(&request);
+    result
+}
+
+/// Stop the checksum calculation or verification `request`. Does nothing if
+/// it has finished.
+#[tauri::command]
+pub fn cancel_checksum(state: State<'_, AppState>, request: u64) {
+    if let Some(c) = state.checksum_cancel.lock().unwrap().remove(&request) {
+        c.cancel();
+    }
+}
+
+/// Write the hashes in `entries` to a checksum file `file_name` in `folder`.
+#[tauri::command]
+pub async fn checksum_save(
+    state: State<'_, AppState>,
+    folder: Location,
+    file_name: String,
+    algorithm: Algorithm,
+    entries: Vec<ChecksumEntry>,
+    overwrite: bool,
+) -> CmdResult<Location> {
+    dualpal_core::checksum::write_file(
+        &state.registry,
+        &folder,
+        &file_name,
+        algorithm,
+        &entries,
+        overwrite,
+    )
+    .await
 }
 
 #[tauri::command]
