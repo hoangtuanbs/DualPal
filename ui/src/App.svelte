@@ -1554,7 +1554,14 @@
       current={active.location}
       onopen={(loc) => active.open(loc)}
       onremovefavorite={async (loc) => (favorites = await api.removeFavorite(loc))}
-      onreorder={async (from, to) => (favorites = await api.reorderFavorites(from, to))}
+      onreorder={async (from, to) => {
+        try {
+          favorites = await api.reorderFavorites(from, to);
+        } catch {
+          // The list changed underneath (e.g. in another window): show it as it is.
+          favorites = await api.favorites();
+        }
+      }}
       {connections}
       {connecting}
       onconnect={(c, path) => connectTo(c, path)}
