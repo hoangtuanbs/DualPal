@@ -42,6 +42,7 @@
   let textView: TextView | undefined = $state();
   let hexView: HexView | undefined = $state();
   let searchField: HTMLInputElement | undefined = $state();
+  let dialog: HTMLDivElement | undefined = $state();
 
   function stored(key: string, fallback: boolean): boolean {
     try {
@@ -71,11 +72,14 @@
     },
     (e) => {
       error = errorMessage(e);
+      void focusView();
       return null;
     },
   );
   onDestroy(() => {
     if (running !== null) viewerApi.cancel(running).catch(() => {});
+    // A line count after a jump would go on reading the file.
+    source?.close?.();
     void opening.then((f) => f && viewerApi.close(f.session)).catch(() => {});
   });
 
@@ -103,14 +107,17 @@
   });
 
   // ---- modes ------------------------------------------------------------------
+  /** Focus the text or hex view, or the dialog itself (media, errors), so keys stay in the viewer. */
   async function focusView() {
     await tick();
-    (document.querySelector(mode === "hex" ? "[data-testid=hex-view]" : "[data-testid=text-view]") as HTMLElement | null)?.focus();
+    const view = mode === "media" ? null : dialog?.querySelector<HTMLElement>(mode === "hex" ? "[data-testid=hex-view]" : "[data-testid=text-view]");
+    (view ?? dialog)?.focus();
   }
 
   function setMode(m: Mode) {
     if (m === "media" && !media) return;
     const at = mode === "hex" ? hexView?.topOffset() : mode === "text" ? textView?.topOffset() : undefined;
+    if (m !== mode) dropSearch(); // the term may mean other bytes now
     mode = m;
     // Keep the place when switching between text and hex.
     void tick().then(() => {
@@ -133,17 +140,26 @@
 
   $effect(() => {
     let off: (() => void) | undefined;
+    let gone = false;
+    const unlisten = (u: () => void) => {
+      try {
+        u();
+      } catch {
+        // The window is already gone.
+      }
+    };
     void viewerApi
       .onSearchProgress((p) => {
         if (p.request === running) scanned = p.scanned;
       })
-      .then((u) => (off = u), () => {});
+      .then(
+        // Closed before the listener was in place: remove it at once.
+        (u) => (gone ? unlisten(u) : (off = u)),
+        () => {},
+      );
     return () => {
-      try {
-        off?.();
-      } catch {
-        // The window is already gone.
-      }
+      gone = true;
+      if (off) unlisten(off);
     };
   });
 
@@ -168,6 +184,18 @@
     running = null;
     searching = false;
     scanned = null;
+  }
+
+  /** The term or a setting changed: a search on its way looks for the old one. */
+  function dropSearch() {
+    if (running === null) return;
+    cancelSearch();
+    status = "";
+  }
+
+  function searchChanged() {
+    match = null;
+    dropSearch();
   }
 
   /** The search term as bytes: hex bytes in hex mode when it reads as hex. */
@@ -195,7 +223,7 @@
     searching = true;
     status = "Searching…";
     try {
-      const at = await viewerApi.search(file.session, request, n.bytes, from, backward, n.text && ignoreCase);
+      const at = await viewerApi.search(file.session, request, n.bytes, from, backward, n.text && ignoreCase, n.text ? encoding : null);
       if (running !== request) return;
       if (at === null) {
         status = backward ? "No more matches above." : "No more matches below.";
@@ -259,7 +287,7 @@
 <svelte:window {onkeydown} />
 
 <div class="backdrop">
-  <div class="viewer" role="dialog" aria-modal="true" aria-label="View {entry.name}" data-testid="viewer">
+  <div class="viewer" role="dialog" aria-modal="true" aria-label="View {entry.name}" data-testid="viewer" tabindex="-1" bind:this={dialog}>
     <header>
       <span class="icon" aria-hidden="true">{glyph(entry)}</span>
       <h2 title={location.path}>{entry.name}</h2>
@@ -273,7 +301,7 @@
         {/if}
       </div>
       {#if mode === "text"}
-        <select aria-label="Encoding" bind:value={encoding} onchange={() => (match = null)}>
+        <select aria-label="Encoding" bind:value={encoding} onchange={searchChanged}>
           {#each ENCODINGS as enc (enc.id)}
             <option value={enc.id}>{enc.label}</option>
           {/each}
@@ -307,7 +335,7 @@
           bind:this={searchField}
           bind:value={query}
           onkeydown={searchKey}
-          oninput={() => (match = null)}
+          oninput={searchChanged}
           placeholder={mode === "hex" ? "Text, or hex bytes like 4F 4B" : "Find text"}
           aria-label="Find in file"
           spellcheck="false"
@@ -315,7 +343,7 @@
           data-testid="viewer-search"
         />
         {#if mode === "text"}
-          <label><input type="checkbox" bind:checked={ignoreCase} /> Ignore case</label>
+          <label><input type="checkbox" bind:checked={ignoreCase} onchange={dropSearch} /> Ignore case</label>
         {/if}
         <button onclick={() => find(true)} disabled={!query} title="Previous (Shift F3, Shift Enter)">Previous</button>
         <button onclick={() => find(false)} disabled={!query} title="Next (F3, Enter)">Next</button>
@@ -387,6 +415,7 @@
     border-radius: 10px;
     box-shadow: 0 20px 50px rgb(0 0 0 / 0.35);
     overflow: hidden;
+    outline: none;
   }
   header,
   .search,

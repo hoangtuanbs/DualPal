@@ -9,6 +9,8 @@ export interface ByteSource {
   read(offset: number, length: number): Promise<Uint8Array>;
   /** Line feeds before `upto`, when the source can count them cheaply. */
   countLines?(upto: number, encoding: TextEncoding): Promise<number>;
+  /** Stop work still running for the source, e.g. a line count, when the view closes. */
+  close?(): void;
 }
 
 /** Bytes per page fetched from the backend. */
@@ -103,6 +105,10 @@ export function backendSource(file: ViewerFile, local: boolean): PagedSource {
       return viewerApi.countLines(file.session, request, upto, encoding).finally(() => {
         if (running === request) running = null;
       });
+    };
+    (source as ByteSource).close = () => {
+      if (running !== null) viewerApi.cancel(running).catch(() => {});
+      running = null;
     };
   }
   return source;
