@@ -176,12 +176,20 @@ pub fn plan_steps(cmp: &Comparison, snap: &Snapshot, mode: SyncMode) -> Vec<Sync
             left: totals(|d| d.left),
             right: totals(|d| d.right),
         };
+        // A folder on one side only is copied or deleted whole, so a clash
+        // anywhere inside it holds the whole folder back.
+        let clash = match item.state {
+            DiffState::LeftOnly | DiffState::RightOnly => std::iter::once(item)
+                .chain(inside)
+                .any(|d| case_clash.contains(d.rel.as_str())),
+            _ => case_clash.contains(item.rel.as_str()),
+        };
         use SyncAction::*;
         use SyncReason as R;
         let planned = match item.state {
             DiffState::Same => None,
             DiffState::Different if item.dir => None,
-            _ if case_clash.contains(item.rel.as_str()) => Some(step(Skip, R::CaseConflict, true)),
+            _ if clash => Some(step(Skip, R::CaseConflict, true)),
             DiffState::KindMismatch => Some(step(Skip, R::KindMismatch, true)),
             DiffState::LeftOnly | DiffState::RightOnly => {
                 let left = item.state == DiffState::LeftOnly;

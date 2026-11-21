@@ -148,3 +148,41 @@ async fn sync_plans_names_differing_in_case_as_conflicts() {
         );
     }
 }
+
+/// CMP-013 — a folder on one side only that holds two names differing in
+/// case is held back as a whole, not copied in one step.
+#[tokio::test]
+async fn one_sided_folder_holding_a_case_clash_is_a_conflict() {
+    for mode in [SyncMode::Update, SyncMode::Mirror, SyncMode::TwoWay] {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = MemFs::new("server");
+        server.seed_file("/r/d/Case.txt", "one");
+        server.seed_file("/r/d/case.txt", "two");
+        server.seed_file("/r/d/other.txt", "x");
+        let registry = setup(&server);
+        let q = OperationQueue::new(registry, Arc::new(ActivityLog::in_memory(50)), 2);
+        let engine = SyncEngine::new(q, None);
+        // The server is the source here; the local folder is empty.
+        let p = engine
+            .plan(
+                &Location::new("server", "/r"),
+                &Location::new("local", tmp.path().to_string_lossy()),
+                mode,
+                CompareOptions::default(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let steps: Vec<(&str, SyncAction, SyncReason, bool)> = p
+            .steps
+            .iter()
+            .map(|s| (s.rel.as_str(), s.action, s.reason, s.conflict))
+            .collect();
+        assert_eq!(
+            steps,
+            [("d", SyncAction::Skip, SyncReason::CaseConflict, true)],
+            "{mode:?}"
+        );
+    }
+}
