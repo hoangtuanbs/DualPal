@@ -85,7 +85,7 @@ class Updates {
       // Leave an offer or an install that is already on screen alone.
       if (this.#busyWithOffer()) return;
       // Record the attempt first, so a failing check is not retried on every start.
-      await api.saveSettings({ ...settings, lastUpdateCheck: now });
+      await api.updateSettings({ lastUpdateCheck: now });
       const found = await this.#find();
       if (!found) return;
       // The person may have skipped this release, turned checks off or got an
@@ -129,8 +129,7 @@ class Updates {
 
   /** Turn the automatic check on or off. */
   async setAutoCheck(on: boolean) {
-    const settings = await api.settings();
-    await api.saveSettings({ ...settings, updateChecks: on });
+    await api.updateSettings({ updateChecks: on });
     this.autoCheck = on;
   }
 
@@ -140,8 +139,7 @@ class Updates {
     this.dismiss();
     if (!version) return;
     try {
-      const settings = await api.settings();
-      await api.saveSettings({ ...settings, skippedVersion: version });
+      await api.updateSettings({ skippedVersion: version });
     } catch (e) {
       this.message = `Could not save the choice: ${errorMessage(e)}`;
       this.phase = "error";
