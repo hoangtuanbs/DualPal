@@ -64,7 +64,6 @@ fn leftovers(dir: &Path) -> Vec<String> {
 /// OPS-COPY-004 — a copied file keeps its permission bits (`script.sh` 0755).
 #[cfg(unix)]
 #[tokio::test]
-#[ignore = "BUG: a copy to a new file does not carry the source's permission bits over; only a replaced file keeps the old target's mode"]
 async fn copy_keeps_mode_bits() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
