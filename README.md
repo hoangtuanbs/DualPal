@@ -23,6 +23,7 @@ crates/dualpal-core   Platform-independent Rust core (no Tauri dependency)
   src/compare.rs      Folder comparison on any two file systems
   src/sync.rs         One-way and two-way sync with per-pair history
   src/rename.rs       Multi Rename rules and presets
+  src/diff.rs         Built-in file compare: line diff, copying changes, saving
   src/difftools.rs    External file compare apps
   src/viewer.rs       File viewer: encodings, streamed search, open files (pages via vfs/range.rs)
 src-tauri/            Tauri shell: commands + progress events wiring the core to the UI
@@ -100,7 +101,8 @@ npm run test:unit                    # L5 UI unit/component tests
 | Ctrl/⌘ Shift P | Command palette: find any command, server, favorite or sync (also the ⌘-shaped toolbar button) |
 | Ctrl/⌘ Shift T | Open a terminal in the current local folder (Windows Terminal, else PowerShell; Terminal on macOS; `$TERMINAL` or a common terminal on Linux) |
 | Ctrl/⌘ Shift Y | Compare & Sync the folders of both panes |
-| Ctrl/⌘ Shift D | Compare two files in your compare app |
+| Ctrl/⌘ Shift D | Compare two files side by side: the two marked files, or the file under the cursor in each pane (see *Comparing files*) |
+| Alt ↓ / Alt ↑, F7 / Shift F7, Alt → / Alt ← (in file compare) | Next / previous change; copy the current change to the right / left |
 | Ctrl/⌘ Shift L | Synchronized browsing on / off |
 
 ## Viewing files
@@ -144,13 +146,23 @@ The three arrow buttons in the toolbar keep the two panes' folders in sync while
 
 Folders on this computer are watched, so a change is synced within a couple of seconds. Servers, buckets and Windows network or WSL folders send no change notifications, so they are checked every 10 seconds. While auto-sync runs, the panes are locked and a bar shows what it is doing; click the lit button again, or *Stop*, to end it. Each sync appears under *Operations*.
 
+## Comparing files
+
+**Compare Files** compares the two marked files in a pane, or the file under the cursor in each pane (a file of the same name in the other pane wins). The files can be on this computer or any server or bucket; they are read directly, not downloaded first.
+
+- **Side by side** (the default) or **Inline** (removed lines, then added ones). Both sides scroll together. Changed lines are tinted, and the words that changed in them are marked more strongly. The bar on the right shows where the changes are; click it to go there.
+- **Next / Previous** (Alt ↓ / Alt ↑, or F7 / Shift F7) go from change to change; the toolbar counts them ("3 changes", "Change 2 of 3").
+- **Ignore whitespace**, **Ignore case** and **Ignore line endings** (CRLF, LF and a missing line feed at the end) compare again at once.
+- **→** and **←** next to a change copy it to the right or left side (Alt → / Alt ← for the current change). **Save** writes each side back to its file (an upload for files on servers), in its own encoding; closing with unsaved changes asks first. Other editing is not offered.
+- The encoding of each side is detected like in the viewer and can be changed in its header. Files that are not text are compared byte by byte ("Binary files differ"). Text files over 20 MB or 500,000 lines are not compared here; open them in your compare app.
+
 ## Compare, sync and power tools
 
 - **Compare & Sync** compares the folders in the two panes (local or on any server) by size and date, size only, or content. Choose *Update →* (copy new and changed items to the right), *Mirror →* (make the right an exact copy) or *Two-way ⇄*. Every planned step can be changed before you press *Synchronize*, and deletions are confirmed first.
 - Two-way sync remembers each folder pair after it syncs, so it can tell a file deleted on one side from a new file on the other, and an edit on one side from an edit on both (a conflict, which is left for you to decide). The first sync of a pair never deletes. Servers that stamp uploads with their own time (S3) do not cause copies back and forth.
 - **Save as Favorite** keeps the pair, mode and options under *Syncs* in the sidebar and in the command palette; servers are connected when you open one.
 - **Linked** (synchronized browsing): going into a folder, or up, in one pane does the same in the other.
-- **Compare Files** opens two files in your compare app (FileMerge, Beyond Compare, Kaleidoscope, VS Code, BBEdit, WinMerge, Meld, P4Merge…, found automatically; choose with *Choose Compare App…* in the command palette). Server files are downloaded first. In Compare & Sync, double-click a changed file.
+- **Compare Files** (Ctrl/⌘ Shift D) shows two files side by side, from this computer or any server (see *Comparing files* below). In Compare & Sync, double-click a changed file. *Open in external app…* hands the same files to your compare app (FileMerge, Beyond Compare, Kaleidoscope, VS Code, BBEdit, WinMerge, Meld, P4Merge…, found automatically; choose with *Choose Compare App…* in the command palette; server files are downloaded first). *Use External Compare App* in the palette makes Ctrl/⌘ Shift D open it directly.
 - **Multi Rename** renames the marked items with rules (replace text or a regular expression, change case, insert text with `{name}` `{ext}` `{parent}` `{date}` `{n}` tokens, numbering, remove characters, change extension) and shows every new name before it renames. Rule sets can be saved as presets; a few come built in. Swapping names between items works.
 - **Activity insights** (from the Activity tab or the palette) shows what was done per day, by kind and by place, transfer speed, the largest transfers and recent failures.
 

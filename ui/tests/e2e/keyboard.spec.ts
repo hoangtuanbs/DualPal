@@ -343,9 +343,18 @@ test.describe("UI-KEY keyboard", () => {
     await point(page, "left", "a.txt");
     await clearCalls(page);
     await page.keyboard.press(`${MOD}+Shift+d`);
+    // The built-in compare view opens on them.
+    await expect(page.getByTestId("diff-view")).toBeVisible();
+    await expect.poll(() => calls(page, "diff_open")).toEqual([
+      expect.objectContaining({ left: { fs: "local", path: "/home/user/a.txt" }, right: { fs: "local", path: "/home/user/docs/notes.txt" } }),
+    ]);
+    // "Open in external app…" hands the same pair to the compare app.
+    await page.getByRole("button", { name: "Open in external app…" }).click();
     await expect.poll(() => calls(page, "compare_files")).toEqual([
       { left: { fs: "local", path: "/home/user/a.txt" }, right: { fs: "local", path: "/home/user/docs/notes.txt" } },
     ]);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("diff-view")).toBeHidden();
     // A file of the same name in the other pane wins over its cursor.
     await page.keyboard.press("Tab");
     await page.keyboard.press("Backspace");
@@ -354,9 +363,10 @@ test.describe("UI-KEY keyboard", () => {
     await point(page, "left", "a.txt");
     await clearCalls(page);
     await page.keyboard.press(`${MOD}+Shift+d`);
-    await expect.poll(() => calls(page, "compare_files")).toEqual([
-      { left: { fs: "local", path: "/home/user/a.txt" }, right: { fs: "local", path: "/home/user/a.txt" } },
+    await expect.poll(() => calls(page, "diff_open")).toEqual([
+      expect.objectContaining({ left: { fs: "local", path: "/home/user/a.txt" }, right: { fs: "local", path: "/home/user/a.txt" } }),
     ]);
+    await expect(page.getByTestId("diff-status")).toHaveText("The files are identical");
   });
 
   test("UI-KEY-035 Ctrl/Cmd Shift T opens a terminal in the active pane's folder", async ({ page }) => {

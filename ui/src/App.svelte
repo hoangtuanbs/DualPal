@@ -46,6 +46,7 @@
   import { emailSupport, openProjectPage } from "./lib/about";
   import UpdateBar from "./lib/UpdateBar.svelte";
   import Viewer from "./lib/viewer/Viewer.svelte";
+  import DiffView from "./lib/diff/DiffView.svelte";
   import { updates } from "./lib/updates.svelte";
   import { UPDATE_CHECK_DELAY_MS, UPDATE_RECHECK_POLL_MS, activeOperationCount } from "./lib/updates";
   import { SPLIT_DEFAULT, clampSplit, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
@@ -117,10 +118,14 @@
   let importing = $state(false);
 
   let operations = $state<OperationInfo[]>([]);
-  // An update waits for queued and running file operations, and for saves
-  // of files edited on a server that are still uploading.
+  // An update waits for queued and running file operations, for saves
+  // of files edited on a server that are still uploading, and for the
+  // compare view's unsaved changes or running save.
   updates.setBusyCheck(
-    () => activeOperationCount(operations) + editSessions.filter((s) => s.status === "uploading").length,
+    () =>
+      activeOperationCount(operations) +
+      editSessions.filter((s) => s.status === "uploading").length +
+      (diffing && diffPending ? 1 : 0),
   );
   let activity = $state<ActivityRecord[]>([]);
   /** The request behind each operation id, so a failed one can be retried. */
@@ -156,6 +161,14 @@
   let showInsights = $state(false);
   /** The file open in the viewer (F3). */
   let viewing = $state<{ location: Location; entry: Entry } | null>(null);
+  /** The two files in the built-in compare view. */
+  let diffing = $state<{ left: Location; right: Location } | null>(null);
+  /** The compare view has unsaved changes or a copy or save running. */
+  let diffPending = $state(false);
+  /** Saves made in the compare view; Compare & Sync plans again on each. */
+  let diffSaves = $state(0);
+  /** Compare Files opens the external compare app instead (a setting). */
+  let externalCompare = $state(false);
   let aboutPage = $state<"about" | "donate" | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
   let linked = $state(false);
@@ -200,6 +213,7 @@
       volumes = await api.volumes();
       syncs = await api.syncFavorites();
       diffTools = await api.diffTools();
+      externalCompare = !!(await api.settings()).externalCompare;
       if (running) onLiveSyncUpdated(await api.liveSyncStatus());
     })().catch((e) => (notice = errorMessage(e))).finally(() => resolveReady?.());
     PaneState.navigated = followNavigation;
@@ -691,9 +705,9 @@
     };
   }
 
-  /** Compare two files in the external compare app: two marked files in the
-   *  active pane, or the file under the cursor in each pane, or the file of
-   *  the same name in the other pane. */
+  /** Compare two files in the built-in compare view (or the external compare
+   *  app, if chosen): two marked files in the active pane, or the file under
+   *  the cursor in each pane, or the file of the same name in the other pane. */
   async function compareFiles() {
     const loc = active.location;
     const oloc = other.location;
@@ -717,7 +731,22 @@
     }
     // Keep the left pane's file on the left.
     if (activeIndex === 1 && active.selected.size !== 2) pair.reverse();
-    await api.compareFiles(pair[0], pair[1]).catch((e) => (notice = errorMessage(e)));
+    await openCompare(pair[0], pair[1]).catch((e) => (notice = errorMessage(e)));
+  }
+
+  /** Show two files in the compare view, or the external app when chosen. */
+  async function openCompare(left: Location, right: Location) {
+    if (externalCompare) await api.compareFiles(left, right);
+    else diffing = { left, right };
+  }
+
+  async function toggleExternalCompare() {
+    const s = await api.settings();
+    const next = !externalCompare;
+    await api.saveSettings({ ...s, externalCompare: next || null }).then(
+      () => (externalCompare = next),
+      (e) => (notice = errorMessage(e)),
+    );
   }
 
   async function chooseDiffTool() {
@@ -830,6 +859,12 @@
       { id: "compareFiles", group: "Compare", title: "Compare Files", shortcut: `${MOD}Shift+D`, run: compareFiles },
       { id: "linked", group: "Compare", title: linked ? "Stop Synchronized Browsing" : "Synchronized Browsing", shortcut: `${MOD}Shift+L`, run: toggleLinked },
       { id: "chooseDiff", group: "Settings", title: "Choose Compare App…", run: chooseDiffTool },
+      {
+        id: "externalCompare",
+        group: "Settings",
+        title: externalCompare ? "Use the Built-in File Compare" : "Use External Compare App",
+        run: toggleExternalCompare,
+      },
       { id: "chooseEditor", group: "Settings", title: "Choose Editor…", run: chooseEditor },
       ...(vault.protected
         ? [
@@ -1279,7 +1314,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage || viewing) return;
+    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage || viewing || diffing) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -1482,7 +1517,7 @@
       <button onclick={compareFolders} aria-label="Compare & Sync" title="Compare & Sync: compare the two panes' folders and sync them ({MOD}Shift Y)"
         ><Icon name="sync" /></button
       >
-      <button onclick={compareFiles} aria-label="Compare Files" title="Compare Files: open two files in your compare app ({MOD}Shift D)"
+      <button onclick={compareFiles} aria-label="Compare Files" title="Compare Files: the two marked files, or the file under the cursor in each pane ({MOD}Shift D)"
         ><Icon name="compare-files" /></button
       >
       <button
@@ -1693,7 +1728,9 @@
     {nameOf}
     onclose={() => (comparing = null)}
     onsavefavorite={saveSync}
-    oncomparefiles={(l, r) => api.compareFiles(l, r)}
+    paused={!!diffing}
+    refresh={diffSaves}
+    oncomparefiles={openCompare}
   />
 {/if}
 
@@ -1747,6 +1784,18 @@
 
 {#if viewing}
   <Viewer location={viewing.location} entry={viewing.entry} onclose={() => (viewing = null)} />
+{/if}
+
+{#if diffing}
+  <DiffView
+    left={diffing.left}
+    right={diffing.right}
+    {nameOf}
+    onpending={(p) => (diffPending = p)}
+    onclose={() => (diffing = null)}
+    onsaved={() => diffSaves++}
+    onexternal={(l, r) => api.compareFiles(l, r)}
+  />
 {/if}
 
 {#if showInsights}

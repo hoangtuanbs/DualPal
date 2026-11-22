@@ -163,6 +163,66 @@ export function installBrowserMock(scenario: BrowserScenario) {
   let operations: any[] = [];
   /** Bytes of the files open in the viewer, by session - 1. */
   const viewerSessions: Uint8Array[] = [];
+  /** Open compares (diff_*), by session - 1: both sides' lines. */
+  const diffSessions: { locs: Location[]; lines: string[][]; dirty: boolean[]; options: any; revision: number; hunks: any[] }[] = [];
+  let settings: any = { editor: null, diffTool: null, externalCompare: null };
+  /** An LCS line diff, like the core's (small files only). */
+  const lineDiff = (a: string[], b: string[], o: any) => {
+    const key = (l: string) => {
+      let k = o?.ignoreWhitespace ? l.replace(/\s+/g, "") : l;
+      if (o?.ignoreCase) k = k.toLowerCase();
+      return o?.ignoreLineEndings ? k.replace(/\r$/, "") : k;
+    };
+    const ka = a.map(key);
+    const kb = b.map(key);
+    const dp = Array.from({ length: ka.length + 1 }, () => new Array<number>(kb.length + 1).fill(0));
+    for (let i = ka.length - 1; i >= 0; i--)
+      for (let j = kb.length - 1; j >= 0; j--) dp[i][j] = ka[i] === kb[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    const hunks: any[] = [];
+    let open: any = null;
+    let i = 0;
+    let j = 0;
+    while (i < ka.length || j < kb.length) {
+      if (i < ka.length && j < kb.length && ka[i] === kb[j]) {
+        if (open) hunks.push(open);
+        open = null;
+        i++;
+        j++;
+        continue;
+      }
+      open ??= { leftStart: i, leftLen: 0, rightStart: j, rightLen: 0 };
+      if (j < kb.length && (i >= ka.length || dp[i][j + 1] >= dp[i + 1][j])) {
+        open.rightLen++;
+        j++;
+      } else {
+        open.leftLen++;
+        i++;
+      }
+    }
+    if (open) hunks.push(open);
+    return hunks;
+  };
+  const splitText = (t: string) => {
+    const parts = t.split("\n");
+    if (parts.at(-1) === "") parts.pop();
+    return parts;
+  };
+  const diffState = (d: (typeof diffSessions)[number], session: number) => ({
+    session,
+    revision: d.revision,
+    options: d.options,
+    hunks: d.hunks,
+    identical: d.lines[0].join("\n") === d.lines[1].join("\n"),
+    sides: d.lines.map((l, i) => ({
+      encoding: "utf-8", detected: "utf-8", bom: false, lines: l.length, size: l.join("\n").length,
+      endings: l.length ? "lf" : "none", dirty: d.dirty[i], saveable: true,
+    })),
+  });
+  const diffOf = (session: number) => {
+    const d = diffSessions[session - 1];
+    if (!d) throw { kind: "invalid", message: `the compare ${session} is not open` };
+    return d;
+  };
   /** Finished operations, newest first, as the activity log keeps them. */
   let activity: any[] = [];
   let presets: any[] = [];
@@ -385,6 +445,69 @@ export function installBrowserMock(scenario: BrowserScenario) {
     },
     viewer_cancel: () => null,
     viewer_close: () => null,
+    diff_open: (a) => {
+      const text = (l: Location) => {
+        const t = fsOf(l.fs);
+        if (!t.has(l.path) || t.dirs.has(l.path)) throw t.notFound(l.path);
+        return t.tree.get(l.path) ?? "";
+      };
+      const [lt, rt] = [text(a.left), text(a.right)];
+      if (lt.includes("\0") || rt.includes("\0")) return { kind: "binary", identical: lt === rt, sizes: [lt.length, rt.length] };
+      const lines = [splitText(lt), splitText(rt)];
+      const d = { locs: [a.left, a.right], lines, dirty: [false, false], options: a.options, revision: 1, hunks: lineDiff(lines[0], lines[1], a.options) };
+      diffSessions.push(d);
+      return { kind: "text", state: diffState(d, diffSessions.length) };
+    },
+    diff_lines: (a) => {
+      const d = diffOf(a.session);
+      const i = a.side === "left" ? 0 : 1;
+      const start = (h: any, k: number) => (k ? h.rightStart : h.leftStart);
+      const len = (h: any, k: number) => (k ? h.rightLen : h.leftLen);
+      return d.lines[i].slice(a.from, a.from + a.count).map((text, n) => {
+        const at = a.from + n;
+        const h = d.hunks.find((h) => start(h, i) <= at && at < start(h, i) + len(h, i));
+        const pos = h ? at - start(h, i) : -1;
+        const other = h && pos < len(h, 1 - i) ? d.lines[1 - i][start(h, 1 - i) + pos] : null;
+        let marks: number[][] = [];
+        if (other !== null && other !== text) {
+          let p = 0;
+          while (p < text.length && p < other.length && text[p] === other[p]) p++;
+          let q = 0;
+          while (q < text.length - p && q < other.length - p && text[text.length - 1 - q] === other[other.length - 1 - q]) q++;
+          if (text.length - q > p) marks = [[p, text.length - q]];
+        }
+        return { text, eol: "lf", marks };
+      });
+    },
+    diff_set_options: (a) => {
+      const d = diffOf(a.session);
+      d.options = a.options;
+      d.hunks = lineDiff(d.lines[0], d.lines[1], d.options);
+      d.revision++;
+      return diffState(d, a.session);
+    },
+    diff_set_encoding: (a) => diffState(diffOf(a.session), a.session),
+    diff_apply: (a) => {
+      const d = diffOf(a.session);
+      if (a.revision !== d.revision) throw { kind: "invalid", message: "the compare view is out of date; try again" };
+      const h = d.hunks[a.hunk];
+      const to = a.to === "left" ? 0 : 1;
+      const src = to ? d.lines[0].slice(h.leftStart, h.leftStart + h.leftLen) : d.lines[1].slice(h.rightStart, h.rightStart + h.rightLen);
+      d.lines[to].splice(to ? h.rightStart : h.leftStart, to ? h.rightLen : h.leftLen, ...src);
+      d.dirty[to] = true;
+      d.hunks = lineDiff(d.lines[0], d.lines[1], d.options);
+      d.revision++;
+      return diffState(d, a.session);
+    },
+    diff_save: (a) => {
+      const d = diffOf(a.session);
+      const i = a.side === "left" ? 0 : 1;
+      fsOf(d.locs[i].fs).tree.set(d.locs[i].path, d.lines[i].map((l) => l + "\n").join(""));
+      d.dirty[i] = false;
+      return diffState(d, a.session);
+    },
+    diff_cancel: () => null,
+    diff_close: () => null,
     parent_location: (a) => {
       const up = fsOf(a.location.fs).parent(a.location.path);
       return up === null ? null : { fs: a.location.fs, path: up };
@@ -410,8 +533,11 @@ export function installBrowserMock(scenario: BrowserScenario) {
     remove_favorite: (a) =>
       (favorites = favorites.filter((f) => !(f.location.fs === a.location.fs && f.location.path === a.location.path))),
     reorder_favorites: () => favorites,
-    settings: () => ({ editor: null, diffTool: null }),
-    save_settings: () => null,
+    settings: () => settings,
+    save_settings: (a) => {
+      settings = a.settings;
+      return null;
+    },
 
     // Servers.
     connections: () => [...servers.values()].map(view),
