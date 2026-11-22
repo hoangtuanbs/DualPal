@@ -114,6 +114,38 @@
     }
   });
 
+  // ---- focus ------------------------------------------------------------------
+  // A modal window: Tab stays inside it, and the focus goes back where it
+  // was when it closes.
+  const before = document.activeElement as HTMLElement | null;
+  $effect(() => {
+    return () => {
+      if (before?.isConnected) before.focus();
+    };
+  });
+
+  /** The controls Tab reaches, in order. */
+  function tabbable(): HTMLElement[] {
+    if (!dialog) return [];
+    const all = [...dialog.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], [tabindex]")];
+    return all.filter((el) => el.tabIndex >= 0 && !(el as HTMLInputElement).disabled);
+  }
+
+  function keepFocusInside(e: KeyboardEvent) {
+    const items = tabbable();
+    if (!items.length) {
+      e.preventDefault();
+      dialog?.focus();
+      return;
+    }
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const edge = e.shiftKey ? 0 : items.length - 1;
+    if (at === -1 || at === edge) {
+      e.preventDefault();
+      items[e.shiftKey ? items.length - 1 : 0].focus();
+    }
+  }
+
   // ---- modes ------------------------------------------------------------------
   /** Focus the text or hex view, or the dialog itself (media, errors), so keys stay in the viewer. */
   async function focusView() {
@@ -265,6 +297,10 @@
     const t = e.target as HTMLElement | null;
     const typing = !!t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA");
     const mod = e.metaKey || e.ctrlKey;
+    if (e.key === "Tab" && !mod && !e.altKey) {
+      keepFocusInside(e);
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       if (searchOpen) closeSearch();

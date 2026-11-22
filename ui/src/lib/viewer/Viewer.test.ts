@@ -186,6 +186,33 @@ describe("UI-UNIT-036 Viewer", () => {
     await waitFor(() => expect(screen.getByTestId("viewer")).toHaveFocus());
   });
 
+  it("keeps Tab inside the viewer, and gives the focus back when it closes", async () => {
+    const outside = document.createElement("button");
+    outside.textContent = "Behind";
+    document.body.append(outside);
+    outside.focus();
+    const { unmount } = setup("notes.txt", "alpha\nbeta\n");
+    await waitFor(() => expect(shownText()).toEqual(["alpha", "beta"]));
+    const viewer = screen.getByTestId("viewer");
+    const user = userEvent.setup();
+    // Shift Tab from the first control goes to the last; Tab from the last to the first.
+    const first = screen.getByRole("button", { name: "Text" });
+    first.focus();
+    await user.tab({ shift: true });
+    const last = document.activeElement;
+    expect(last).not.toBe(first);
+    expect(viewer.contains(last)).toBe(true);
+    await user.tab();
+    expect(document.activeElement).toBe(first);
+    for (let i = 0; i < 12; i++) {
+      await user.tab();
+      expect(viewer.contains(document.activeElement)).toBe(true);
+    }
+    unmount();
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
   it("downloads a server image once when it goes back to the image during the download", async () => {
     mockConvertFileSrc("linux");
     const scenario = defaultScenario();
