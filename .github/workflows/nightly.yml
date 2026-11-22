@@ -12,7 +12,7 @@ concurrency:
 jobs:
   flake-hunt:
     name: Flake hunt (REL-001)
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest-2-vcpu
     permissions:
       contents: read
       issues: write
@@ -60,7 +60,7 @@ jobs:
 
   remote-chaos:
     name: Remote under latency (REL-002)
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -91,7 +91,7 @@ jobs:
 
   perf:
     name: Performance baseline (PERF)
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -101,7 +101,7 @@ jobs:
 
   upgrade:
     name: Upgrade from the last release (INS-LNX-004)
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - uses: actions/checkout@v4
       - name: Download the last release and the newest main build

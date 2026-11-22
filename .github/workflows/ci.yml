@@ -12,7 +12,7 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - uses: actions/checkout@v4
 
@@ -112,7 +112,7 @@ jobs:
 
   rust-remote:
     name: Remote (L3)
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - uses: actions/checkout@v4
 
@@ -159,7 +159,7 @@ jobs:
 
   ui-unit:
     name: UI unit (L5)
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - uses: actions/checkout@v4
 
@@ -179,7 +179,7 @@ jobs:
 
   ui-e2e:
     name: UI E2E (L6)
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - uses: actions/checkout@v4
 
