@@ -536,11 +536,14 @@ impl Job {
     /// reported at the end.
     async fn delete(&mut self, targets: Vec<Location>) -> Result<()> {
         let mut failed: Vec<Error> = Vec::new();
-        // (fs, path, is_real_dir) in pre-order; deleted in reverse so that
-        // folder contents go before the folder itself.
-        let mut items: Vec<(Fs, String, bool)> = Vec::new();
-        // Paths that are still there, so the folders holding them stay too.
-        let mut kept: Vec<(Fs, String)> = Vec::new();
+        // (fs, path, is_real_dir, index of the folder it was listed from) in
+        // pre-order; deleted in reverse so that folder contents go before
+        // the folder itself.
+        let mut items: Vec<(Fs, String, bool, Option<usize>)> = Vec::new();
+        // Folders that still hold something that could not be removed, so
+        // they stay too. Marked through the parent index, so each check is
+        // one lookup however many removals fail.
+        let mut held: Vec<bool> = Vec::new();
         for t in &targets {
             let fs = self.fs(&t.fs)?;
             let root = match fs.stat(&t.path).await {
@@ -550,47 +553,54 @@ impl Job {
                     continue;
                 }
             };
-            let mut stack = vec![root];
-            while let Some(e) = stack.pop() {
+            let mut stack = vec![(root, None)];
+            while let Some((e, parent)) = stack.pop() {
                 self.check()?;
+                let index = items.len();
                 let real_dir = e.is_dir() && !e.symlink;
+                let mut unlisted = false;
                 if real_dir {
                     match fs.list(&e.path).await {
-                        Ok(children) => stack.extend(children),
+                        Ok(children) => {
+                            stack.extend(children.into_iter().map(|c| (c, Some(index))))
+                        }
                         Err(err) => {
                             failed.push(err);
-                            kept.push((fs.clone(), e.path.clone()));
+                            unlisted = true;
                         }
                     }
                 }
-                items.push((fs.clone(), e.path, real_dir));
+                items.push((fs.clone(), e.path, real_dir, parent));
+                held.push(unlisted);
             }
         }
         self.prog().files_total = items.len() as u64;
         self.emit(true);
-        for (fs, path, dir) in items.into_iter().rev() {
+        for (index, (fs, path, dir, parent)) in items.into_iter().enumerate().rev() {
             self.check()?;
-            if dir
-                && kept
-                    .iter()
-                    .any(|(kfs, k)| kfs.id() == fs.id() && fs.is_within(k, &path))
-            {
-                kept.push((fs, path));
-                continue;
-            }
-            self.set_current(&path);
-            let removed = if dir {
-                fs.remove_dir(&path).await
+            let keep = if dir && held[index] {
+                true
             } else {
-                fs.remove_file(&path).await
-            };
-            match removed {
-                Ok(()) => self.prog().files_done += 1,
-                Err(Error::Cancelled) => return Err(Error::Cancelled),
-                Err(e) => {
-                    failed.push(e);
-                    kept.push((fs, path));
+                self.set_current(&path);
+                let removed = if dir {
+                    fs.remove_dir(&path).await
+                } else {
+                    fs.remove_file(&path).await
+                };
+                match removed {
+                    Ok(()) => {
+                        self.prog().files_done += 1;
+                        false
+                    }
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    Err(e) => {
+                        failed.push(e);
+                        true
+                    }
                 }
+            };
+            if let (true, Some(p)) = (keep, parent) {
+                held[p] = true;
             }
         }
         Error::combine(failed).map_or(Ok(()), Err)

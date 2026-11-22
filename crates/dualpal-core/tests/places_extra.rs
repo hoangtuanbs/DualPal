@@ -55,3 +55,34 @@ fn available_space_reports_for_home() {
     }
     assert!(dualpal_core::places::available_space(&home.to_string_lossy()).is_some());
 }
+
+/// PLACES-FAV — two copies of the app changing the same favorites file
+/// keep each other's changes: each change reads the file again under a lock.
+#[test]
+fn favorites_changed_by_two_copies_keep_both_changes() {
+    use dualpal_core::places::{Favorite, Favorites};
+    use dualpal_core::Location;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("favorites.json");
+    std::fs::write(&path, "[]").unwrap();
+    let fav = |name: &str| Favorite {
+        name: name.into(),
+        location: Location::new("local", format!("/{name}")),
+        icon: "folder".into(),
+    };
+    let one = Favorites::open(&path);
+    let two = Favorites::open(&path);
+    one.add(fav("a")).unwrap();
+    let seen = two.add(fav("b")).unwrap();
+    let names: Vec<_> = seen.iter().map(|f| f.name.clone()).collect();
+    assert_eq!(names, ["a", "b"]);
+    let on_disk: Vec<Favorite> =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(on_disk.len(), 2);
+    // A reorder works on the list as it is on disk, too.
+    let moved = one.reorder(1, 0).unwrap();
+    assert_eq!(
+        moved.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+        ["b", "a"]
+    );
+}

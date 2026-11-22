@@ -99,3 +99,21 @@ async fn write_all(fs: &dyn FileSystem, path: &str, bytes: &[u8]) -> Result<()> 
     w.flush().await.map_err(|e| Error::io(path, e))?;
     w.shutdown().await.map_err(|e| Error::io(path, e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vfs::LocalFs;
+
+    #[test]
+    fn temporary_names_are_new_each_time() {
+        let fs = LocalFs::new();
+        let part = part_path(&fs, "/d/file.txt");
+        let aside = part_path(&fs, "/d/file.txt");
+        assert_ne!(
+            part, aside,
+            "the aside name in rename_over never equals the copy's"
+        );
+        assert!(part.ends_with(".dualpal-part") && aside.ends_with(".dualpal-part"));
+    }
+}

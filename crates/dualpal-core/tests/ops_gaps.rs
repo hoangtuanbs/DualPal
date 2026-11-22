@@ -808,3 +808,46 @@ async fn compress_writes_under_a_temporary_name() {
     assert_eq!(info.status, OperationStatus::Failed);
     assert_eq!(names(&out), Vec::<String>::new());
 }
+
+/// OPS-DEL-003 — a file that cannot be removed deep in a tree keeps every
+/// folder above it, and the folders beside it are still deleted.
+#[tokio::test]
+async fn delete_keeps_every_folder_above_a_kept_file() {
+    use dualpal_core::Error;
+    use dualpal_testkit::FaultOp;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("top");
+    // The only file in the tree, so it is the one removal that fails.
+    write(&root.join("a/b/c/stuck.txt"), "s");
+    std::fs::create_dir_all(root.join("a/b/side/empty")).unwrap();
+    std::fs::create_dir_all(root.join("other")).unwrap();
+    let faulty = Arc::new(FaultyFs::with_id(LocalFs::new(), "faulty"));
+    faulty.fail_next(
+        FaultOp::RemoveFile,
+        Error::PermissionDenied("stuck.txt".into()),
+    );
+    let registry = Registry::with_local();
+    registry.register(faulty.clone());
+
+    let info = run(
+        &queue_over(registry, 1),
+        Operation::Delete {
+            targets: vec![Location::new("faulty", root.to_string_lossy())],
+        },
+    )
+    .await;
+
+    assert_eq!(info.status, OperationStatus::Failed);
+    assert!(root.join("a/b/c/stuck.txt").exists());
+    assert!(!root.join("a/b/side").exists());
+    assert!(!root.join("other").exists());
+    let names = |p: &Path| -> Vec<String> {
+        std::fs::read_dir(p)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    };
+    assert_eq!(names(&root), vec!["a".to_string()]);
+    assert_eq!(names(&root.join("a/b")), vec!["c".to_string()]);
+}

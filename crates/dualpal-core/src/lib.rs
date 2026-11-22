@@ -37,6 +37,7 @@ pub mod remote_edit;
 pub mod rename;
 pub mod search;
 pub mod settings;
+pub mod store_file;
 pub mod sync;
 pub mod terminal;
 pub mod upgrade;
