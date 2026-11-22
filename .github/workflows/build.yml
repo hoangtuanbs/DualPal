@@ -120,7 +120,7 @@ jobs:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: bundle
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -152,7 +152,7 @@ jobs:
     name: Updater manifest (latest.json)
     if: startsWith(github.ref, 'refs/tags/v')
     needs: release
-    runs-on: [self-hosted, Linux]
+    runs-on: avrea-ubuntu-latest
     permissions:
       contents: write
     env:
