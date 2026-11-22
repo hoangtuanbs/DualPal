@@ -12,14 +12,13 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
 
       - name: Linux system libraries
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev
+          bash scripts/ci/linux-deps.sh libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev
 
       - uses: actions/setup-node@v4
         with:
@@ -70,8 +69,7 @@ jobs:
       - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev
+          bash scripts/ci/linux-deps.sh libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev
 
       - uses: actions/setup-node@v4
         with:
@@ -112,7 +110,7 @@ jobs:
 
   rust-remote:
     name: Remote (L3)
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -159,7 +157,7 @@ jobs:
 
   ui-unit:
     name: UI unit (L5)
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -179,7 +177,7 @@ jobs:
 
   ui-e2e:
     name: UI E2E (L6)
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -192,7 +190,12 @@ jobs:
         run: npm ci
 
       - name: Install browsers
-        run: npx playwright install --with-deps chromium webkit
+        run: |
+          # Browser system libraries need root; on a runner without
+          # passwordless sudo, install them once by hand:
+          #   sudo npx playwright install-deps chromium webkit
+          if sudo -n true 2>/dev/null; then npx playwright install-deps chromium webkit; fi
+          npx playwright install chromium webkit
 
       - name: E2E tests (mocked backend)
         run: npm run test:e2e

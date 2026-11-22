@@ -12,7 +12,7 @@ concurrency:
 jobs:
   flake-hunt:
     name: Flake hunt (REL-001)
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: [self-hosted, Linux]
     permissions:
       contents: read
       issues: write
@@ -20,8 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Linux system libraries
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev
+          bash scripts/ci/linux-deps.sh libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
@@ -31,7 +30,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - name: Install browsers
+        run: |
+          # See ci.yml: system libraries need root, install once by hand if sudo asks for a password.
+          if sudo -n true 2>/dev/null; then npx playwright install-deps chromium; fi
+          npx playwright install chromium
       - name: Playwright repeat-each
         if: always()
         env:
@@ -60,7 +63,7 @@ jobs:
 
   remote-chaos:
     name: Remote under latency (REL-002)
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -91,7 +94,7 @@ jobs:
 
   perf:
     name: Performance baseline (PERF)
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -101,7 +104,7 @@ jobs:
 
   upgrade:
     name: Upgrade from the last release (INS-LNX-004)
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
       - name: Download the last release and the newest main build
