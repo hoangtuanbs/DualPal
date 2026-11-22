@@ -1,8 +1,8 @@
 name: Nightly
 
+# The daily schedule is off so no runner minutes are used; start it by hand
+# from the Actions tab when needed.
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -12,7 +12,7 @@ concurrency:
 jobs:
   flake-hunt:
     name: Flake hunt (REL-001)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     permissions:
       contents: read
       issues: write
@@ -60,7 +60,7 @@ jobs:
 
   remote-chaos:
     name: Remote under latency (REL-002)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -91,7 +91,7 @@ jobs:
 
   perf:
     name: Performance baseline (PERF)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -101,7 +101,7 @@ jobs:
 
   upgrade:
     name: Upgrade from the last release (INS-LNX-004)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
       - name: Download the last release and the newest main build

@@ -1,9 +1,9 @@
 name: CI
 
+# Runs only when started by hand (Actions tab, "Run workflow"), so pushes and
+# pull requests no longer use GitHub-hosted runner minutes.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -12,7 +12,7 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -62,8 +62,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        os: [Linux, Windows, macOS]
+    runs-on: [self-hosted, "${{ matrix.os }}"]
     steps:
       - uses: actions/checkout@v4
 
@@ -112,7 +112,7 @@ jobs:
 
   rust-remote:
     name: Remote (L3)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -159,7 +159,7 @@ jobs:
 
   ui-unit:
     name: UI unit (L5)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -179,7 +179,7 @@ jobs:
 
   ui-e2e:
     name: UI E2E (L6)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
 
