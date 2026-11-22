@@ -138,39 +138,62 @@ impl SettingsStore {
 
     pub fn set(&self, s: Settings) -> Result<()> {
         let mut current = self.current.lock().unwrap();
-        self.write(&s)?;
+        self.locked(|| self.write(&s))?;
         *current = s;
         Ok(())
     }
 
     /// Change only the fields named in `patch` (a JSON object in the file's
-    /// camelCase shape) and return the result. Reading and writing happen
-    /// under one lock, so two windows or two parts of the UI changing
-    /// different settings do not undo each other.
+    /// camelCase shape) and return the result. The change is made under a
+    /// lock on the settings file and to the settings as they are on disk
+    /// now, so neither two parts of the UI nor two copies of the app undo
+    /// each other's changes.
     pub fn update(&self, patch: serde_json::Value) -> Result<Settings> {
         let serde_json::Value::Object(patch) = patch else {
             return Err(Error::Invalid("settings change must be an object".into()));
         };
         let mut current = self.current.lock().unwrap();
-        let mut value =
-            serde_json::to_value(&*current).map_err(|e| Error::Invalid(e.to_string()))?;
-        if let serde_json::Value::Object(fields) = &mut value {
-            fields.extend(patch);
-        }
-        let next: Settings =
-            serde_json::from_value(value).map_err(|e| Error::Invalid(e.to_string()))?;
-        self.write(&next)?;
+        let next = self.locked(|| {
+            let base = self.read_disk().unwrap_or_else(|| current.clone());
+            let mut value =
+                serde_json::to_value(&base).map_err(|e| Error::Invalid(e.to_string()))?;
+            if let serde_json::Value::Object(fields) = &mut value {
+                fields.extend(patch);
+            }
+            let next: Settings =
+                serde_json::from_value(value).map_err(|e| Error::Invalid(e.to_string()))?;
+            self.write(&next)?;
+            Ok(next)
+        })?;
         *current = next.clone();
         Ok(next)
     }
 
+    /// Run `f` holding the lock on the settings file (no lock in memory).
+    fn locked<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        let Some(path) = &self.path else {
+            return f();
+        };
+        let mut inner = None;
+        crate::store_file::with_lock(path, || {
+            inner = Some(f());
+            Ok(())
+        })
+        .map_err(|e| Error::io(path.to_string_lossy(), e))?;
+        inner.expect("the lock runs f")
+    }
+
+    /// The settings as they are on disk now, if the file can be read.
+    fn read_disk(&self) -> Option<Settings> {
+        let path = self.path.as_ref()?;
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    }
+
     fn write(&self, s: &Settings) -> Result<()> {
         if let Some(path) = &self.path {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).map_err(|e| Error::io(dir.to_string_lossy(), e))?;
-            }
             let json = serde_json::to_vec_pretty(s).map_err(|e| Error::Invalid(e.to_string()))?;
-            std::fs::write(path, json).map_err(|e| Error::io(path.to_string_lossy(), e))?;
+            crate::store_file::write_atomic(path, &json)
+                .map_err(|e| Error::io(path.to_string_lossy(), e))?;
         }
         Ok(())
     }

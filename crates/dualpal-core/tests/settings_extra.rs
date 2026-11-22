@@ -206,3 +206,24 @@ fn update_changes_only_given_fields() {
     assert!(store.update(json!(["theme"])).is_err());
     assert_eq!(SettingsStore::open(&path).get(), next);
 }
+
+/// SET-002 — two copies of the app changing different settings in the same
+/// file keep each other's changes: each change reads the file again under
+/// a lock.
+#[test]
+fn two_copies_changing_settings_keep_both_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("settings.json");
+    let one = dualpal_core::settings::SettingsStore::open(&path);
+    let two = dualpal_core::settings::SettingsStore::open(&path);
+    one.update(serde_json::json!({ "showHidden": true }))
+        .unwrap();
+    let seen = two
+        .update(serde_json::json!({ "editor": "/usr/bin/vim" }))
+        .unwrap();
+    assert!(seen.show_hidden, "the other copy's change is kept");
+    assert_eq!(seen.editor.as_deref(), Some("/usr/bin/vim"));
+    let on_disk = dualpal_core::settings::SettingsStore::open(&path).get();
+    assert!(on_disk.show_hidden);
+    assert_eq!(on_disk.editor.as_deref(), Some("/usr/bin/vim"));
+}
