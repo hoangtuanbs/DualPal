@@ -133,7 +133,7 @@ Folders on this computer are watched, so a change is synced within a couple of s
 
 ## Compare, sync and power tools
 
-- **Compare & Sync** compares the folders in the two panes (local or on any server) by size and date, by size, or by content. Choose *Update →* (copy new and changed items to the right), *Mirror →* (make the right an exact copy) or *Two-way ⇄*. Every planned step can be changed before you press *Synchronize*, and deletions are confirmed first.
+- **Compare & Sync** compares the folders in the two panes (local or on any server) by size and date (size first, then the modified time), or by content. Choose *Update →* (copy new and changed items to the right), *Mirror →* (make the right an exact copy) or *Two-way ⇄*. Every planned step can be changed before you press *Synchronize*, and deletions are confirmed first.
 - Two-way sync remembers each folder pair after it syncs, so it can tell a file deleted on one side from a new file on the other, and an edit on one side from an edit on both (a conflict, which is left for you to decide). The first sync of a pair never deletes. Names that differ only in case (`Case.txt` and `case.txt`) are left as conflicts in every mode, so neither overwrites the other on a case-insensitive disk. Servers that stamp uploads with their own time (S3) do not cause copies back and forth.
 - **Save as Favorite** keeps the pair, mode and options under *Syncs* in the sidebar and in the command palette; servers are connected when you open one.
 - **Linked** (synchronized browsing): going into a folder, or up, in one pane does the same in the other.
