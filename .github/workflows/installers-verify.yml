@@ -97,7 +97,7 @@ jobs:
   macos:
     name: macOS (dmg smoke)
     needs: version-consistency
-    runs-on: [self-hosted, macOS]
+    runs-on: avrea-macos-26-8-vcpu  # Avrea macOS runner
     steps:
       - uses: actions/checkout@v4
       - name: Download installers
