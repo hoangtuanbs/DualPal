@@ -29,7 +29,7 @@ jobs:
       matrix:
         include:
           - name: macOS (Apple Silicon + Intel)
-            os: [self-hosted, macOS]
+            os: avrea-macos-26-8-vcpu  # Avrea macOS runner
             args: --target universal-apple-darwin
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
             artifact: DualPal-macOS

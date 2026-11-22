@@ -61,8 +61,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [Linux, Windows, macOS]
-    runs-on: [self-hosted, "${{ matrix.os }}"]
+        # Linux and Windows run on your own runners; macOS runs on an Avrea
+        # Apple Silicon runner (macOS 26, 8 vCPU).
+        include:
+          - os: Linux
+            runner: [self-hosted, Linux]
+          - os: Windows
+            runner: [self-hosted, Windows]
+          - os: macOS
+            runner: avrea-macos-26-8-vcpu
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
