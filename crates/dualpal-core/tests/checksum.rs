@@ -353,3 +353,65 @@ async fn failed_overwrite_keeps_the_old_checksum_file() {
         .unwrap();
     assert_eq!(text.text, "old contents\n");
 }
+
+/// A new checksum file is created only if it is still not there: one that
+/// appears just before the save is not written over when overwriting is off.
+/// A failed save of a new file leaves nothing behind.
+#[tokio::test]
+async fn a_new_checksum_file_is_created_exclusively() {
+    use dualpal_core::vfs::FileSystem as _;
+    use dualpal_testkit::FaultyFs;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_string_lossy().into_owned();
+    let fs = Arc::new(FaultyFs::with_id(dualpal_core::vfs::LocalFs::new(), "disk"));
+    let registry = Registry::new();
+    registry.register(fs.clone());
+    let folder = Location::new("disk", dir.clone());
+    let entries = vec![checksum::ChecksumEntry {
+        path: "a.txt".into(),
+        hash: Some(MD5_ABC.into()),
+        error: None,
+    }];
+
+    // Someone else's file that the existence check has not seen yet: the
+    // exclusive create still refuses it.
+    std::fs::write(tmp.path().join("raced.md5"), "theirs").unwrap();
+    let mut w = fs.open_write_new(&fs.join(&dir, "raced.md5")).await.err();
+    assert!(matches!(
+        w.take(),
+        Some(dualpal_core::Error::AlreadyExists(_))
+    ));
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("raced.md5")).unwrap(),
+        "theirs"
+    );
+
+    // A new file whose write fails is removed again.
+    fs.fail_write_after(4);
+    let saved = checksum::write_file(
+        &registry,
+        &folder,
+        "new.md5",
+        Algorithm::Md5,
+        &entries,
+        false,
+    )
+    .await;
+    assert!(saved.is_err());
+    assert!(!tmp.path().join("new.md5").exists());
+
+    // And a plain new save works.
+    checksum::write_file(
+        &registry,
+        &folder,
+        "new.md5",
+        Algorithm::Md5,
+        &entries,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(std::fs::read_to_string(tmp.path().join("new.md5"))
+        .unwrap()
+        .contains("a.txt"));
+}

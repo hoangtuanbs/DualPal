@@ -687,6 +687,25 @@ impl FileSystem for SftpFs {
         Ok(Box::new(f))
     }
 
+    async fn open_write_new(&self, path: &str) -> Result<Writer> {
+        let live = self.sftp().await?;
+        let opened = live
+            .sftp
+            .open_with_flags(
+                path,
+                OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+            )
+            .await;
+        match opened {
+            Ok(f) => Ok(Box::new(f)),
+            // SFTP v3 reports an existing file as a plain failure.
+            Err(e) => match self.exists(path).await {
+                Ok(true) => Err(Error::AlreadyExists(path.to_string())),
+                _ => Err(map_err(path, e)),
+            },
+        }
+    }
+
     async fn set_mode(&self, path: &str, mode: u32) -> Result<()> {
         let live = self.sftp().await?;
         let attrs = FileAttributes {

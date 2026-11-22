@@ -467,12 +467,30 @@ pub async fn write_file(
         crate::vfs::write_text(fs.as_ref(), &path, &text).await?;
         return Ok(Location::new(folder.fs.clone(), path));
     }
-    let mut writer = fs.open_write(&path).await?;
-    writer
-        .write_all(text.as_bytes())
-        .await
-        .map_err(|e| Error::io(&path, e))?;
-    writer.shutdown().await.map_err(|e| Error::io(&path, e))?;
+    // A new file is created only if it is still not there, so one made
+    // meanwhile by someone else is never written over unasked.
+    let mut writer = match fs.open_write_new(&path).await {
+        Ok(w) => w,
+        Err(Error::AlreadyExists(_)) if overwrite => {
+            crate::vfs::write_text(fs.as_ref(), &path, &text).await?;
+            return Ok(Location::new(folder.fs.clone(), path));
+        }
+        Err(e) => return Err(e),
+    };
+    let written = async {
+        writer
+            .write_all(text.as_bytes())
+            .await
+            .map_err(|e| Error::io(&path, e))?;
+        writer.shutdown().await.map_err(|e| Error::io(&path, e))
+    }
+    .await;
+    if let Err(e) = written {
+        // Don't leave half a checksum file behind.
+        drop(writer);
+        let _ = fs.remove_file(&path).await;
+        return Err(e);
+    }
     Ok(Location::new(folder.fs.clone(), path))
 }
 
