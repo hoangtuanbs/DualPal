@@ -9,8 +9,8 @@ from pyftpdlib.handlers import FTPHandler, TLS_FTPHandler
 from pyftpdlib.ioloop import IOLoop
 from pyftpdlib.servers import FTPServer
 
-ROOT = "/data"
-CERTS = "/certs"
+ROOT = os.environ.get("FTP_ROOT", "/data")
+CERTS = os.environ.get("FTP_CERTS", "/certs")
 os.makedirs(ROOT, exist_ok=True)
 os.makedirs(CERTS, exist_ok=True)
 cert, key = f"{CERTS}/cert.pem", f"{CERTS}/key.pem"
@@ -67,7 +67,7 @@ class Implicit(TLS_FTPHandler):
 
 # Each server needs its own event loop to run in its own thread.
 servers = [
-    FTPServer(("0.0.0.0", port), h, ioloop=IOLoop())
+    FTPServer((os.environ.get("FTP_HOST", "0.0.0.0"), port), h, ioloop=IOLoop())
     for port, h in ((2121, Plain), (2990, Explicit), (2991, Implicit))
 ]
 for s in servers[1:]:
