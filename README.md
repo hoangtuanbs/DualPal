@@ -24,6 +24,7 @@ crates/dualpal-core   Platform-independent Rust core (no Tauri dependency)
   src/sync.rs         One-way and two-way sync with per-pair history
   src/rename.rs       Multi Rename rules and presets
   src/difftools.rs    External file compare apps
+  src/session.rs      The last session's tabs, folders and layout
 src-tauri/            Tauri shell: commands + progress events wiring the core to the UI
 ui/                   Svelte 5 + TypeScript front end (built with Vite)
 ```
@@ -130,6 +131,16 @@ The three arrow buttons in the toolbar keep the two panes' folders in sync while
 - **⇄** copies changes in either pane to the other and passes on deletions made since the last sync. Items changed on both sides are left alone.
 
 Folders on this computer are watched, so a change is synced within a couple of seconds. Servers, buckets and Windows network or WSL folders send no change notifications, so they are checked every 10 seconds. While auto-sync runs, the panes are locked and a bar shows what it is doing; click the lit button again, or *Stop*, to end it. Each sync appears under *Operations*.
+
+## Last session
+
+Dual Pal opens the way you left it. While it runs, it keeps `session.json` in the app data folder up to date with:
+
+- the tabs open on each side, the folder each one shows and which tab was in front;
+- each tab's view (list or icons), sort order and whether hidden files are shown;
+- the width of the two panes, whether the Info panel is shown and which pane had the focus.
+
+The window's size, position and maximized state are kept as well. At the next launch the tabs come back in place. A local folder that has since been deleted opens the nearest folder above it that still exists. Tabs on servers that are not connected yet, or on drives that are gone, are left out, and a side left with no tabs opens your home folder. A missing or damaged `session.json` simply starts with one tab per side in your home folder.
 
 ## Compare, sync and power tools
 

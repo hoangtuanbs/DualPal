@@ -374,6 +374,9 @@ export function installBrowserMock(scenario: BrowserScenario) {
     reorder_favorites: () => favorites,
     settings: () => ({ editor: null, diffTool: null }),
     save_settings: () => null,
+    // Each test starts fresh: no last session to restore.
+    session: () => null,
+    save_session: () => null,
 
     // Servers.
     connections: () => [...servers.values()].map(view),

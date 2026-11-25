@@ -17,6 +17,7 @@
 //! * [`releases`] — the newest published release, for the upgrade notice.
 //! * [`upgrade`] — pick, download and verify the installer for an upgrade.
 //! * [`import`] — read saved servers from WinSCP, FileZilla and Cyberduck exports.
+//! * [`session`] — the last session's tabs, folders and layout.
 //!
 //! Nothing in this crate depends on Tauri, so it can be tested on any OS and
 //! reused by other front ends (CLI, tests).
@@ -36,6 +37,7 @@ pub mod releases;
 pub mod remote_edit;
 pub mod rename;
 pub mod search;
+pub mod session;
 pub mod settings;
 pub mod sync;
 pub mod terminal;

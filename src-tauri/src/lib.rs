@@ -18,6 +18,7 @@ use dualpal_core::livesync::LiveSync;
 use dualpal_core::places::Favorites;
 use dualpal_core::remote_edit::RemoteEditor;
 use dualpal_core::rename::RenamePresets;
+use dualpal_core::session::SessionStore;
 use dualpal_core::settings::SettingsStore;
 use dualpal_core::sync::{SyncEngine, SyncFavorites};
 use dualpal_core::vault::ProtectedSecrets;
@@ -45,6 +46,8 @@ pub struct AppState {
     /// The optional master password over the connections' secrets.
     pub vault: Arc<ProtectedSecrets>,
     pub settings: SettingsStore,
+    /// Tabs, folders and layout of the last session, restored at launch.
+    pub session: SessionStore,
     pub editor: RemoteEditor,
     /// Folder each live connection opened in, by file system id.
     pub start_paths: Mutex<HashMap<String, String>>,
@@ -76,6 +79,7 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
     ));
     let connections = Connections::open(data_dir.join("connections.json"), vault.clone());
     let settings = SettingsStore::open(data_dir.join("settings.json"));
+    let session = SessionStore::open(data_dir.join("session.json"));
     let cache_dir = dirs.cache;
     let preview_dir = cache_dir.join("preview");
     // Previews are only useful for one run of the app.
@@ -108,6 +112,7 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
         connections,
         vault,
         settings,
+        session,
         editor,
         start_paths: Mutex::new(HashMap::new()),
         preview_dir,
@@ -222,6 +227,8 @@ pub const COMMANDS: &[&str] = &[
     "preview_path",
     "settings",
     "save_settings",
+    "session",
+    "save_session",
     "secrets_status",
     "protect_secrets",
     "unlock_secrets",
@@ -299,6 +306,8 @@ macro_rules! all_commands {
             remote::preview_path,
             remote::settings,
             remote::save_settings,
+            remote::session,
+            remote::save_session,
             remote::secrets_status,
             remote::protect_secrets,
             remote::unlock_secrets,
@@ -385,12 +394,21 @@ fn secrets_from_env() -> Arc<dyn SecretStore> {
     }
 }
 
-/// Plugins that exist only on desktop: in-app updates and relaunch after one.
+/// Plugins that exist only on desktop: in-app updates, relaunch after one,
+/// and the window's size and position kept from the last run.
 #[cfg(desktop)]
 fn desktop_plugins<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    use tauri_plugin_window_state::StateFlags;
     builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                // Size, place and maximized, not visibility or decorations,
+                // so the window always opens visible with its frame.
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .build(),
+        )
 }
 
 /// WebKitGTK's DMA-BUF renderer leaves the window blank or white on many
