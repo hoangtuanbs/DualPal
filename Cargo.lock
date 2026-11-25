@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "dualpal"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dualpal-core",
  "dualpal-testkit",
@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "dualpal-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "dualpal-testkit"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "dualpal-core",
