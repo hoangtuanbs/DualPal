@@ -534,6 +534,9 @@ export const api = {
   resetSecrets: () => invoke<VaultStatus>("reset_secrets"),
   settings: () => invoke<Settings>("settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
+  /** The last session as it was saved; check it with `parseSession` before use. */
+  session: () => invoke<unknown>("session"),
+  saveSession: (session: object) => invoke<void>("save_session", { session }),
   syncPlan: (left: Location, right: Location, mode: SyncMode, options: CompareOptions) =>
     invoke<SyncPreview>("sync_plan", { left, right, mode, options }),
   cancelCompare: () => invoke<void>("cancel_compare"),

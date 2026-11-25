@@ -67,6 +67,8 @@ fn tested_commands() -> HashSet<&'static str> {
         "preview_path",
         "settings",
         "save_settings",
+        "session",
+        "save_session",
         "secrets_status",
         "protect_secrets",
         "unlock_secrets",
@@ -859,6 +861,25 @@ fn settings_round_trip() {
     let settings: Value = call(&app, "settings", json!({})).unwrap();
     assert_eq!(settings["editor"], "/usr/bin/emacs");
     assert_eq!(settings["diffTool"], "meld {left} {right}");
+}
+
+/// CMD-024b — session round trip: none at first, then what was saved, also
+/// after a restart on the same folders; a non-object is refused.
+#[test]
+fn session_round_trip() {
+    let TestApp { app, tmp } = app();
+    let session: Value = call(&app, "session", json!({})).unwrap();
+    assert_eq!(session, Value::Null);
+
+    let saved = json!({ "version": 1, "split": 0.3, "activeSide": 1, "sides": [] });
+    call_ok(&app, "save_session", json!({ "session": saved }));
+    let session: Value = call(&app, "session", json!({})).unwrap();
+    assert_eq!(session, saved);
+
+    assert!(call::<Value>(&app, "save_session", json!({ "session": [1, 2] })).is_err());
+    let file = tmp.path().join("data").join("session.json");
+    let on_disk: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+    assert_eq!(on_disk, saved, "session.json is written in the data folder");
 }
 
 /// CMD-025 — `sync_plan` returns a SyncPreview.

@@ -381,6 +381,17 @@ pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CmdResul
     state.settings.set(settings)
 }
 
+/// The last session's tabs and layout, or null when there is none to restore.
+#[tauri::command]
+pub fn session(state: State<'_, AppState>) -> Option<serde_json::Value> {
+    state.session.get()
+}
+
+#[tauri::command]
+pub fn save_session(state: State<'_, AppState>, session: serde_json::Value) -> CmdResult<()> {
+    state.session.set(session)
+}
+
 // ---- master password ----------------------------------------------------------
 
 #[tauri::command]

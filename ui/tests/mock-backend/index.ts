@@ -105,6 +105,8 @@ export interface Scenario {
   connections: ConnectionView[];
   volumes: Volume[];
   settings: Settings;
+  /** What the `session` command returns: the last session as saved. */
+  session?: unknown;
   activity: ActivityRecord[];
 }
 
@@ -254,6 +256,11 @@ const handlers: Record<string, Handler> = {
   settings: (_a, s) => s.scenario.settings,
   save_settings: (a, s) => {
     s.scenario.settings = a.settings;
+    return null;
+  },
+  session: (_a, s) => s.scenario.session ?? null,
+  save_session: (a, s) => {
+    s.scenario.session = a.session;
     return null;
   },
   operations: (_a, s) => [...s.operations.values()],

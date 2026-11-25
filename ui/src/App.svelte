@@ -48,6 +48,7 @@
   import { updates } from "./lib/updates.svelte";
   import { UPDATE_CHECK_DELAY_MS, UPDATE_RECHECK_POLL_MS, activeOperationCount } from "./lib/updates";
   import { SPLIT_DEFAULT, clampSplit, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
+  import { captureSession, parseSession, restoreSides, sessionSaver } from "./lib/session";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -184,13 +185,25 @@
       // Auto-sync left running when the window reloaded: show its folders,
       // the source on the left, before the panes are locked.
       const running = await api.liveSyncStatus();
-      const start = running ? [running.from, running.to] : [home, home];
-      await Promise.all(
-        groups.map(async (g, i) => {
-          await g.current.open(start[i]);
-          if (!g.current.location) await g.current.open(home);
-        }),
-      );
+      // The last session's tabs and layout; none, or an unreadable one, starts fresh.
+      const saved = parseSession(await api.session().catch(() => null));
+      if (saved) {
+        if (saved.split !== null) split = saved.split;
+        if (saved.showInspector !== null) showInspector = saved.showInspector;
+        activeIndex = saved.activeSide;
+      }
+      if (running) {
+        const start = [running.from, running.to];
+        await Promise.all(
+          groups.map(async (g, i) => {
+            await g.current.open(start[i]);
+            if (!g.current.location) await g.current.open(home);
+          }),
+        );
+      } else {
+        await restoreSides(groups, saved, home);
+      }
+      sessionReady = true;
       operations = await api.operations();
       activity = await api.activity();
       favorites = await api.favorites();
@@ -208,7 +221,14 @@
     // check is due, so a window left open still hears about one (not in E2E tests).
     const updateTimer = window.__DUALPAL_TEST__ ? undefined : setTimeout(() => updates.checkAutomatically(), UPDATE_CHECK_DELAY_MS);
     const updatePoll = window.__DUALPAL_TEST__ ? undefined : setInterval(() => updates.checkAutomatically(), UPDATE_RECHECK_POLL_MS);
+    // Save what is pending when the window goes away.
+    const flushSession = () => void sessionSaves.flush();
+    window.addEventListener("pagehide", flushSession);
+    window.addEventListener("beforeunload", flushSession);
     return () => {
+      window.removeEventListener("pagehide", flushSession);
+      window.removeEventListener("beforeunload", flushSession);
+      sessionSaves.flush();
       unlisten?.();
       unlistenEdits?.();
       unlistenLive?.();
@@ -217,6 +237,17 @@
       clearInterval(updatePoll);
       PaneState.navigated = null;
     };
+  });
+
+  // ---- last session ---------------------------------------------------------------
+
+  /** Set once the last session is back, so the empty start never overwrites it. */
+  let sessionReady = $state(false);
+  const sessionSaves = sessionSaver((s) => api.saveSession(s));
+  // Save the tabs, their folders and view settings, and the layout as they change.
+  $effect(() => {
+    if (!sessionReady) return;
+    sessionSaves.schedule(captureSession(groups, { split, showInspector, activeSide: activeIndex }));
   });
 
   function onOperationUpdated(info: OperationInfo) {
