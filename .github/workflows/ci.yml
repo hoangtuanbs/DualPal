@@ -14,6 +14,17 @@ jobs:
     name: Lint
     runs-on: [self-hosted, Linux]
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Linux system libraries
@@ -72,6 +83,17 @@ jobs:
             runner: avrea-macos-26-8-vcpu
     runs-on: ${{ matrix.runner }}
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Linux system libraries
@@ -104,13 +126,13 @@ jobs:
       - name: Core tests (L1 + L2 + L4)
         if: runner.os != 'Windows'
         run: >-
-          cargo nextest run --workspace
+          cargo nextest run --workspace --no-fail-fast
           -E 'not (binary(remote) | binary(contract_remote) | binary(remote_extra))'
 
       - name: Core tests (L1 + L2, Windows)
         if: runner.os == 'Windows'
         run: >-
-          cargo nextest run --workspace
+          cargo nextest run --workspace --no-fail-fast
           -E 'not (binary(remote) | binary(contract_remote) | binary(remote_extra) | binary(commands))'
 
       - name: Build app (no installer)
@@ -120,6 +142,17 @@ jobs:
     name: Remote (L3)
     runs-on: [self-hosted, Linux]
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
@@ -163,10 +196,29 @@ jobs:
             target/nextest/ci/junit.xml
             servers.log
 
+      # Always stop the servers and give their files back, even after a
+      # failure or a cancel, so the next job starts from a clean folder.
+      - name: Stop test servers
+        if: always()
+        run: |
+          docker compose -f docker/test-servers/compose.yaml down --remove-orphans || true
+          scripts/ci/reclaim-workspace.sh
+
   ui-unit:
     name: UI unit (L5)
     runs-on: [self-hosted, Linux]
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -187,6 +239,17 @@ jobs:
     name: UI E2E (L6)
     runs-on: [self-hosted, Linux]
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
