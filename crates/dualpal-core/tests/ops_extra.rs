@@ -236,7 +236,11 @@ async fn rename_to_invalid_name() {
     let tmp = tempfile::tempdir().unwrap();
     let a = tmp.path().join("a.txt");
     write(&a, "a");
-    for bad in ["x/y", ""] {
+    let mut bads = vec!["x/y", ""];
+    if cfg!(windows) {
+        bads.extend(["con", "aux.txt", "COM3", "end.", "end ", "a*b", "a<b"]);
+    }
+    for bad in bads {
         let info = run(
             &queue(),
             Operation::Rename {
@@ -431,4 +435,33 @@ fn operation_info_json_shape() {
       "message": "already exists: /x"
     }
     "###);
+}
+
+/// A new folder with a name the disk refuses fails as `invalid`, with the
+/// reason, and creates nothing (Windows device names, trailing dots and
+/// spaces, refused characters; too-long names everywhere).
+#[tokio::test]
+async fn create_dir_with_a_refused_name_is_invalid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let long = "n".repeat(256);
+    let mut bads = vec![long.as_str()];
+    if cfg!(windows) {
+        bads.extend(["con", "PRN.d", "lpt1", "dir.", "dir ", "a:b", "a\"b"]);
+    }
+    for bad in bads {
+        // Joined as text, as the UI does: Path::join would read "a:b" as a
+        // path on drive A: rather than a name.
+        let path = format!("{}{}{bad}", tmp.path().display(), std::path::MAIN_SEPARATOR);
+        let info = run(
+            &queue(),
+            Operation::CreateDir {
+                location: loc(Path::new(&path)),
+            },
+        )
+        .await;
+        assert_eq!(info.status, OperationStatus::Failed, "{bad:?}");
+        let err = info.error.unwrap();
+        assert_eq!(err.kind, "invalid", "{bad:?}: {}", err.message);
+    }
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
 }

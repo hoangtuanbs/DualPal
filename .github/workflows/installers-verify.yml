@@ -21,6 +21,17 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: [self-hosted, Linux]
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
       - name: Check the three versions agree
         run: bash scripts/release/check-version.sh
@@ -38,6 +49,17 @@ jobs:
       run:
         shell: bash
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
       # The openSUSE image has no `find`, which the steps below and
       # linux.sh use.
