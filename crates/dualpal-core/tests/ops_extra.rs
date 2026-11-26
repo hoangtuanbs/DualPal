@@ -449,10 +449,13 @@ async fn create_dir_with_a_refused_name_is_invalid() {
         bads.extend(["con", "PRN.d", "lpt1", "dir.", "dir ", "a:b", "a\"b"]);
     }
     for bad in bads {
+        // Joined as text, as the UI does: Path::join would read "a:b" as a
+        // path on drive A: rather than a name.
+        let path = format!("{}{}{bad}", tmp.path().display(), std::path::MAIN_SEPARATOR);
         let info = run(
             &queue(),
             Operation::CreateDir {
-                location: loc(&tmp.path().join(bad)),
+                location: loc(Path::new(&path)),
             },
         )
         .await;
