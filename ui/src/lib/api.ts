@@ -75,6 +75,8 @@ export interface ErrorInfo {
   message: string;
   /** SSH host key or FTPS certificate fingerprint, for `unknownHost` and `hostKeyChanged`. */
   fingerprint?: string;
+  /** The fingerprint recorded before, for `hostKeyChanged`, when it could be read. */
+  previousFingerprint?: string;
 }
 
 export interface Progress {

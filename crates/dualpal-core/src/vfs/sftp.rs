@@ -5,6 +5,11 @@
 //! command. An unknown host fails with [`Error::UnknownHost`] carrying the key
 //! fingerprint; once the user confirms it, connecting again with that
 //! fingerprint in `trust_fingerprint` records the key and goes ahead.
+//!
+//! A host whose key differs from the recorded one fails with
+//! [`Error::HostKeyChanged`]. That is never accepted silently: only when the
+//! user has seen the new fingerprint and passes it in `trust_fingerprint`
+//! are the stale entries for that host replaced with the new key.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -96,7 +101,8 @@ fn key_text(bytes: &[u8]) -> String {
 #[derive(Clone, Debug)]
 enum HostCheck {
     Unknown(String),
-    Changed(String),
+    /// The new fingerprint, and the recorded one when it could be read.
+    Changed(String, Option<String>),
 }
 
 struct Client {
@@ -134,7 +140,22 @@ impl client::Handler for Client {
         match known {
             Ok(true) => Ok(true),
             Err(keys::Error::KeyChanged { .. }) => {
-                *self.outcome.lock().unwrap() = Some(HostCheck::Changed(fp));
+                let path = match &self.known_hosts {
+                    Some(p) => p.clone(),
+                    None => crate::places::home_dir()
+                        .unwrap_or_default()
+                        .join(".ssh")
+                        .join("known_hosts"),
+                };
+                // The user saw this exact fingerprint and chose to replace
+                // the recorded key. Anything else stays a refusal.
+                if self.trust.as_deref() == Some(fp.as_str())
+                    && replace_known_host(&path, &self.host, self.port, &key).is_ok()
+                {
+                    return Ok(true);
+                }
+                let previous = recorded_fingerprint(&path, &self.host, self.port, &key);
+                *self.outcome.lock().unwrap() = Some(HostCheck::Changed(fp, previous));
                 Ok(false)
             }
             // Not recorded yet (or no known_hosts file at all).
@@ -156,6 +177,82 @@ impl client::Handler for Client {
             }
         }
     }
+}
+
+/// Entries for `host:port` in a known_hosts file that conflict with `key`:
+/// same algorithm, different key. These are what make the check report a
+/// changed key. Returned as indexes into the file's lines.
+fn stale_lines(path: &Path, host: &str, port: u16, key: &PublicKey) -> Vec<usize> {
+    let Ok(recorded) = keys::known_hosts::known_host_keys_path(host, port, path) else {
+        return Vec::new();
+    };
+    let stale: Vec<usize> = recorded
+        .into_iter()
+        .filter(|(_, k)| k.algorithm() == key.algorithm() && k != key)
+        .map(|(n, _)| n)
+        .collect();
+    if stale.is_empty() {
+        return Vec::new();
+    }
+    // russh numbers entries from 1 and does not count comment lines; map its
+    // numbers back to real line indexes.
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut n = 0;
+    let mut out = Vec::new();
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        if line.starts_with('#') {
+            continue;
+        }
+        n += 1;
+        if stale.contains(&n) {
+            out.push(i);
+        }
+    }
+    out
+}
+
+/// Fingerprint of the key recorded for `host:port` that `key` conflicts with.
+fn recorded_fingerprint(path: &Path, host: &str, port: u16, key: &PublicKey) -> Option<String> {
+    keys::known_hosts::known_host_keys_path(host, port, path)
+        .ok()?
+        .into_iter()
+        .find(|(_, k)| k.algorithm() == key.algorithm() && k != key)
+        .map(|(_, k)| fingerprint(&k))
+}
+
+/// Replace the conflicting entries for `host:port` with `key`, keeping every
+/// other line (comments, other hosts, other key types) as it was. The new
+/// file is written under a temporary name and then moved into place.
+fn replace_known_host(path: &Path, host: &str, port: u16, key: &PublicKey) -> std::io::Result<()> {
+    let stale = stale_lines(path, host, port, key);
+    if stale.is_empty() {
+        return Err(std::io::Error::other("no conflicting entry found"));
+    }
+    let text = std::fs::read_to_string(path)?;
+    let kept: String = text
+        .split_inclusive('\n')
+        .enumerate()
+        .filter(|(i, _)| !stale.contains(i))
+        .map(|(_, l)| l)
+        .collect();
+    let tmp = path.with_file_name(format!(
+        ".{}.dualpal-tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("known_hosts")
+    ));
+    std::fs::write(&tmp, kept)?;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    keys::known_hosts::learn_known_hosts_path(host, port, key, &tmp)
+        .map_err(|e| std::io::Error::other(e.to_string()))
+        .and_then(|_| std::fs::rename(&tmp, path))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
 }
 
 struct Live {
@@ -212,9 +309,10 @@ async fn open_live(p: &SftpParams) -> Result<Live> {
                     host: p.host.clone(),
                     fingerprint,
                 },
-                Some(HostCheck::Changed(fingerprint)) => Error::HostKeyChanged {
+                Some(HostCheck::Changed(fingerprint, previous)) => Error::HostKeyChanged {
                     host: p.host.clone(),
                     fingerprint,
+                    previous,
                 },
                 None => Error::Connection(format!("{}:{}: {e}", p.host, p.port)),
             })
@@ -859,5 +957,44 @@ mod tests {
         let bom: Vec<u8> = [0xEF, 0xBB, 0xBF].into_iter().chain(pem.bytes()).collect();
         assert_eq!(key_text(&bom), want);
         assert_eq!(key_text(pem.as_bytes()), want);
+    }
+
+    #[test]
+    /// A changed host key is replaced only for that host, leaving comments,
+    /// other hosts and the file's other lines alone.
+    fn changed_host_key_is_replaced_in_place() {
+        let old = "AAAAC3NzaC1lZDI1NTE5AAAAILIG2T/B0l0gaqj3puu510tu9N1OkQ4znY3LYuEm5zCF";
+        let new = "AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ";
+        let other = "pijul.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA6rWI3G1sz07DnfFlrouTcysQlj2P+jpNSOEWD9OJ3X\n";
+        let comment = "# example.com ssh-ed25519 kept as written\n";
+        // The hashed entry is example.com, port 22.
+        let hashed = format!(
+            "|1|O33ESRMWPVkMYIwJ1Uw+n877jTo=|nuuC5vEqXlEZ/8BXQR7m619W6Ak= ssh-ed25519 {old}\n"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        std::fs::write(&path, format!("{comment}{other}{comment}{hashed}{other}")).unwrap();
+        let old_key = keys::parse_public_key_base64(old).unwrap();
+        let new_key = keys::parse_public_key_base64(new).unwrap();
+
+        assert!(matches!(
+            keys::check_known_hosts_path("example.com", 22, &new_key, &path),
+            Err(keys::Error::KeyChanged { .. })
+        ));
+        assert_eq!(
+            recorded_fingerprint(&path, "example.com", 22, &new_key),
+            Some(fingerprint(&old_key))
+        );
+        // Another host with no conflict is left alone and reports an error.
+        assert!(replace_known_host(&path, "nowhere.test", 22, &new_key).is_err());
+
+        replace_known_host(&path, "example.com", 22, &new_key).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            format!("{comment}{other}{comment}{other}example.com ssh-ed25519 {new}\n")
+        );
+        assert!(keys::check_known_hosts_path("example.com", 22, &new_key, &path).unwrap());
+        assert!(!dir.path().join(".known_hosts.dualpal-tmp").exists());
     }
 }

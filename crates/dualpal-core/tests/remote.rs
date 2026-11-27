@@ -402,6 +402,41 @@ async fn sftp_backend_against_a_real_server() {
         .contains(host));
     let c = connections::connect(&conn, None, opts(None)).await.unwrap();
 
+    // The server's key changes (here: an ed25519 entry swapped for another):
+    // refused with both fingerprints until the user trusts the new one, which
+    // replaces the recorded entry.
+    let recorded = std::fs::read_to_string(&known_hosts).unwrap();
+    if let Some(line) = recorded.lines().find(|l| l.contains(" ssh-ed25519 ")) {
+        let stale = "AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ";
+        let real = line.split(' ').nth(2).unwrap();
+        let swapped = recorded.replace(real, stale);
+        std::fs::write(&known_hosts, format!("# kept\n{swapped}")).unwrap();
+        match connections::connect(&conn, None, opts(None)).await {
+            Err(Error::HostKeyChanged {
+                fingerprint,
+                previous,
+                ..
+            }) => {
+                assert_eq!(fingerprint, fp);
+                assert!(previous.is_some_and(|p| p != fp));
+            }
+            Err(e) => panic!("expected a changed host key, got {e}"),
+            Ok(_) => panic!("expected a changed host key"),
+        }
+        // Trusting some other fingerprint does not replace it.
+        assert!(matches!(
+            connections::connect(&conn, None, opts(Some("SHA256:nope".into()))).await,
+            Err(Error::HostKeyChanged { .. })
+        ));
+        connections::connect(&conn, None, opts(Some(fp.clone())))
+            .await
+            .unwrap();
+        let now = std::fs::read_to_string(&known_hosts).unwrap();
+        assert!(now.starts_with("# kept\n"));
+        assert!(!now.contains(stale));
+        connections::connect(&conn, None, opts(None)).await.unwrap();
+    }
+
     // A wrong password is a sign-in failure, not a crash.
     let pw = Connection {
         endpoint: Endpoint::Sftp {

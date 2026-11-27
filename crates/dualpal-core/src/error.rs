@@ -24,9 +24,14 @@ pub enum Error {
     /// The server's host key is not in known_hosts yet; the user must confirm it.
     #[error("unknown host {host}, key fingerprint {fingerprint}")]
     UnknownHost { host: String, fingerprint: String },
-    /// The server's host key differs from the one in known_hosts.
+    /// The server's host key differs from the one in known_hosts. `previous`
+    /// is the fingerprint recorded before, when it can be read.
     #[error("the host key of {host} has changed (now {fingerprint}); this could be an attack")]
-    HostKeyChanged { host: String, fingerprint: String },
+    HostKeyChanged {
+        host: String,
+        fingerprint: String,
+        previous: Option<String>,
+    },
     /// Saved passwords are protected by a master password that has not been
     /// entered yet in this run of the app.
     #[error("saved passwords are locked; enter the master password to unlock them")]
@@ -78,13 +83,20 @@ impl Error {
 impl Serialize for Error {
     fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Error", 3)?;
+        let mut st = s.serialize_struct("Error", 4)?;
         st.serialize_field("kind", self.kind())?;
         st.serialize_field("message", &self.to_string())?;
         if let Error::UnknownHost { fingerprint, .. } | Error::HostKeyChanged { fingerprint, .. } =
             self
         {
             st.serialize_field("fingerprint", fingerprint)?;
+        }
+        if let Error::HostKeyChanged {
+            previous: Some(previous),
+            ..
+        } = self
+        {
+            st.serialize_field("previousFingerprint", previous)?;
         }
         st.end()
     }
