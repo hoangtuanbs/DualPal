@@ -42,6 +42,17 @@ argon2 = "0.6"
 aes-gcm = "0.11"
 base64 = "0.22"
 getrandom = "0.3"
+# Archive browsing (read-only): pure-Rust readers for zip, tar (gz, bz2, xz, zst) and 7z.
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "lzma", "xz"] }
+tar = { version = "0.4", default-features = false }
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+bzip2 = "0.6"
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["aes256", "bzip2", "deflate", "ppmd"] }
+ruzstd = "0.9"
+# RAR (read only): the official UnRAR C++ source, under the UnRAR license
+# (free to ship; forbids using it to make a RAR compressor).
+unrar_sys = "0.5"
 zeroize = "1"
 # Linux: the Secret Service (GNOME Keyring, KWallet) keeps passwords across
 # logins; the kernel keyring alone forgets them at logout.

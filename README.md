@@ -17,7 +17,7 @@ A fast, cross-platform dual-pane file manager for **macOS and Windows** (Linux w
 
 ```
 crates/dualpal-core   Platform-independent Rust core (no Tauri dependency)
-  src/vfs/            Virtual file system: FileSystem trait, registry, local disk backend
+  src/vfs/            Virtual file system: FileSystem trait, registry, local disk, servers, archives
   src/ops/            Operation queue: copy, move, delete, rename, create folder
   src/activity.rs     Persistent activity log (JSON lines) and insights
   src/compare.rs      Folder comparison on any two file systems
@@ -59,7 +59,8 @@ npm run test:unit                    # L5 UI unit/component tests
 ## Mouse
 
 - **Click** an item to put the cursor on it; **Ctrl/⌘-click** marks several, **Shift-click** marks a range. Operations act on all marked items, or on the item under the cursor when none are marked.
-- **Right-click** an item for its menu: open, edit, copy or move to the other pane, rename, compress, copy path, compare, trash or delete. With several items marked, the menu acts on all of them. Right-click empty space for new folder, refresh, select and more.
+- **Double-click** a folder or an archive (zip, tar, 7z, rar…) to open it in the pane; double-click a file to open it in its default app.
+- **Right-click** an item for its menu: open, edit, copy or move to the other pane, rename, compress, copy path, compare, trash or delete. Archives also have *Open in Default App*, *Extract Here* and *Extract to* the other pane. With several items marked, the menu acts on all of them. Right-click empty space for new folder, refresh, select and more.
 - **Drag** items to the other pane, or onto a folder in either pane, to copy them there. Hold **Shift** when you let go to move instead; **Esc** cancels. Files dragged in from Explorer or Finder are copied to the folder they are dropped on.
 - **Drag the divider** between the panes to make one wider. Double-click it to make them equal again; the width is remembered. With the divider focused, the arrow keys move it (Shift for bigger steps).
 
@@ -69,8 +70,8 @@ npm run test:unit                    # L5 UI unit/component tests
 | --- | --- |
 | Tab | Switch pane |
 | ↑ ↓ / Page Up / Page Down / Home / End | Move cursor |
-| Enter | Open folder, or open file in its default app |
-| Backspace, Ctrl/⌘ ↑ | Enclosing folder |
+| Enter | Open folder or archive, or open file in its default app |
+| Backspace, Ctrl/⌘ ↑ | Enclosing folder (at the top of an archive: the folder holding it) |
 | Space / Insert | Mark item |
 | Space on a folder | Mark it and calculate its size (shown in the Size column and the Info panel) |
 | Alt Shift Enter | Calculate the sizes of all folders in the pane |
@@ -99,6 +100,17 @@ npm run test:unit                    # L5 UI unit/component tests
 | Ctrl/⌘ Shift Y | Compare & Sync the folders of both panes |
 | Ctrl/⌘ Shift D | Compare two files in your compare app |
 | Ctrl/⌘ Shift L | Synchronized browsing on / off |
+
+## Archives
+
+Zip, tar, tar.gz/.tgz, tar.bz2, tar.xz, tar.zst, 7z and RAR files open like folders, and so do single compressed files (.gz, .bz2, .xz, .zst), which show the one file inside: press **Enter** or double-click one, and **Backspace** at its top goes back to the folder holding it, with the cursor on the archive. The path bar shows where the archive is, then the folders inside it.
+
+- Archives are read-only. Copy (**F5**) or drag items to the other pane to extract them; copies go through the operation queue with progress and can be cancelled. *Extract Here* and *Extract to* in an archive's menu copy everything into a new folder named after it.
+- Preview, folder sizes, find and folder compare work inside archives too, and archives inside archives open the same way.
+- An archive on a server is downloaded to a temporary file first (with progress and *Cancel*); a compressed tar is unpacked once so its files can be read in any order. The temporary files are removed when no pane shows the archive any more, and when Dual Pal quits.
+- Entry names that would point outside the archive (`../x`, `/etc/x`) stay inside it, a file never unpacks to more than the archive says, zip files whose entries overlap (a common zip bomb) are refused, and so is anything that unpacks to over 1 GiB at more than 1000 times its size.
+- Password-protected zip, 7z and RAR archives, and multi-volume RAR sets, are not supported yet; Dual Pal says so instead of opening them.
+- RAR archives are read with the official UnRAR library by Alexander Roshal, under its own license: it may be used and shipped freely, but not to make a RAR-compatible archiver. Dual Pal only reads RAR. Every other format is read by pure-Rust libraries under MIT or Apache-2.0 licenses.
 
 ## Servers (SFTP, FTP, WebDAV and S3)
 

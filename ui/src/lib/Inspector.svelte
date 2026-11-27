@@ -123,7 +123,7 @@
   });
 
   async function save() {
-    if (!loc || !dirty) return;
+    if (!loc || !dirty || entry?.readonly) return;
     saving = true;
     try {
       await api.writeText(loc, text);
@@ -207,14 +207,19 @@
           onkeydown={editorKey}
           spellcheck="false"
           disabled={textState === "loading"}
-          aria-label="Edit {entry.name}"
+          readonly={entry.readonly}
+          aria-label={entry.readonly ? `Contents of ${entry.name}` : `Edit ${entry.name}`}
         ></textarea>
       {:else}
         <span class="big" aria-hidden="true">{glyph(entry)}</span>
       {/if}
     </div>
 
-    {#if textState === "ready"}
+    {#if textState === "ready" && entry.readonly}
+      <div class="editbar">
+        <span class="status">Read-only</span>
+      </div>
+    {:else if textState === "ready"}
       <div class="editbar">
         <span class="status">
           {#if saving}Saving…{:else if dirty}Edited{:else if savedAt}Saved{:else}Quick edit{/if}

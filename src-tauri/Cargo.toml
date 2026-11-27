@@ -28,6 +28,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 [dev-dependencies]
+zip.workspace = true
 dualpal-testkit = { path = "../crates/dualpal-testkit" }
 tempfile.workspace = true
 insta = { version = "1", features = ["json"] }

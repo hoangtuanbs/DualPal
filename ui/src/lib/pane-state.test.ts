@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { PaneState } from "./pane-state.svelte";
+import { PaneGroup, PaneState } from "./pane-state.svelte";
+import { archiveListenerCount } from "./archives.svelte";
 import { installMockBackend, tree } from "../../tests/mock-backend";
 import type { Entry, Location } from "./api";
 
@@ -387,5 +388,16 @@ describe("UI-UNIT-018 PaneState quick filter", () => {
     expect(p.filter).toBe("*.txt");
     expect(p.visible.map((e) => e.name)).toEqual(["a.txt", "c.txt"]);
     expect(p.selected.size).toBe(1);
+  });
+});
+
+describe("closing a tab", () => {
+  it("stops the closed pane listening for closed archives", () => {
+    const g = new PaneGroup(new PaneState());
+    const before = archiveListenerCount();
+    g.newTab(new PaneState());
+    expect(archiveListenerCount()).toBe(before + 1);
+    g.closeTab(1);
+    expect(archiveListenerCount()).toBe(before);
   });
 });

@@ -36,6 +36,7 @@
   import { fsNames } from "./lib/fs-names.svelte";
   import { patternMatcher } from "./lib/fileTypes";
   import { PaneGroup, PaneState } from "./lib/pane-state.svelte";
+  import { cancelOpening, closeArchive, isArchiveFs, isArchiveName, isSingleCompressed, openArchive, opening, setShownLocations } from "./lib/archives.svelte";
   import CompareView from "./lib/CompareView.svelte";
   import MultiRename from "./lib/MultiRename.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
@@ -55,6 +56,8 @@
   const other = $derived(groups[1 - activeIndex].current);
   /** Every open tab, for refreshing after operations. */
   const allPanes = () => groups.flatMap((g) => g.tabs);
+  // Archives no tab shows are closed.
+  setShownLocations(() => allPanes().map((p) => p.location));
 
   let showInspector = $state(true);
   /** The left pane's share of the width; the divider between the panes moves it. */
@@ -972,15 +975,51 @@
     return t.length === 1 ? `“${t[0].name}”` : `${t.length} items`;
   }
 
+  const READ_ONLY = "Archives are read-only. Copy items out of them with F5.";
+
+  /** Changing the active pane's folder is not possible inside an archive. */
+  function readOnlyHere(pane = active): boolean {
+    if (pane.inArchive) notice = READ_ONLY;
+    return pane.inArchive;
+  }
+
   function transfer(type: "copy" | "move") {
     const sources = locationsOf(active);
     if (!sources.length || !other.location) return;
+    if (readOnlyHere(other) || (type === "move" && readOnlyHere())) return;
     enqueue({ type, sources, destination: other.location, conflict: "fail" });
+  }
+
+  /** Copy everything in the archive `entry` (in the active pane) into a
+   *  new folder named after it in `dest`. */
+  async function extract(entry: Entry, dest: Location) {
+    const loc = active.location;
+    if (!loc) return;
+    let fsId: string;
+    try {
+      fsId = (await openArchive({ fs: loc.fs, path: entry.path }, entry.name)).fsId;
+    } catch (e) {
+      if (errorKind(e) !== "cancelled") notice = errorMessage(e);
+      return;
+    }
+    try {
+      // A single compressed file (notes.txt.gz) extracts as just that file,
+      // not as a folder holding it.
+      let sources = [{ fs: fsId, path: "/" }];
+      if (isSingleCompressed(entry.name)) {
+        const inside = await api.listDir({ fs: fsId, path: "/" });
+        if (inside.length === 1 && inside[0].kind === "file") sources = [{ fs: fsId, path: inside[0].path }];
+      }
+      await enqueue({ type: "copy", sources, destination: dest, conflict: "fail" });
+    } finally {
+      // The backend keeps it open until the copy ends.
+      if (!allPanes().some((p) => p.location?.fs === fsId)) closeArchive(fsId);
+    }
   }
 
   function trash() {
     const targets = locationsOf(active);
-    if (!targets.length) return;
+    if (!targets.length || readOnlyHere()) return;
     // Servers, buckets and Windows network or WSL folders have no Trash: offer to delete instead.
     if (active.location?.fs !== "local") remove();
     else if (isWindowsShare(active.location.path)) remove("This location has no Recycle Bin.");
@@ -991,7 +1030,7 @@
   function compress() {
     const loc = active.location;
     const t = active.targets;
-    if (!loc || !t.length) return;
+    if (!loc || !t.length || readOnlyHere()) return;
     const taken = new Set(active.entries.map((e) => e.name.toLowerCase()));
     const stem = t.length === 1 ? t[0].name.replace(/\.[^.]+$/, "") || t[0].name : "Archive";
     let name = `${stem}.zip`;
@@ -1006,7 +1045,7 @@
 
   function remove(why?: string) {
     const targets = locationsOf(active);
-    if (!targets.length) return;
+    if (!targets.length || readOnlyHere()) return;
     dialog = {
       title: `Delete ${describe(active)}?`,
       message: `${why ? why + " " : ""}This permanently deletes the selected items. It cannot be undone.`,
@@ -1018,7 +1057,7 @@
 
   function newFolder() {
     const loc = active.location;
-    if (!loc) return;
+    if (!loc || readOnlyHere()) return;
     dialog = {
       title: "New folder",
       input: "untitled folder",
@@ -1031,6 +1070,7 @@
   }
 
   function rename() {
+    if (readOnlyHere()) return;
     // Several marked items: rename them together.
     if (active.selected.size > 1) return multiRename();
     const entry = active.current;
@@ -1065,6 +1105,11 @@
   async function toggleFavorite() {
     const loc = active.location;
     if (!loc) return;
+    // An archive's folders only exist while it is open.
+    if (active.inArchive) {
+      notice = "Folders inside archives cannot be favorites. Add the folder holding the archive instead.";
+      return;
+    }
     const conn = connectionOf(loc.fs);
     try {
       if (conn) {
@@ -1116,6 +1161,7 @@
       ...(single?.kind === "dir" && active.location
         ? [{ label: "Open in New Tab", icon: "new-tab", run: () => openInNewTab(single) }]
         : []),
+      ...(single?.kind === "file" && isArchiveName(single.name) ? archiveItems(single, dest) : []),
       {
         label: files.length > 1 ? `Edit ${files.length} Files` : "Edit in Editor",
         icon: "edit",
@@ -1145,6 +1191,25 @@
       "separator",
       { label: `Move${what} to Trash`, icon: "trash", shortcut: "F8", run: trash },
       { label: `Delete${what} Permanently…`, shortcut: "Shift+Del", danger: true, run: () => remove() },
+    ];
+  }
+
+  /** Extra menu items for an archive file. */
+  function archiveItems(entry: Entry, dest: string): MenuItem[] {
+    const here = active.location;
+    const there = other.location;
+    return [
+      {
+        label: "Open in Default App",
+        run: () => here && api.openFile({ fs: here.fs, path: entry.path }).catch((e) => (notice = errorMessage(e))),
+      },
+      ...(here && !active.inArchive ? [{ label: "Extract Here", icon: "archive", run: () => extract(entry, here) }] : []),
+      {
+        label: `Extract to ${dest}`,
+        icon: "archive",
+        disabled: !there || other.inArchive,
+        run: () => there && extract(entry, there),
+      },
     ];
   }
 
@@ -1232,6 +1297,10 @@
   /** Items dragged from a pane and let go over a folder. */
   function dropped(items: Entry[], from: Location, target: DropTarget, move: boolean) {
     if (!items.length) return;
+    if (isArchiveFs(target.folder.fs) || (move && isArchiveFs(from.fs))) {
+      notice = READ_ONLY;
+      return;
+    }
     enqueue({
       type: move ? "move" : "copy",
       sources: items.map((e) => ({ fs: from.fs, path: e.path })),
@@ -1487,6 +1556,15 @@
     </div>
     <!-- Pushes the view and pane groups to the right; errors show in the gap. -->
     <div class="spacer">
+      {#if opening.current}
+        {@const o = opening.current}
+        <span class="opening" data-testid="archive-opening">
+          {o.phase === "download" ? "Downloading" : o.phase === "unpack" ? "Unpacking" : "Opening"} {o.name}{o.total
+            ? ` ${Math.floor((100 * o.done) / o.total)}%`
+            : "…"}
+          <button onclick={cancelOpening}>Cancel</button>
+        </span>
+      {/if}
       {#if notice}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <span class="notice" title={notice} onclick={() => (notice = null)}>{notice}</span>
@@ -1910,6 +1988,15 @@
     flex: 1;
     display: flex;
     min-width: 0;
+  }
+  .opening {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .opening button {
+    margin-left: 4px;
+    font-size: 12px;
   }
   .notice {
     color: var(--danger);
