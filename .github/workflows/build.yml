@@ -99,6 +99,16 @@ jobs:
 
       - run: npm ci
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      # The installers ship THIRD_PARTY_NOTICES.txt and the About window shows
+      # it: rebuild it from the dependencies being built, so a release never
+      # ships a list older than its Cargo.lock and package-lock.json.
+      - name: Third-party license notices
+        run: node scripts/licenses/generate.mjs
+
       - name: Build installer
         if: env.UPDATER_SIGNING != 'true'
         run: npx tauri build ${{ matrix.args }}

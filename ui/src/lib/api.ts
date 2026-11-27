@@ -477,6 +477,7 @@ export const api = {
   openPath: (location: Location) => invoke<void>("open_path", { location }),
   openTerminal: (location: Location) => invoke<void>("open_terminal", { location }),
   aboutInfo: () => invoke<AboutInfo>("about_info"),
+  thirdPartyNotices: () => invoke<string>("third_party_notices"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   latestRelease: () => invoke<ReleaseInfo>("latest_release"),
   /** Download and verify the installer of release `version`; returns its file name. */

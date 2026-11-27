@@ -7,7 +7,7 @@
   import donateQr from "../assets/donate-qr.svg";
 
   /** The About window, and the Donate page it links to. */
-  let { start = "about", onclose }: { start?: "about" | "donate"; onclose: () => void } = $props();
+  let { start = "about", onclose }: { start?: "about" | "donate" | "licenses"; onclose: () => void } = $props();
 
   // svelte-ignore state_referenced_locally
   let page = $state(start);
@@ -18,7 +18,17 @@
   let checking = $state(false);
   let updateNote = $state<{ text: string; bad: boolean } | null>(null);
 
+  let notices = $state<string | null>(null);
+
   api.aboutInfo().then((i) => (info = i));
+
+  $effect(() => {
+    if (page !== "licenses" || notices !== null) return;
+    api.thirdPartyNotices().then(
+      (text) => (notices = text),
+      (e) => (error = `Could not load the licenses: ${errorMessage(e)}`),
+    );
+  });
   updates.loadPreferences().catch(() => {});
 
   async function toggleAutoCheck(e: Event) {
@@ -84,7 +94,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={(e) => e.target === e.currentTarget && onclose()}>
-  <div class="sheet" role="dialog" aria-modal="true" aria-label={page === "about" ? "About Dual Pal" : "Donate"} data-testid="about-dialog">
+  <div class="sheet" class:wide={page === "licenses"} role="dialog" aria-modal="true" aria-label={page === "about" ? "About Dual Pal" : page === "donate" ? "Donate" : "Open-Source Licenses"} data-testid="about-dialog">
     <!-- svelte-ignore a11y_autofocus -->
     <button class="close" onclick={onclose} aria-label="Close" autofocus>×</button>
 
@@ -118,6 +128,14 @@
       {#if updateNote}
         <p class="small center" class:err={updateNote.bad} role="status">{updateNote.text}</p>
       {/if}
+      <button class="link" onclick={() => (page = "licenses")}>Open-Source Licenses</button>
+    {:else if page === "licenses"}
+      <h2>Open-Source Licenses</h2>
+      <p class="muted center">Dual Pal is built with these open-source components. Thank you to their authors.</p>
+      <!-- Focusable so the keyboard can scroll it (axe: scrollable-region-focusable). -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre class="notices select" tabindex="0" aria-label="License texts" data-testid="third-party-notices">{notices ?? "Loading…"}</pre>
+      <button class="link" onclick={() => (page = "about")}>About Dual Pal</button>
     {:else}
       <span class="heart"><Icon name="heart" size={32} filled /></span>
       <h2>Support Dual Pal</h2>
@@ -163,6 +181,9 @@
     border: 1px solid var(--border);
     border-radius: 12px;
     box-shadow: 0 20px 50px rgb(0 0 0 / 0.35);
+  }
+  .sheet.wide {
+    width: min(680px, calc(100vw - 48px));
   }
   .close {
     position: absolute;
@@ -239,6 +260,21 @@
     font-size: 12.5px;
     text-align: center;
     word-break: break-all;
+  }
+  .notices {
+    align-self: stretch;
+    margin: 0;
+    height: min(420px, calc(100vh - 220px));
+    overflow: auto;
+    padding: 10px 12px;
+    background: var(--control);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
   .copy {
     min-width: 140px;

@@ -40,3 +40,17 @@ test.describe("UI-E2E release notice", () => {
     expect(saved.at(-1).settings.updateChecks).toBe(false);
   });
 });
+
+test.describe("UI-E2E About window", () => {
+  test("UI-E2E-ABOUT-001 the About window shows the open-source licenses", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+    const about = page.getByTestId("about-dialog");
+    await about.getByRole("button", { name: "Open-Source Licenses" }).click();
+    await expect(about).toHaveAccessibleName("Open-Source Licenses");
+    await expect(page.getByTestId("third-party-notices")).toContainText("svelte 5.0.0 (npm package)");
+    expect(await calls(page, "third_party_notices")).toHaveLength(1);
+    await about.getByRole("button", { name: "About Dual Pal" }).click();
+    await expect(about).toHaveAccessibleName("About Dual Pal");
+  });
+});

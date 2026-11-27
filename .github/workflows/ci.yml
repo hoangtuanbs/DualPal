@@ -59,6 +59,14 @@ jobs:
       - name: Test ID traceability
         run: scripts/ci/trace-check.sh
 
+      # Fails when a dependency changed but the notices were not regenerated
+      # (release builds regenerate them anyway; this keeps the copy in git current).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - name: Third-party license notices are current
+        run: node scripts/licenses/generate.mjs --check
+
       # INS-001, INS-REL-001/002: version check and installer collection.
       - name: Release scripts self-test
         run: bash scripts/release/self-test.sh
