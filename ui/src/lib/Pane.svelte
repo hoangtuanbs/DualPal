@@ -52,7 +52,10 @@
     void pane.filter;
     const row = list?.querySelector<HTMLElement>(`[data-index="${pane.cursor}"]`);
     if (!list || !row || list.clientHeight === 0) return;
-    const top = row.offsetTop; // .list is position: relative
+    // The first entry of a date group scrolls in with its header.
+    const before = row.previousElementSibling;
+    const head = before instanceof HTMLElement && before.classList.contains("group-header") ? before : row;
+    const top = head.offsetTop; // .list is position: relative
     const bottom = top + row.offsetHeight;
     if (top < list.scrollTop) list.scrollTop = top;
     else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
@@ -245,7 +248,7 @@
   }
 
   const summary = $derived.by(() => {
-    const n = pane.visible.length;
+    const n = pane.filtered.length;
     const sel = pane.selected.size;
     const items = `${n} ${n === 1 ? "item" : "items"}`;
     let base = sel ? `${sel} of ${items} selected` : items;
@@ -255,6 +258,69 @@
 </script>
 
 <svelte:window onkeydown={keydown} />
+
+{#snippet item(entry: Entry, i: number)}
+  {#if pane.view === "list"}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="row"
+      class:cursor={i === pane.cursor}
+      class:selected={pane.selected.has(entry.path)}
+      class:hidden-file={entry.hidden}
+      class:drop-target={drag.target?.pane === index && drag.target.row === entry.path}
+      data-index={i}
+      data-dir={entry.kind === "dir" ? entry.path : undefined}
+      data-name={entry.name}
+      data-testid={`pane-${side}-row`}
+      role="option"
+      aria-selected={pane.selected.has(entry.path)}
+      tabindex="-1"
+      title={entry.modifiedMs != null ? `${entry.name} — modified ${formatDate(entry.modifiedMs)}` : entry.name}
+      onclick={(e) => click(e, entry, i)}
+      ondblclick={() => pane.activate(entry)}
+      onpointerdown={(e) => pointerdown(e, entry, i)}
+      oncontextmenu={(e) => contextmenu(e, entry, i)}
+    >
+      <span class="name">
+        <span class="icon" aria-hidden="true">{glyph(entry)}</span>
+        <span class="label">{entry.name}</span>
+        {#if entry.symlink}<span class="badge" title="Symbolic link">↪</span>{/if}
+      </span>
+      <span class="size">{sizeText(entry)}</span>
+      <span class="date">{formatShortDate(entry.modifiedMs)}</span>
+    </div>
+  {:else}
+    {@const thumb = thumbnailUrl(pane.location, entry)}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="cell"
+      class:cursor={i === pane.cursor}
+      class:selected={pane.selected.has(entry.path)}
+      class:hidden-file={entry.hidden}
+      class:drop-target={drag.target?.pane === index && drag.target.row === entry.path}
+      data-index={i}
+      data-dir={entry.kind === "dir" ? entry.path : undefined}
+      data-name={entry.name}
+      role="option"
+      aria-selected={pane.selected.has(entry.path)}
+      tabindex="-1"
+      title={entry.name}
+      onclick={(e) => click(e, entry, i)}
+      ondblclick={() => pane.activate(entry)}
+      onpointerdown={(e) => pointerdown(e, entry, i)}
+      oncontextmenu={(e) => contextmenu(e, entry, i)}
+    >
+      <div class="thumb">
+        {#if thumb}
+          <img src={thumb} alt="" loading="lazy" decoding="async" draggable="false" />
+        {:else}
+          <span class="big-icon" aria-hidden="true">{glyph(entry)}</span>
+        {/if}
+      </div>
+      <span class="cell-label">{entry.name}</span>
+    </div>
+  {/if}
+{/snippet}
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <section
@@ -341,67 +407,40 @@
   >
     {#if pane.error}
       <p class="message error" data-testid={`pane-${side}-error`}>{pane.error}</p>
-    {:else if pane.visible.length === 0 && !pane.loading}
+    {:else if pane.filtered.length === 0 && !pane.loading}
       <p class="message">{pane.filter ? "No items match the filter." : "This folder is empty."}</p>
     {/if}
-    {#each pane.visible as entry, i (entry.path)}
-      {#if pane.view === "list"}
-        <div
-          class="row"
-          class:cursor={i === pane.cursor}
-          class:selected={pane.selected.has(entry.path)}
-          class:hidden-file={entry.hidden}
-          class:drop-target={drag.target?.pane === index && drag.target.row === entry.path}
-          data-index={i}
-          data-dir={entry.kind === "dir" ? entry.path : undefined}
-          data-name={entry.name}
-          data-testid={`pane-${side}-row`}
-          role="option"
-          aria-selected={pane.selected.has(entry.path)}
-          tabindex="-1"
-          title={entry.modifiedMs != null ? `${entry.name} — modified ${formatDate(entry.modifiedMs)}` : entry.name}
-          onclick={(e) => click(e, entry, i)}
-          ondblclick={() => pane.activate(entry)}
-          onpointerdown={(e) => pointerdown(e, entry, i)}
-          oncontextmenu={(e) => contextmenu(e, entry, i)}
-        >
-          <span class="name">
-            <span class="icon" aria-hidden="true">{glyph(entry)}</span>
-            <span class="label">{entry.name}</span>
-            {#if entry.symlink}<span class="badge" title="Symbolic link">↪</span>{/if}
-          </span>
-          <span class="size">{sizeText(entry)}</span>
-          <span class="date">{formatShortDate(entry.modifiedMs)}</span>
+    {#each pane.sections as section (section.id)}
+      {#if section.label}
+        <div class="section" role="group" aria-label={section.label}>
+          <!-- Keeps focus on the list, so the keys go on working on the files. -->
+          <button
+            class="group-header"
+            class:collapsed={section.collapsed}
+            aria-expanded={!section.collapsed}
+            tabindex="-1"
+            title={section.collapsed ? "Show this group" : "Hide this group"}
+            data-testid={`pane-${side}-group`}
+            onpointerdown={(e) => {
+              e.preventDefault();
+              listEl?.focus({ preventScroll: true });
+            }}
+            onclick={() => pane.toggleGroup(section.id)}
+          >
+            <span class="chevron" aria-hidden="true">›</span>
+            <span class="group-label">{section.label}</span>
+            <span class="group-count">{section.entries.length}</span>
+          </button>
+          {#if !section.collapsed}
+            {#each section.entries as entry, j (entry.path)}
+              {@render item(entry, section.start + j)}
+            {/each}
+          {/if}
         </div>
       {:else}
-        {@const thumb = thumbnailUrl(pane.location, entry)}
-        <div
-          class="cell"
-          class:cursor={i === pane.cursor}
-          class:selected={pane.selected.has(entry.path)}
-          class:hidden-file={entry.hidden}
-          class:drop-target={drag.target?.pane === index && drag.target.row === entry.path}
-          data-index={i}
-          data-dir={entry.kind === "dir" ? entry.path : undefined}
-          data-name={entry.name}
-          role="option"
-          aria-selected={pane.selected.has(entry.path)}
-          tabindex="-1"
-          title={entry.name}
-          onclick={(e) => click(e, entry, i)}
-          ondblclick={() => pane.activate(entry)}
-          onpointerdown={(e) => pointerdown(e, entry, i)}
-          oncontextmenu={(e) => contextmenu(e, entry, i)}
-        >
-          <div class="thumb">
-            {#if thumb}
-              <img src={thumb} alt="" loading="lazy" decoding="async" draggable="false" />
-            {:else}
-              <span class="big-icon" aria-hidden="true">{glyph(entry)}</span>
-            {/if}
-          </div>
-          <span class="cell-label">{entry.name}</span>
-        </div>
+        {#each section.entries as entry, j (entry.path)}
+          {@render item(entry, section.start + j)}
+        {/each}
       {/if}
     {/each}
   </div>
@@ -471,6 +510,50 @@
   .columns {
     border-bottom: 1px solid var(--border);
   }
+  /* The rows and cells of a group sit in the list's own layout. */
+  .section {
+    display: contents;
+  }
+  .group-header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    margin-top: 6px;
+    padding: 4px 12px 2px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: none;
+    color: var(--accent);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .list.grid .group-header {
+    padding-left: 4px;
+  }
+  .section:first-of-type .group-header {
+    margin-top: 0;
+  }
+  .group-header:hover {
+    background: var(--stripe);
+  }
+  .chevron {
+    display: inline-block;
+    width: 10px;
+    color: var(--muted);
+    transform: rotate(90deg);
+    transition: transform 0.1s;
+  }
+  .group-header.collapsed .chevron {
+    transform: none;
+  }
+  .group-count {
+    color: var(--muted);
+    font-size: 11px;
+  }
   .filter {
     padding: 6px 10px;
     border-bottom: 1px solid var(--border);
@@ -528,7 +611,8 @@
     border-radius: 5px;
     margin: 0 4px;
   }
-  .row:nth-child(even) {
+  /* Counts rows only, so that each date group starts unstriped below its header. */
+  .row:where(:nth-child(even of .row)) {
     background: var(--stripe);
   }
   .pane.drop-target .list {
@@ -635,12 +719,15 @@
   .list.grid {
     display: grid;
     grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
-    grid-auto-rows: 124px;
+    /* Cells set their own height, so that date group headers stay short. */
+    grid-auto-rows: auto;
     gap: 4px;
     padding: 8px;
     align-content: start;
   }
   .cell {
+    box-sizing: border-box;
+    height: 124px;
     display: flex;
     flex-direction: column;
     align-items: center;

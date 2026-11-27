@@ -60,3 +60,32 @@ test.describe("UI-E2E app shell", () => {
     await expect(page.getByTestId("palette")).toBeVisible();
   });
 });
+
+test.describe("UI-E2E group by date", () => {
+  test("groups rows under date headers that fold away and back", async ({ page }) => {
+    await openApp(page);
+    const rows = page.getByTestId("pane-left-row");
+    const count = await rows.count();
+    expect(count).toBeGreaterThan(0);
+
+    await pane(page, "left").click();
+    await toolbar(page).getByRole("button", { name: "Group by date" }).click();
+    const header = page.getByTestId("pane-left-group");
+    // The mock's files all date from 2023.
+    await expect(header).toHaveCount(1);
+    await expect(header).toContainText("A long time ago");
+    await expect(header).toHaveAttribute("aria-expanded", "true");
+
+    await header.click();
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    await expect(rows).toHaveCount(0);
+    // The status line still counts the folded items.
+    await expect(page.getByTestId("pane-left-status")).toContainText(`${count} item`);
+
+    await header.click();
+    await expect(rows).toHaveCount(count);
+
+    await toolbar(page).getByRole("button", { name: "Group by date" }).click();
+    await expect(header).toHaveCount(0);
+  });
+});

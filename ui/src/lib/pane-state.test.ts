@@ -389,3 +389,100 @@ describe("UI-UNIT-018 PaneState quick filter", () => {
     expect(p.selected.size).toBe(1);
   });
 });
+
+describe("Group by date", () => {
+  const day = 24 * 3600 * 1000;
+  const now = Date.now();
+  const entries = () => [
+    file("today.txt", 1, now - 60_000),
+    file("old.txt", 1, new Date(2000, 0, 1).getTime()),
+    file("nodate.txt", 1, null),
+    file("today2.txt", 1, now - 120_000),
+    file("ancient.txt", 1, new Date(1999, 0, 1).getTime()),
+  ];
+
+  it("groups newest first and sorts newest first inside each group", async () => {
+    const p = await pane(entries());
+    p.setGroupByDate(true);
+    expect(p.sections.map((s) => s.label)).toEqual(["Today", "A long time ago", "Date unknown"]);
+    expect(p.visible.map((e) => e.name)).toEqual(["today.txt", "today2.txt", "old.txt", "ancient.txt", "nodate.txt"]);
+    expect(p.sections.map((s) => s.start)).toEqual([0, 2, 4]);
+  });
+
+  it("puts oldest groups first when sorted oldest first, with unknown dates last", async () => {
+    const p = await pane(entries());
+    p.setGroupByDate(true);
+    p.setSort("modified"); // now ascending
+    expect(p.sections.map((s) => s.label)).toEqual(["A long time ago", "Today", "Date unknown"]);
+  });
+
+  it("collapsing hides a group's entries, drops their marks and keeps the cursor on its entry", async () => {
+    const p = await pane(entries());
+    p.setGroupByDate(true);
+    p.cursor = 2; // old.txt
+    p.selected.add("/dir/today.txt");
+    p.selected.add("/dir/old.txt");
+    p.toggleGroup("today");
+    expect(p.visible.map((e) => e.name)).toEqual(["old.txt", "ancient.txt", "nodate.txt"]);
+    expect(p.current?.name).toBe("old.txt");
+    expect([...p.selected]).toEqual(["/dir/old.txt"]);
+    expect(p.sections.map((s) => s.start)).toEqual([0, 0, 2]);
+    // The summary still counts the folded entries.
+    expect(p.filtered).toHaveLength(5);
+
+    p.toggleGroup("today");
+    expect(p.visible).toHaveLength(5);
+    expect(p.current?.name).toBe("old.txt");
+  });
+
+  it("collapses and expands every group", async () => {
+    const p = await pane(entries());
+    p.setGroupByDate(true);
+    p.toggleAllGroups(true);
+    expect(p.visible).toEqual([]);
+    expect(p.current).toBeUndefined();
+    p.toggleAllGroups(false);
+    expect(p.visible).toHaveLength(5);
+  });
+
+  it("works with the quick filter", async () => {
+    const p = await pane(entries());
+    p.setGroupByDate(true);
+    p.setFilter("today*");
+    expect(p.sections.map((s) => s.label)).toEqual(["Today"]);
+  });
+
+  it("is kept by new tabs", async () => {
+    const p = await pane(entries());
+    p.setGroupByDate(true);
+    p.toggleGroup("older");
+    const q = p.clone(null);
+    expect(q.groupByDate).toBe(true);
+    expect(q.collapsed.has("older")).toBe(true);
+  });
+
+  it("moves ↑/↓ by column through the groups in the icon grid", async () => {
+    // Today: 5 entries, a long time ago: 2.
+    const list = [0, 1, 2, 3, 4].map((i) => file(`t${i}`, 1, now - (i + 1) * 1000));
+    list.push(file("o0", 1, now - 9000 * day), file("o1", 1, now - 9001 * day));
+    const p = await pane(list);
+    p.setGroupByDate(true);
+    p.view = "icons";
+    p.columns = 3;
+    p.cursor = 1; // t1, column 2
+    p.moveRow(1);
+    expect(p.current?.name).toBe("t4");
+    p.moveRow(1); // into the next group, same column
+    expect(p.current?.name).toBe("o1");
+    p.moveRow(1); // nowhere further down
+    expect(p.current?.name).toBe("o1");
+    p.moveRow(-1); // up into the last row of Today, same column
+    expect(p.current?.name).toBe("t4");
+    p.cursor = 2; // t2, column 3
+    p.moveRow(1); // the row below is shorter: its last item
+    expect(p.current?.name).toBe("t4");
+    p.view = "list";
+    p.moveRow(1);
+    expect(p.current?.name).toBe("o0");
+  });
+});
