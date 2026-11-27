@@ -49,9 +49,12 @@ export class PaneState {
   /** Bumped to move focus into the filter bar, even when it is already open. */
   filterFocus = $state(0);
 
+  /** Stops listening for closed archives; called when the tab closes. */
+  private unlistenArchives: () => void;
+
   constructor() {
     // A closed archive can no longer be gone back to.
-    onArchiveClosed((fs) => {
+    this.unlistenArchives = onArchiveClosed((fs) => {
       this.history = this.history.filter((l) => l.fs !== fs);
       this.future = this.future.filter((l) => l.fs !== fs);
     });
@@ -340,7 +343,12 @@ export class PaneState {
     return isArchiveFs(this.location?.fs);
   }
 
-  /** A new tab state at the same place with the same view settings. */
+  /** Releases what this pane holds; call when its tab closes. */
+  dispose() {
+    this.forgetSizes();
+    this.unlistenArchives();
+  }
+
   /** A new pane with the same view settings, showing `at` (default: this folder). */
   clone(at: Location | null = this.location): PaneState {
     const p = new PaneState();
@@ -392,7 +400,7 @@ export class PaneGroup {
 
   closeTab(i = this.index) {
     if (this.tabs.length <= 1) return;
-    this.tabs[i].forgetSizes();
+    this.tabs[i].dispose();
     const closed = this.tabs[i].location;
     this.tabs.splice(i, 1);
     if (this.index >= this.tabs.length || this.index > i) this.index = Math.max(0, this.index - 1);

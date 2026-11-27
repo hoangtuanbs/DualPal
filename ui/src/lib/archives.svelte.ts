@@ -85,6 +85,11 @@ export function onArchiveClosed(f: (fsId: string) => void): () => void {
   return () => forgetters.delete(f);
 }
 
+/** How many panes listen for closed archives (for tests). */
+export function archiveListenerCount(): number {
+  return forgetters.size;
+}
+
 /** Where panes are going: listings still loading (Swap Panes, a new tab). */
 const incoming: Location[] = [];
 
