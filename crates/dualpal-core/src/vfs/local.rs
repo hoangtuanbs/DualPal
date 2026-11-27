@@ -116,6 +116,21 @@ async fn read_entries(dir: PathBuf) -> std::io::Result<Vec<Entry>> {
 
 /// Build an entry from `symlink_metadata`, following the link (if any) to
 /// learn the target's kind and size.
+/// Refuses a path whose last part is not a valid name on this disk, before
+/// the system is asked to create it. Without this, Windows answers a name
+/// such as `con` or `a.` with a vague error, or quietly writes to a device
+/// or to a different name.
+fn check_new_name(path: &str) -> Result<()> {
+    let Some(name) = Path::new(path).file_name() else {
+        return Ok(());
+    };
+    let name = name.to_string_lossy();
+    match super::names::local_name_problem(&name) {
+        Some(why) => Err(Error::Invalid(format!("can't use \"{name}\": {why}"))),
+        None => Ok(()),
+    }
+}
+
 async fn entry_for(path: &Path, link_meta: Metadata) -> Entry {
     let target = if link_meta.file_type().is_symlink() {
         tokio::fs::metadata(path).await.ok()
@@ -217,6 +232,7 @@ impl FileSystem for LocalFs {
     }
 
     async fn create_dir(&self, path: &str) -> Result<()> {
+        check_new_name(path)?;
         tokio::fs::create_dir(path)
             .await
             .map_err(|e| Error::io(path, e))
@@ -240,6 +256,7 @@ impl FileSystem for LocalFs {
     }
 
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        check_new_name(to)?;
         tokio::fs::rename(from, to)
             .await
             .map_err(|e| Error::io(from, e))
@@ -253,6 +270,7 @@ impl FileSystem for LocalFs {
     }
 
     async fn open_write(&self, path: &str) -> Result<Writer> {
+        check_new_name(path)?;
         let f = tokio::fs::File::create(path)
             .await
             .map_err(|e| Error::io(path, e))?;

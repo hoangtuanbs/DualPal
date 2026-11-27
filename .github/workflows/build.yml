@@ -64,6 +64,17 @@ jobs:
       # "true" when the signing key secret is set (secrets cannot be used in `if`).
       UPDATER_SIGNING: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Linux system libraries
@@ -123,6 +134,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
         with:
           sparse-checkout: scripts/release
@@ -157,6 +179,17 @@ jobs:
     env:
       UPDATER_SIGNING: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     steps:
+      # Files a container wrote as root (or a cancelled job left behind) make
+      # actions/checkout fail on a self-hosted runner, which reuses its work
+      # folder: hand anything not owned by the runner user back to it.
+      - name: Reclaim workspace
+        if: runner.os == 'Linux'
+        run: |
+          ws="${{ github.workspace }}"
+          if [ -d "$ws" ] && find "$ws" ! -user "$(id -u)" -print -quit | grep -q .; then
+            docker run --rm -v "$ws:/w" alpine:3.20 chown -R "$(id -u):$(id -g)" /w
+          fi
+
       - uses: actions/checkout@v4
         if: env.UPDATER_SIGNING == 'true'
 

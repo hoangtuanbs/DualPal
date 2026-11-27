@@ -9,6 +9,7 @@ pub mod archive;
 mod davput;
 mod ftp;
 mod local;
+pub mod names;
 pub mod posix;
 mod s3;
 mod sftp;
@@ -83,17 +84,17 @@ impl Entry {
     }
 }
 
-/// Whether `name`, coming from another file system (a server), is a plain
-/// file name on the local disk: not empty, not `.`/`..`, and without path
-/// separators or (on Windows) drive letters, which would let it point
-/// outside the folder it is joined onto.
+/// Whether `name`, coming from another file system (a server), can be
+/// written to the local disk as it is: it can't point outside the folder it
+/// is joined onto (no `..`, separators or, on Windows, drive letters) and it
+/// follows the disk's naming rules (see [`names::local_name_problem`]).
 pub fn is_safe_local_name(name: &str) -> bool {
-    let bad_char = |c: char| c == '/' || c == '\0' || (cfg!(windows) && (c == '\\' || c == ':'));
-    !name.is_empty() && name != "." && name != ".." && !name.contains(bad_char)
+    names::local_name_problem(name).is_none()
 }
 
 /// `name` made safe to use as a local file name (see [`is_safe_local_name`]):
-/// unsafe characters become `_`.
+/// path separators, `:` and control characters become `_` on every system,
+/// and the rest of the disk's naming rules are applied by [`names::sanitize`].
 pub fn safe_local_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -105,10 +106,7 @@ pub fn safe_local_name(name: &str) -> String {
             }
         })
         .collect();
-    match cleaned.as_str() {
-        "" | "." | ".." => "file".to_string(),
-        _ => cleaned,
-    }
+    names::sanitize(&cleaned, names::NameRules::LOCAL)
 }
 
 pub type Reader = Box<dyn AsyncRead + Send + Unpin>;

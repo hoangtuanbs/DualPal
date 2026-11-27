@@ -300,7 +300,10 @@ async fn parallel_transfers_are_respected() {
 async fn unsafe_server_names_stay_inside_the_destination() {
     let mut names = vec!["a\\b", "x:y", "ok.txt"];
     if cfg!(windows) {
-        names.push("con");
+        // Every kind of name Windows refuses (see vfs::names).
+        names.extend([
+            "con", "NUL.txt", "com1", "Lpt9.log", "trail.", "trail ", "q?.txt", "a|b",
+        ]);
     }
     for name in names {
         let server = MemFs::new("server");

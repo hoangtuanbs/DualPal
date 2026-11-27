@@ -672,6 +672,7 @@ impl Job {
             return Err(Error::Invalid(format!("invalid name: {new_name:?}")));
         }
         let fs = self.fs(&loc.fs)?;
+        check_name(&fs, &new_name)?;
         let parent = fs
             .parent(&loc.path)
             .ok_or_else(|| Error::Invalid(format!("cannot rename {}", loc.path)))?;
@@ -748,13 +749,18 @@ async fn make_dir(fs: &Fs, path: &str) -> Result<()> {
     }
 }
 
-/// Names from a server must not escape the local folder they are copied
-/// into (e.g. `..` or, on Windows, `C:\\Users\\…`).
+/// Names written to this computer must follow its naming rules, checked
+/// before any data moves: a server name must not escape the local folder it
+/// is copied into (e.g. `..` or, on Windows, `C:\\Users\\…`), and on Windows
+/// must not be a device name such as `con`, end with a dot or a space, or
+/// hold a character Windows refuses (see [`crate::vfs::names`]).
 fn check_name(dst_fs: &Fs, name: &str) -> Result<()> {
-    if dst_fs.id() == LocalFs::ID && !crate::vfs::is_safe_local_name(name) {
-        return Err(Error::Invalid(format!(
-            "unsafe file name for this computer: {name}"
-        )));
+    if dst_fs.id() == LocalFs::ID {
+        if let Some(why) = crate::vfs::names::local_name_problem(name) {
+            return Err(Error::Invalid(format!(
+                "can't use \"{name}\" on this computer: {why}"
+            )));
+        }
     }
     Ok(())
 }
