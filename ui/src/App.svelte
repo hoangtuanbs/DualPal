@@ -402,6 +402,24 @@
           confirmLabel: "Trust and connect",
           onconfirm: () => connectThen(c, after, { ...opts, trust: fp }),
         };
+      } else if (kind === "hostKeyChanged" && fp) {
+        // Never accepted silently: the user sees both fingerprints and must
+        // choose to replace the recorded one. Cancel leaves it as it was.
+        const prev = (e as { previousFingerprint?: string }).previousFingerprint;
+        const what = c.endpoint.type === "ftp" ? "certificate" : "host key";
+        const where = c.endpoint.type === "ftp" ? "Dual Pal" : "~/.ssh/known_hosts";
+        dialog = {
+          title: `${c.name}'s ${what} has changed`,
+          message:
+            `The server now presents a different ${what} than the one recorded for it. ` +
+            `This happens when the server was reinstalled or its keys were regenerated, but it can also mean someone is intercepting the connection.\n\n` +
+            (prev ? `Recorded:  ${prev}\n` : "") +
+            `Now:  ${fp}\n\n` +
+            `Only continue if you know why it changed, or have checked the new fingerprint with the server's owner. The recorded ${what} in ${where} will be replaced.`,
+          confirmLabel: "Replace key and connect",
+          danger: true,
+          onconfirm: () => connectThen(c, after, { ...opts, trust: fp }),
+        };
       } else if (kind === "authFailed" && c.endpoint.type === "sftp" && c.endpoint.auth.method !== "agent") {
         const what = c.endpoint.auth.method === "keyFile" ? "key passphrase" : "password";
         dialog = {

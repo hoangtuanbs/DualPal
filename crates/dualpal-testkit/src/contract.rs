@@ -641,6 +641,7 @@ pub fn errors_serialise() {
         Error::HostKeyChanged {
             host: "h".into(),
             fingerprint: "SHA256:x".into(),
+            previous: Some("SHA256:old".into()),
         },
         Error::Io {
             path: "/x".into(),
@@ -713,7 +714,8 @@ pub fn errors_serialise() {
   {
     "fingerprint": "SHA256:x",
     "kind": "hostKeyChanged",
-    "message": "the host key of h has changed (now SHA256:x); this could be an attack"
+    "message": "the host key of h has changed (now SHA256:x); this could be an attack",
+    "previousFingerprint": "SHA256:old"
   },
   {
     "kind": "io",

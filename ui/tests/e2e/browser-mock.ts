@@ -19,8 +19,10 @@ export interface ServerScenario {
   remembered?: boolean;
   /** Host key / certificate fingerprint to confirm on first contact. */
   fingerprint?: string;
-  /** The server's key changed since it was trusted: refuse to connect. */
+  /** The server's key changed since it was trusted: refuse to connect until the
+   *  user confirms this fingerprint. */
   hostKeyChanged?: boolean;
+  previousFingerprint?: string;
 }
 
 export interface BrowserScenario {
@@ -569,12 +571,17 @@ export function installBrowserMock(scenario: BrowserScenario) {
   const connectNow = (a: any) => {
     const s = server(a.id);
     const host = s.connection.endpoint.host ?? s.connection.endpoint.url ?? s.connection.name;
+    if (s.hostKeyChanged && a.trust && a.trust === s.fingerprint) {
+      s.hostKeyChanged = false;
+      s.trusted = true;
+    }
     if (s.hostKeyChanged) {
       throw {
         kind: "hostKeyChanged",
         message: `the host key of ${host} has changed (now ${s.fingerprint}); this could be an attack`,
         host,
         fingerprint: s.fingerprint,
+        previousFingerprint: s.previousFingerprint,
       };
     }
     if (!s.trusted) {

@@ -340,9 +340,10 @@ impl FtpFs {
                 if let (Some(fp), Error::Connection(_)) = (fp, &e) {
                     if trusted.as_deref() != Some(fp.as_str()) {
                         return Err(match stored {
-                            Some(_) => Error::HostKeyChanged {
+                            Some(previous) => Error::HostKeyChanged {
                                 host: fs.p.host.clone(),
                                 fingerprint: fp,
+                                previous: Some(previous),
                             },
                             None => Error::UnknownHost {
                                 host: fs.p.host.clone(),

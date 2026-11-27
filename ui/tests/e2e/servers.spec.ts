@@ -171,14 +171,26 @@ test.describe("UI-E2E servers", () => {
     expect(saves.map((c) => c.secret)).toEqual(["hunter2", "hunter2"]);
   });
 
-  test("UI-E2E-010 a changed host key blocks the connection with no way to trust it", async ({ page }) => {
-    await withServers(page, sftp({ hostKeyChanged: true, fingerprint: FP }));
+  test("UI-E2E-010 a changed host key is refused until the user replaces it", async ({ page }) => {
+    const OLD = "SHA256:oldkeyfingerprint";
+    await withServers(page, sftp({ hostKeyChanged: true, fingerprint: FP, previousFingerprint: OLD }));
     await serverItem(page, "Build box").dblclick();
-    await expect(page.locator(".notice")).toContainText("could be an attack");
+    // Both fingerprints are shown, with a warning, and Cancel is the default.
+    await expect(dialog(page)).toContainText("has changed");
+    await expect(dialog(page)).toContainText("intercepting");
+    await expect(dialog(page)).toContainText(OLD);
+    await expect(dialog(page)).toContainText(FP);
+    await expect(dialog(page).getByTestId("dialog-cancel")).toBeFocused();
+    await dialog(page).getByTestId("dialog-cancel").click();
     await expect(dialog(page)).toBeHidden();
-    await expect(page.getByRole("button", { name: /Trust/ })).toHaveCount(0);
     expect((await calls(page, "connect")).every((c) => c.trust === null)).toBe(true);
     await expect(row(page, "left", "readme.md")).toBeVisible(); // still home
+
+    // Trying again and choosing to replace the key connects with that fingerprint.
+    await serverItem(page, "Build box").dblclick();
+    await dialog(page).getByRole("button", { name: "Replace key and connect" }).click();
+    await expect(row(page, "left", "app")).toBeVisible();
+    expect((await calls(page, "connect")).at(-1).trust).toBe(FP);
   });
 
   test("UI-E2E-011 an FTPS server's self-signed certificate is shown before trusting it", async ({ page }) => {
