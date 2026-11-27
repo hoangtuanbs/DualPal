@@ -123,6 +123,27 @@ jobs:
         run: |
           npx tauri build ${{ matrix.args }} --config "$(node scripts/updater-manifest.mjs config)"
 
+      # TEMPORARY (test branch only): confirm each installer carries the notices.
+      - name: Verify notices in installers
+        shell: bash
+        run: |
+          set -u
+          root=target/${{ matrix.args == '--target universal-apple-darwin' && 'universal-apple-darwin/' || '' }}release
+          echo "== generated file"; head -3 THIRD_PARTY_NOTICES.txt; grep -c "^  " THIRD_PARTY_NOTICES.txt; grep -n "UnRAR, compiled" THIRD_PARTY_NOTICES.txt || echo "no UnRAR section"
+          bin=$(ls $root/dualpal $root/dualpal.exe 2>/dev/null | head -1)
+          echo "== embedded in $bin: $(grep -a -c 'Dual Pal third-party notices' "$bin")"
+          case "$RUNNER_OS" in
+            macOS)
+              ls -l "$root/bundle/macos/Dual Pal.app/Contents/Resources/" ;;
+            Linux)
+              for d in $root/bundle/deb/*.deb; do echo "== $d"; dpkg -c "$d" | grep -i notices; done
+              for r in $root/bundle/rpm/*.rpm; do echo "== $r"; (rpm -qlp "$r" 2>/dev/null || bsdtar tf "$r") | grep -i notices; done
+              for a in $root/bundle/appimage/*.AppImage; do echo "== $a"; (cd "$RUNNER_TEMP" && rm -rf squashfs-root && "$GITHUB_WORKSPACE/$a" --appimage-extract >/dev/null && find squashfs-root -iname '*notices*'); done ;;
+            Windows)
+              for m in $root/bundle/msi/*.msi; do echo "== $m"; out="$(cygpath -w "$RUNNER_TEMP")\\msi"; msiexec //a "$(cygpath -w "$m")" //qn TARGETDIR="$out"; sleep 5; find "$RUNNER_TEMP/msi" -iname '*notices*'; done
+              echo "== NSIS script"; grep -i -r notices $root/nsis/*/installer.nsi ;;
+          esac
+
       - name: Check the version matches the tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
