@@ -462,6 +462,7 @@ export function installBrowserMock(scenario: BrowserScenario) {
     activity: () => activity,
     activity_insights: () => ({ days: [], operations: 0, completed: 0, failed: 0, cancelled: 0, files: 0, bytes: 0, busyMs: 0, throughput: null, byKind: [], byPlace: [], largest: [], failures: [] }),
     about_info: () => ({ version: "0.1.0", os: "test", arch: "test" }),
+    third_party_notices: () => "Dual Pal third-party notices\n\nMIT\n\nUsed by:\n  svelte 5.0.0 (npm package)\n",
     latest_release: () => {
       throw { kind: "connection", message: "could not connect: offline" };
     },
