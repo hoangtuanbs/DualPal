@@ -39,6 +39,7 @@ fn tested_commands() -> HashSet<&'static str> {
         "open_path",
         "open_terminal",
         "about_info",
+        "third_party_notices",
         "open_url",
         "latest_release",
         "download_upgrade",
@@ -409,6 +410,26 @@ fn about_info() {
     assert_eq!(info["os"], std::env::consts::OS);
     assert_eq!(info["arch"], std::env::consts::ARCH);
     assert!(info["version"].is_string());
+}
+
+/// CMD-012 — the About window can show the third-party licenses.
+#[test]
+fn third_party_notices() {
+    let TestApp { app, tmp: _tmp } = app();
+    let text: Value = call(&app, "third_party_notices", json!({})).unwrap();
+    let text = text.as_str().unwrap();
+    assert!(
+        text.starts_with("Dual Pal third-party notices"),
+        "{}",
+        &text[..80]
+    );
+    for crate_name in ["tauri ", "tokio ", "russh "] {
+        assert!(
+            text.contains(&format!("\n  {crate_name}")),
+            "{crate_name} is listed"
+        );
+    }
+    assert!(text.contains("(npm package)"), "UI packages are listed");
 }
 
 /// `DUALPAL_RELEASES_URL` is process-wide: tests that set it take turns.

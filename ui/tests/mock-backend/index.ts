@@ -278,6 +278,7 @@ const handlers: Record<string, Handler> = {
       failures: [],
     }) as Insights,
   about_info: () => ({ version: "0.1.0", os: "test", arch: "test" }),
+  third_party_notices: () => "Dual Pal third-party notices\n\nMIT\n\nUsed by:\n  svelte 5.0.0 (npm package)\n",
   latest_release: (_a, s) => {
     if (!s.latestRelease) throw { kind: "connection", message: "could not connect: offline" };
     return s.latestRelease;

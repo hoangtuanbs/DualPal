@@ -47,6 +47,14 @@ npm run check            # UI type-check
 npm run test:unit        # UI unit + component tests (Vitest, with coverage)
 ```
 
+After adding or updating a dependency, regenerate the third-party license notices that the installers ship and the About window shows (needs `cargo install cargo-about --locked --features cli`; release builds regenerate them too):
+
+```sh
+node scripts/licenses/generate.mjs
+```
+
+A crate under a license not yet listed in `scripts/licenses/about.toml` stops the script, so new licenses get a look before they ship.
+
 The automated test suite is documented in `docs/testing/AUTOMATION_TEST_PLAN.md`. Key commands:
 
 ```sh
