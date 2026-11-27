@@ -2,9 +2,22 @@ import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { api, errorKind, errorMessage, type Entry, type FolderSize, type Location } from "./api";
 import { fsNames } from "./fs-names.svelte";
 import { nameFilter } from "./quick-filter";
+import { DATE_GROUPS, dateBoundaries, dateGroup, firstDayOfWeek, type DateGroupId } from "./date-groups";
 
 export type SortKey = "name" | "size" | "modified";
 export type ViewMode = "list" | "icons";
+
+/** A run of entries under one heading. Without grouping there is one
+ *  section with no label. */
+export interface Section {
+  id: string;
+  label: string | null;
+  /** Entries of the group, after the quick filter, collapsed or not. */
+  entries: Entry[];
+  collapsed: boolean;
+  /** Index in `visible` of the first entry shown. */
+  start: number;
+}
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 /** Ids of folder size calculations, unique across all panes. */
@@ -47,6 +60,12 @@ export class PaneState {
   filterOpen = $state(false);
   /** Bumped to move focus into the filter bar, even when it is already open. */
   filterFocus = $state(0);
+  /** Group the entries by date modified, like Explorer's "Group by". */
+  groupByDate = $state(false);
+  /** Groups folded away, by id. Kept across folders, like Explorer. */
+  collapsed = new SvelteSet<string>();
+  /** When the listing was read: the date groups count from this day. */
+  private listedAt = $state(Date.now());
 
   /** Entries shown before the quick filter: hidden files left out, sorted. */
   listed = $derived.by(() => {
@@ -62,11 +81,43 @@ export class PaneState {
     });
   });
 
-  /** The entries shown: `listed` narrowed by the quick filter. */
-  visible = $derived.by(() => {
+  /** `listed` narrowed by the quick filter, including entries in collapsed groups. */
+  filtered = $derived.by(() => {
     const keep = nameFilter(this.filter);
     return keep ? this.listed.filter((e) => keep(e.name)) : this.listed;
   });
+
+  /** The entries under their headings, in the order shown. */
+  sections = $derived.by((): Section[] => {
+    if (!this.groupByDate) return [{ id: "all", label: null, entries: this.filtered, collapsed: false, start: 0 }];
+    const bounds = dateBoundaries(new Date(this.listedAt), firstDayOfWeek());
+    const byGroup = new Map<DateGroupId, Entry[]>();
+    for (const e of this.filtered) {
+      const g = dateGroup(e.modifiedMs, bounds);
+      let list = byGroup.get(g);
+      if (!list) byGroup.set(g, (list = []));
+      list.push(e);
+    }
+    // Newest first, unless sorted oldest first. Unknown dates always go last.
+    const order = DATE_GROUPS.filter((g) => g.id !== "unknown");
+    if (this.sortKey === "modified" && this.sortAsc) order.reverse();
+    order.push(DATE_GROUPS[DATE_GROUPS.length - 1]);
+    const out: Section[] = [];
+    let start = 0;
+    for (const g of order) {
+      const entries = byGroup.get(g.id);
+      if (!entries) continue;
+      const collapsed = this.collapsed.has(g.id);
+      out.push({ id: g.id, label: g.label, entries, collapsed, start });
+      if (!collapsed) start += entries.length;
+    }
+    return out;
+  });
+
+  /** The entries shown, in order: what the filter keeps, less collapsed groups. */
+  visible = $derived.by(() =>
+    this.groupByDate ? this.sections.flatMap((s) => (s.collapsed ? [] : s.entries)) : this.filtered,
+  );
 
   get current(): Entry | undefined {
     return this.visible[this.cursor];
@@ -89,6 +140,7 @@ export class PaneState {
       }
       this.location = loc;
       this.entries = entries;
+      this.listedAt = Date.now();
       this.forgetSizes();
       this.filter = "";
       this.filterOpen = false;
@@ -188,6 +240,7 @@ export class PaneState {
       const entries = await api.listDir(here);
       if (this.location !== here) return; // the user went elsewhere meanwhile
       this.entries = entries;
+      this.listedAt = Date.now();
       this.forgetSizes();
       this.error = null;
     } catch (e) {
@@ -227,11 +280,55 @@ export class PaneState {
     this.filterFocus++;
   }
 
-  /** Marks never stay on entries the filter hides, so operations only act on what is shown. */
+  /** Marks never stay on entries the filter or a collapsed group hides,
+   *  so operations only act on what is shown. */
   private unmarkFiltered() {
-    const keep = nameFilter(this.filter);
-    if (!keep) return;
-    for (const e of this.entries) if (!keep(e.name)) this.selected.delete(e.path);
+    if (this.selected.size === 0) return;
+    const shown = new Set(this.visible.map((e) => e.path));
+    for (const path of [...this.selected]) if (!shown.has(path)) this.selected.delete(path);
+  }
+
+  /** Run `change`, then keep the cursor on the same entry when it is still
+   *  shown, else on the entry now at its place. */
+  private keepCursor(change: () => void) {
+    const keep = this.current?.path;
+    const at = this.cursor;
+    change();
+    const idx = keep ? this.visible.findIndex((e) => e.path === keep) : -1;
+    this.cursor = idx >= 0 ? idx : Math.min(at, Math.max(0, this.visible.length - 1));
+  }
+
+  /** Turn date groups on or off. Turning them on sorts newest first, as Explorer shows them. */
+  setGroupByDate(on: boolean) {
+    this.keepCursor(() => {
+      this.groupByDate = on;
+      if (on) {
+        this.sortKey = "modified";
+        this.sortAsc = false;
+        this.listedAt = Date.now();
+      }
+      this.unmarkFiltered();
+    });
+  }
+
+  /** Fold or unfold a date group. Marks on the entries folded away are dropped. */
+  toggleGroup(id: string, collapse = !this.collapsed.has(id)) {
+    this.keepCursor(() => {
+      if (collapse) this.collapsed.add(id);
+      else this.collapsed.delete(id);
+      this.unmarkFiltered();
+    });
+  }
+
+  /** Fold or unfold every group shown. */
+  toggleAllGroups(collapse: boolean) {
+    this.keepCursor(() => {
+      for (const s of this.sections) {
+        if (collapse) this.collapsed.add(s.id);
+        else this.collapsed.delete(s.id);
+      }
+      this.unmarkFiltered();
+    });
   }
 
   /** Open the closest existing folder above `from`, unless the user moves
@@ -302,6 +399,8 @@ export class PaneState {
     p.showHidden = this.showHidden;
     p.sortKey = this.sortKey;
     p.sortAsc = this.sortAsc;
+    p.groupByDate = this.groupByDate;
+    for (const id of this.collapsed) p.collapsed.add(id);
     if (at) p.open(at);
     return p;
   }
@@ -310,6 +409,37 @@ export class PaneState {
     const n = this.visible.length;
     if (n === 0) return;
     this.cursor = Math.min(n - 1, Math.max(0, this.cursor + delta));
+  }
+
+  /** ↑/↓ by `delta` rows. In the icon grid a row is `columns` cells, and each
+   *  date group starts a new row, so moving goes column by column through the groups. */
+  moveRow(delta: number) {
+    if (this.view !== "icons") return this.moveCursor(delta);
+    const cols = Math.max(1, this.columns);
+    if (!this.groupByDate) return this.moveCursor(delta * cols);
+    const shown = this.sections.filter((s) => !s.collapsed && s.entries.length > 0);
+    let si = shown.findIndex((s) => this.cursor >= s.start && this.cursor < s.start + s.entries.length);
+    if (si < 0) return;
+    let k = this.cursor - shown[si].start;
+    const col = k % cols;
+    for (let step = 0; step < Math.abs(delta); step++) {
+      const len = shown[si].entries.length;
+      if (delta > 0) {
+        const next = (Math.floor(k / cols) + 1) * cols + col;
+        if (next < len) k = next;
+        else if (Math.floor(k / cols) < Math.floor((len - 1) / cols)) k = len - 1; // a shorter last row
+        else if (si + 1 < shown.length) {
+          si++;
+          k = Math.min(col, shown[si].entries.length - 1);
+        }
+      } else if (k >= cols) k -= cols;
+      else if (si > 0) {
+        si--;
+        const n = shown[si].entries.length;
+        k = Math.min(Math.floor((n - 1) / cols) * cols + col, n - 1);
+      }
+    }
+    this.cursor = shown[si].start + k;
   }
 
   toggle(entry: Entry) {

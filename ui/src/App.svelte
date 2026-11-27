@@ -843,6 +843,13 @@
       { id: "deselect", group: "Select", title: "Deselect All", run: () => active.selected.clear() },
       { id: "list", group: "View", title: "List View", shortcut: `${MOD}1`, run: () => (active.view = "list") },
       { id: "icons", group: "View", title: "Icon View", shortcut: `${MOD}2`, run: () => (active.view = "icons") },
+      { id: "groupByDate", group: "View", title: active.groupByDate ? "Stop Grouping by Date" : "Group by Date Modified", run: () => active.setGroupByDate(!active.groupByDate) },
+      ...(active.groupByDate
+        ? [
+            { id: "collapseGroups", group: "View", title: "Collapse All Date Groups", run: () => active.toggleAllGroups(true) },
+            { id: "expandGroups", group: "View", title: "Expand All Date Groups", run: () => active.toggleAllGroups(false) },
+          ]
+        : []),
       { id: "hidden", group: "View", title: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files", shortcut: `${MOD}Shift+.`, run: () => (active.showHidden = !active.showHidden) },
       { id: "info", group: "View", title: showInspector ? "Hide Info Panel" : "Show Info Panel", shortcut: `${MOD}I`, run: () => (showInspector = !showInspector) },
       { id: "filter", group: "View", title: "Filter Items by Name", shortcut: `${MOD}F`, run: () => active.openFilter() },
@@ -1157,6 +1164,11 @@
       { label: "Select All", icon: "select", shortcut: `${MOD}A`, run: () => active.visible.forEach((it) => active.selected.add(it.path)) },
       { label: "Select by Name…", shortcut: "+", run: () => selectByPattern(true) },
       {
+        label: active.groupByDate ? "Stop Grouping by Date" : "Group by Date Modified",
+        icon: "calendar",
+        run: () => active.setGroupByDate(!active.groupByDate),
+      },
+      {
         label: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files",
         icon: "eye",
         shortcut: `${MOD}Shift+.`,
@@ -1255,10 +1267,12 @@
     activity = [];
   }
 
-  /** Shift+↑/↓: mark the items the cursor passes over. */
-  function extendSelection(delta: number) {
+  /** Shift+arrows: mark the items the cursor passes over. `rows` moves by
+   *  rows (↑/↓) rather than by items. */
+  function extendSelection(delta: number, rows = false) {
     if (active.current) active.selected.add(active.current.path);
-    active.moveCursor(delta);
+    if (rows) active.moveRow(delta);
+    else active.moveCursor(delta);
     if (active.current) active.selected.add(active.current.path);
   }
 
@@ -1320,13 +1334,13 @@
         activeIndex = 1 - activeIndex;
         return handled();
       case "ArrowDown":
-        if (e.shiftKey) extendSelection(icons ? active.columns : 1);
-        else active.moveCursor(icons ? active.columns : 1);
+        if (e.shiftKey) extendSelection(1, true);
+        else active.moveRow(1);
         return handled();
       case "ArrowUp":
         if (mod) active.up();
-        else if (e.shiftKey) extendSelection(icons ? -active.columns : -1);
-        else active.moveCursor(icons ? -active.columns : -1);
+        else if (e.shiftKey) extendSelection(-1, true);
+        else active.moveRow(-1);
         return handled();
       case "ContextMenu":
         menuFromKeyboard();
@@ -1498,6 +1512,13 @@
       >
       <button aria-pressed={active.view === "icons"} onclick={() => (active.view = "icons")} aria-label="Icon view" title="Icon view (Ctrl/⌘ 2)"
         ><Icon name="grid" /></button
+      >
+      <button
+        aria-pressed={active.groupByDate}
+        onclick={() => active.setGroupByDate(!active.groupByDate)}
+        aria-label="Group by date"
+        data-testid="group-by-date"
+        title={active.groupByDate ? "Stop grouping by date" : "Group by date modified: Today, Yesterday, Last week…"}><Icon name="calendar" /></button
       >
     </div>
     <div class="group" inert={frozen}>
