@@ -86,6 +86,78 @@ fn make_7z(path: &Path, files: &[(&str, &[u8])], dirs: &[&str]) {
     w.finish().unwrap();
 }
 
+/// CRC-32 (IEEE), as RAR uses for headers (low 16 bits) and data.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A RAR 4 header block: its CRC16 covers everything after the CRC field.
+fn rar_block(kind: u8, flags: u16, rest: &[u8]) -> Vec<u8> {
+    let mut b = vec![kind];
+    b.extend((flags).to_le_bytes());
+    b.extend(((7 + rest.len()) as u16).to_le_bytes());
+    b.extend(rest);
+    let crc = (crc32(&b) & 0xFFFF) as u16;
+    let mut out = crc.to_le_bytes().to_vec();
+    out.extend(b);
+    out
+}
+
+/// One RAR 4 file entry, stored (not compressed): (name, data, folder,
+/// encrypted flag, declared unpacked size).
+fn rar_file(name: &str, data: &[u8], dir: bool, encrypted: bool, unp: u64) -> Vec<u8> {
+    let mut h = Vec::new();
+    h.extend((data.len() as u32).to_le_bytes()); // PACK_SIZE
+    h.extend((unp as u32).to_le_bytes()); // UNP_SIZE
+    h.push(3); // HOST_OS: Unix
+    h.extend(crc32(data).to_le_bytes());
+    // 2020-09-13 12:26:40 as a DOS time.
+    let date: u32 = ((2020 - 1980) << 9) | (9 << 5) | 13;
+    let time: u32 = (12 << 11) | (26 << 5) | 20;
+    h.extend(((date << 16) | time).to_le_bytes());
+    h.push(29); // UNP_VER
+    h.push(0x30); // METHOD: store
+    h.extend((name.len() as u16).to_le_bytes());
+    h.extend((if dir { 0o40755u32 } else { 0o100644 }).to_le_bytes());
+    h.extend(name.as_bytes());
+    let mut flags = 0x8000u16; // LONG_BLOCK: data follows
+    if dir {
+        flags |= 0x00E0;
+    }
+    if encrypted {
+        flags |= 0x0004;
+    }
+    let mut out = rar_block(0x74, flags, &h);
+    out.extend(data);
+    out
+}
+
+/// A RAR 4 archive of stored entries, for tests (no RAR writer is
+/// available, and storing needs none).
+fn rar_bytes(files: &[(&str, &[u8])], dirs: &[&str]) -> Vec<u8> {
+    let mut out = b"Rar!\x1a\x07\x00".to_vec();
+    out.extend(rar_block(0x73, 0, &[0; 6]));
+    for d in dirs {
+        out.extend(rar_file(d.trim_end_matches('/'), b"", true, false, 0));
+    }
+    for (name, data) in files {
+        out.extend(rar_file(name, data, false, false, data.len() as u64));
+    }
+    out.extend(rar_block(0x7B, 0x4000, &[]));
+    out
+}
+
 /// Write an archive called `name` holding `files` into `dir`; the format
 /// follows the name.
 fn make(dir: &Path, name: &str, files: &[(&str, &[u8])], dirs: &[&str]) -> PathBuf {
@@ -97,6 +169,8 @@ fn make(dir: &Path, name: &str, files: &[(&str, &[u8])], dirs: &[&str]) -> PathB
         make_7z(&path, files, dirs);
     } else if name.ends_with(".tar") {
         std::fs::write(&path, tar()).unwrap();
+    } else if name.ends_with(".rar") {
+        std::fs::write(&path, rar_bytes(files, dirs)).unwrap();
     } else if name.ends_with(".tgz") || name.ends_with(".tar.gz") {
         let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         e.write_all(&tar()).unwrap();
@@ -152,6 +226,7 @@ const FORMATS: &[&str] = &[
     "t.tar.zst",
     "t.tzst",
     "t.7z",
+    "t.rar",
 ];
 
 async fn open_local(
@@ -296,7 +371,7 @@ async fn corrupt_archives_fail_cleanly() {
         );
     }
     // A real archive cut in half.
-    for name in ["cut.zip", "cut.7z", "cut.tgz"] {
+    for name in ["cut.zip", "cut.7z", "cut.tgz", "cut.rar"] {
         let big: Vec<u8> = (0..200_000u32).map(|i| (i * 7 % 251) as u8).collect();
         let path = make(tmp.path(), name, &[("big.bin", &big)], &[]);
         let bytes = std::fs::read(&path).unwrap();
@@ -322,7 +397,7 @@ async fn traversal_names_stay_inside() {
     ];
     let registry = Arc::new(Registry::with_local());
     let queue = dualpal_testkit::queue(registry.clone());
-    for name in ["evil.zip", "evil.tar"] {
+    for name in ["evil.zip", "evil.tar", "evil.rar"] {
         let path = make(tmp.path(), name, evil, &[]);
         let fs = open_local(&registry, &path, &tmp.path().join("scratch"))
             .await
@@ -793,4 +868,44 @@ async fn single_compressed_files_open_as_one_file() {
         .unwrap();
     assert_eq!(fs.stat("/empty.txt").await.unwrap().size, 0);
     assert_eq!(read_all(fs.as_ref(), "/empty.txt").await.unwrap(), b"");
+}
+
+/// VFS-ARC-013: RAR archives (read through UnRAR): times are kept, an
+/// encrypted entry is named as such, and damaged data fails the read.
+#[tokio::test]
+async fn rar_details() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry = Registry::with_local();
+
+    let path = make(tmp.path(), "t.rar", FILES, &["docs/"]);
+    let fs = open_local(&registry, &path, &tmp.path().join("scratch"))
+        .await
+        .unwrap();
+    // 2020-09-13 12:26:40, stored as a local DOS time: within a day of it.
+    let ms = fs.stat("/top.txt").await.unwrap().modified_ms.unwrap();
+    assert!((ms - 1_600_000_000_000).abs() <= 86_400_000, "{ms}");
+
+    // An encrypted entry.
+    let mut bytes = b"Rar!\x1a\x07\x00".to_vec();
+    bytes.extend(rar_block(0x73, 0, &[0; 6]));
+    bytes.extend(rar_file("secret.txt", b"hidden", false, true, 6));
+    bytes.extend(rar_block(0x7B, 0x4000, &[]));
+    let path = tmp.path().join("locked.rar");
+    std::fs::write(&path, bytes).unwrap();
+    match open_local(&registry, &path, &tmp.path().join("scratch")).await {
+        Err(Error::Unsupported(m)) => assert_eq!(m, ENCRYPTED),
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+
+    // A flipped data byte: the CRC check fails the read, not the listing.
+    let mut bytes = rar_bytes(&[("a.txt", b"alpha bravo")], &[]);
+    let at = bytes.windows(5).position(|w| w == b"alpha").unwrap();
+    bytes[at] = b'A';
+    let path = tmp.path().join("flipped.rar");
+    std::fs::write(&path, bytes).unwrap();
+    let fs = open_local(&registry, &path, &tmp.path().join("scratch"))
+        .await
+        .unwrap();
+    assert_eq!(names(&fs.list("/").await.unwrap()), ["a.txt"]);
+    assert!(read_all(fs.as_ref(), "/a.txt").await.is_err());
 }

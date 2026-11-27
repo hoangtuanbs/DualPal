@@ -1,5 +1,5 @@
 //! Archives browsed as read-only folders: zip, tar, tar.gz/.tgz, tar.bz2,
-//! tar.xz, tar.zst and 7z, and single compressed files (.gz, .bz2, .xz,
+//! tar.xz, tar.zst, 7z and rar, and single compressed files (.gz, .bz2, .xz,
 //! .zst), which open as a folder holding the one file.
 //!
 //! [`open_archive`] reads the archive's table of contents once and returns an
@@ -17,6 +17,8 @@
 //!   is a tar, it is shown as one, otherwise as a folder with that file.
 //! * 7z: the header is read; a file is decoded from its block when read (in
 //!   a solid archive the files before it in the block are decoded too).
+//! * rar: the headers are listed with UnRAR; a file is unpacked to the
+//!   reader chunk by chunk (see [`super::rar`]).
 //!
 //! An archive on a server, or inside another archive, is downloaded into the
 //! scratch folder first. The scratch folder is removed when the last user of
@@ -77,6 +79,7 @@ pub enum Format {
     TarXz,
     TarZst,
     SevenZ,
+    Rar,
     /// A single compressed file: `notes.txt.gz` holds `notes.txt`.
     Gz,
     Bz2,
@@ -87,7 +90,10 @@ pub enum Format {
 impl Format {
     /// Whether the archive is one compressed stream, unpacked before use.
     fn is_compressed(self) -> bool {
-        !matches!(self, Format::Zip | Format::Tar | Format::SevenZ)
+        !matches!(
+            self,
+            Format::Zip | Format::Tar | Format::SevenZ | Format::Rar
+        )
     }
 
     /// The same compression with a tar (`tar`) or a single file inside.
@@ -123,6 +129,7 @@ const EXTENSIONS: &[(&str, Format)] = &[
     (".bz2", Format::Bz2),
     (".zst", Format::Zst),
     (".7z", Format::SevenZ),
+    (".rar", Format::Rar),
     (".gz", Format::Gz),
     (".xz", Format::Xz),
 ];
@@ -169,6 +176,8 @@ fn detect(path: &Path, name: &str) -> io::Result<Option<Format>> {
         Some(Format::Zip)
     } else if head.starts_with(b"7z\xBC\xAF\x27\x1C") {
         Some(Format::SevenZ)
+    } else if head.starts_with(b"Rar!\x1A\x07") {
+        Some(Format::Rar)
     } else if head.starts_with(&[0x1f, 0x8b]) {
         Some(Format::TarGz.with_tar(tar))
     } else if head.starts_with(b"BZh") {
@@ -217,6 +226,8 @@ enum Data {
     Tar { offset: u64 },
     /// Index in the 7z archive's file list.
     SevenZ { index: usize },
+    /// Index in the RAR archive's headers, and the packed size.
+    Rar { index: usize, packed: u64 },
 }
 
 #[derive(Clone, Debug)]
@@ -542,6 +553,59 @@ fn index_7z(path: &Path, name: &str) -> Result<(Index, sevenz_rust2::Archive)> {
         index.insert(&parts, node);
     }
     Ok((index, archive))
+}
+
+fn rar_error(name: &str, e: super::rar::RarError) -> Error {
+    match e {
+        super::rar::RarError::Password => Error::Unsupported(ENCRYPTED.into()),
+        e if e.is_missing_volume() => Error::Unsupported(format!(
+            "{name} is part of a multi-volume RAR set, which is not supported yet"
+        )),
+        e => damaged(name, e),
+    }
+}
+
+fn index_rar(path: &Path, name: &str) -> Result<Index> {
+    let entries = super::rar::list(path).map_err(|e| rar_error(name, e))?;
+    let mut index = Index::new();
+    for (i, e) in entries.iter().enumerate() {
+        if e.encrypted {
+            return Err(Error::Unsupported(ENCRYPTED.into()));
+        }
+        if e.split {
+            return Err(Error::Unsupported(format!(
+                "{name} is part of a multi-volume RAR set, which is not supported yet"
+            )));
+        }
+        let parts = clean_parts(&e.name, true);
+        if parts.is_empty() {
+            continue;
+        }
+        let node = if e.dir {
+            Node {
+                modified_ms: e.modified_ms,
+                ..Node::dir()
+            }
+        } else {
+            Node {
+                kind: EntryKind::File,
+                symlink: false,
+                size: e.size,
+                modified_ms: e.modified_ms,
+                mode: None,
+                data: if e.size > 0 {
+                    Data::Rar {
+                        index: i,
+                        packed: e.packed,
+                    }
+                } else {
+                    Data::None
+                },
+            }
+        };
+        index.insert(&parts, node);
+    }
+    Ok(index)
 }
 
 /// Whether the file at `path` starts with a tar header (`ustar` magic).
@@ -938,6 +1002,10 @@ impl ArchiveFs {
                 let (index, archive) = index_7z(&file, &name)?;
                 (file, Backing::SevenZ(Box::new(archive)), index)
             }
+            Format::Rar => {
+                let index = index_rar(&file, &name)?;
+                (file, Backing::Tar, index)
+            }
             _ => unreachable!("every format is handled above"),
         };
         Ok(Self {
@@ -1171,6 +1239,27 @@ impl FileSystem for ArchiveFs {
                     return Err(self.bomb(&p));
                 }
                 stream(size, move |w| seven_read(&inner, index, block, w))
+            }
+            Data::Rar { index, packed } => {
+                if looks_like_bomb(size, packed, inner.bomb_min) {
+                    return Err(self.bomb(&p));
+                }
+                let name = self.name.clone();
+                stream(size, move |w| {
+                    let mut failed = None;
+                    let mut sink = |bytes: &[u8]| match w.write_all(bytes) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            failed = Some(e);
+                            false
+                        }
+                    };
+                    let result = super::rar::read(&inner.file, index, &mut sink);
+                    if let Some(e) = failed {
+                        return Err(e);
+                    }
+                    result.map_err(|e| io::Error::other(rar_error(&name, e).to_string()))
+                })
             }
         })
     }
@@ -1507,12 +1596,15 @@ mod tests {
             "a.log.bz2",
             "a.xz",
             "a.ZST",
+            "a.rar",
+            "A.RAR",
         ] {
             assert!(is_archive_name(n), "{n}");
         }
         assert_eq!(format_from_name("a.tar.zst"), Some(Format::TarZst));
         assert_eq!(format_from_name("a.txt.gz"), Some(Format::Gz));
         assert_eq!(format_from_name("a.tar.gz"), Some(Format::TarGz));
+        assert_eq!(format_from_name("a.rar"), Some(Format::Rar));
         for n in ["zip", ".zip", ".gz", "a.txt", "a.gzip"] {
             assert!(!is_archive_name(n), "{n}");
         }

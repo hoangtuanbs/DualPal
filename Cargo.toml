@@ -50,6 +50,9 @@ bzip2 = "0.6"
 lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
 sevenz-rust2 = { version = "0.25", default-features = false, features = ["aes256", "bzip2", "deflate", "ppmd"] }
 ruzstd = "0.9"
+# RAR (read only): the official UnRAR C++ source, under the UnRAR license
+# (free to ship; forbids using it to make a RAR compressor).
+unrar_sys = "0.5"
 zeroize = "1"
 # Linux: the Secret Service (GNOME Keyring, KWallet) keeps passwords across
 # logins; the kernel keyring alone forgets them at logout.

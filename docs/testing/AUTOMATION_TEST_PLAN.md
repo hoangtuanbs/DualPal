@@ -405,10 +405,10 @@ Each case runs in `unique_base(fs)`.
 | VFS-PATH-003 | posix helpers | L1 | P1 | EXISTS: posix.rs helpers | |
 | VFS-WSL-001 | split/map WSL paths | L1 | P1 | EXISTS: wsl.rs tests | |
 | VFS-WSL-002 | WSL distros listed on Windows runner with WSL | L2 (Windows, optional) | P2 | NEW | skip when `wsl.exe -l -q` fails |
-| VFS-ARC-001 | archives list and read in every format (zip, tar, tgz, tar.bz2, tar.xz, 7z); archive names recognised | L1 | P0 | EXISTS: archive.rs | nested folders, sizes, bytes; paths behave like a tree |
+| VFS-ARC-001 | archives list and read in every format (zip, tar, tgz, tar.bz2, tar.xz, tar.zst, 7z, rar); archive names recognised | L1 | P0 | EXISTS: archive.rs | nested folders, sizes, bytes; paths behave like a tree |
 | VFS-ARC-002 | archive writes fail as read-only | L1 | P0 | EXISTS: archive.rs | every write method → `permissionDenied` mentioning read-only |
 | VFS-ARC-003 | empty archives open as empty folders | L1 | P1 | EXISTS: archive.rs | |
-| VFS-ARC-004 | damaged or fake archives give `invalid`, never a listing of garbage | L1 | P0 | EXISTS: archive.rs | truncated zip/7z/tgz, text named as an archive |
+| VFS-ARC-004 | damaged or fake archives give `invalid`, never a listing of garbage | L1 | P0 | EXISTS: archive.rs | truncated zip/7z/tgz/rar, text named as an archive |
 | VFS-ARC-005 | `../` and absolute entry names stay inside; extraction writes nothing outside the destination | L1 | P0 | EXISTS: archive.rs | |
 | VFS-ARC-006 | password-protected zip and 7z (content or header) say "not supported yet" | L1 | P1 | EXISTS: archive.rs | |
 | VFS-ARC-007 | overlapping zip entries (zip bomb) are refused, counting long local names; compressed tars and 7z blocks over the size limit at >1000:1 are refused | L1 | P1 | EXISTS: archive.rs | |
@@ -416,6 +416,8 @@ Each case runs in `unique_base(fs)`.
 | VFS-ARC-009 | an archive on a server is downloaded (progress phases), cancellable, and its scratch folder is removed once unused | L2 | P1 | EXISTS: archive.rs | |
 | VFS-ARC-010 | closing an archive an operation still uses waits for the operation; one that stopped on an existing file stays open for a retry until cleared | L2 | P1 | EXISTS: archive.rs | |
 | VFS-ARC-011 | folder size and find work inside an archive | L2 | P1 | EXISTS: archive.rs | |
+| VFS-ARC-012 | a single compressed file (.gz, .bz2, .xz, .zst) opens as a folder with that one file; one holding a tar shows the tar; concatenated zstd frames read as one | L1 | P1 | EXISTS: archive.rs | |
+| VFS-ARC-013 | RAR through UnRAR: times kept, encrypted entries say "not supported yet", a CRC error fails the read | L1 | P1 | EXISTS: archive.rs | test RARs are written as stored RAR 4 by the test itself |
 | VFS-TXT-001 | read_text truncates at max_bytes | L1 | P0 | EXTEND: ops.rs reads_and_saves_text | `truncated: true`, text length ≤ max |
 | VFS-TXT-002 | binary detection (NUL byte) | L1 | P0 | NEW | `binary: true` |
 | VFS-TXT-003 | invalid UTF-8 / UTF-16 BOM / CRLF preserved | L1 | P1 | NEW | write_text of read_text output is byte-identical for CRLF files |

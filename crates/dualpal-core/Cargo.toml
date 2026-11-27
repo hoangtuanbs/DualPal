@@ -44,6 +44,7 @@ bzip2.workspace = true
 lzma-rust2.workspace = true
 sevenz-rust2.workspace = true
 ruzstd.workspace = true
+unrar_sys.workspace = true
 
 [dev-dependencies]
 # Writers for the archive tests.

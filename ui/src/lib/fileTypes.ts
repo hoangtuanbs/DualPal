@@ -9,7 +9,7 @@ add("image", "png jpg jpeg gif webp bmp svg ico heic heif tif tiff avif");
 add("video", "mp4 mov m4v mkv webm avi wmv flv mpg mpeg");
 add("audio", "mp3 m4a aac wav flac ogg opus aiff alac wma");
 add("pdf", "pdf");
-add("archive", "zip tar gz tgz bz2 xz 7z rar dmg iso");
+add("archive", "zip tar gz tgz bz2 tbz tbz2 xz txz zst tzst 7z rar dmg iso");
 add("code", "js ts tsx jsx svelte vue rs go py rb php java kt swift c h cpp hpp cs sh zsh json yaml yml toml xml html css scss sql");
 add("text", "txt md markdown rtf csv log ini conf cfg");
 add("app", "app exe msi pkg deb rpm appimage");

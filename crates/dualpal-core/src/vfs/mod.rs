@@ -11,6 +11,7 @@ mod ftp;
 mod local;
 pub mod names;
 pub mod posix;
+mod rar;
 mod s3;
 mod sftp;
 mod text;
