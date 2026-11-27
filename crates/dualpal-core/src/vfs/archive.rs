@@ -1,5 +1,6 @@
 //! Archives browsed as read-only folders: zip, tar, tar.gz/.tgz, tar.bz2,
-//! tar.xz and 7z.
+//! tar.xz, tar.zst and 7z, and single compressed files (.gz, .bz2, .xz,
+//! .zst), which open as a folder holding the one file.
 //!
 //! [`open_archive`] reads the archive's table of contents once and returns an
 //! [`ArchiveFs`], a [`FileSystem`] whose paths (`/`, `/docs/a.txt`) are the
@@ -12,6 +13,8 @@
 //! * tar: one pass over the headers records where each file's bytes are.
 //!   A compressed tar is first unpacked to a plain tar in the archive's
 //!   scratch folder, so that files can be read in any order.
+//! * a single compressed file is unpacked the same way; if what comes out
+//!   is a tar, it is shown as one, otherwise as a folder with that file.
 //! * 7z: the header is read; a file is decoded from its block when read (in
 //!   a solid archive the files before it in the block are decoded too).
 //!
@@ -72,28 +75,70 @@ pub enum Format {
     TarGz,
     TarBz2,
     TarXz,
+    TarZst,
     SevenZ,
+    /// A single compressed file: `notes.txt.gz` holds `notes.txt`.
+    Gz,
+    Bz2,
+    Xz,
+    Zst,
+}
+
+impl Format {
+    /// Whether the archive is one compressed stream, unpacked before use.
+    fn is_compressed(self) -> bool {
+        !matches!(self, Format::Zip | Format::Tar | Format::SevenZ)
+    }
+
+    /// The same compression with a tar (`tar`) or a single file inside.
+    fn with_tar(self, tar: bool) -> Format {
+        use Format::*;
+        match (self, tar) {
+            (TarGz | Gz, true) => TarGz,
+            (TarGz | Gz, false) => Gz,
+            (TarBz2 | Bz2, true) => TarBz2,
+            (TarBz2 | Bz2, false) => Bz2,
+            (TarXz | Xz, true) => TarXz,
+            (TarXz | Xz, false) => Xz,
+            (TarZst | Zst, true) => TarZst,
+            (TarZst | Zst, false) => Zst,
+            (f, _) => f,
+        }
+    }
+}
+
+/// Archive extensions, longest first, with their format.
+const EXTENSIONS: &[(&str, Format)] = &[
+    (".tar.gz", Format::TarGz),
+    (".tar.bz2", Format::TarBz2),
+    (".tar.xz", Format::TarXz),
+    (".tar.zst", Format::TarZst),
+    (".tbz2", Format::TarBz2),
+    (".tzst", Format::TarZst),
+    (".tgz", Format::TarGz),
+    (".tbz", Format::TarBz2),
+    (".txz", Format::TarXz),
+    (".zip", Format::Zip),
+    (".tar", Format::Tar),
+    (".bz2", Format::Bz2),
+    (".zst", Format::Zst),
+    (".7z", Format::SevenZ),
+    (".gz", Format::Gz),
+    (".xz", Format::Xz),
+];
+
+/// The extension of `name` that makes it an archive, and its format.
+fn split_extension(name: &str) -> Option<(usize, Format)> {
+    let n = name.to_lowercase();
+    EXTENSIONS
+        .iter()
+        .find(|(e, _)| n.ends_with(e) && n.len() > e.len())
+        .map(|&(e, f)| (e.len(), f))
 }
 
 /// The archive format a file name suggests, if it is one Dual Pal opens.
 pub fn format_from_name(name: &str) -> Option<Format> {
-    let n = name.to_lowercase();
-    let ends = |exts: &[&str]| exts.iter().any(|e| n.ends_with(e) && n.len() > e.len());
-    if ends(&[".zip"]) {
-        Some(Format::Zip)
-    } else if ends(&[".tar"]) {
-        Some(Format::Tar)
-    } else if ends(&[".tar.gz", ".tgz"]) {
-        Some(Format::TarGz)
-    } else if ends(&[".tar.bz2", ".tbz2", ".tbz"]) {
-        Some(Format::TarBz2)
-    } else if ends(&[".tar.xz", ".txz"]) {
-        Some(Format::TarXz)
-    } else if ends(&[".7z"]) {
-        Some(Format::SevenZ)
-    } else {
-        None
-    }
+    split_extension(name).map(|(_, f)| f)
 }
 
 /// Whether `name` is an archive that can be opened as a folder.
@@ -103,15 +148,12 @@ pub fn is_archive_name(name: &str) -> bool {
 
 /// `name` without its archive extension: the folder an extraction creates.
 pub fn archive_stem(name: &str) -> String {
-    let lower = name.to_lowercase();
-    for ext in [
-        ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".tbz", ".txz", ".zip", ".tar", ".7z",
-    ] {
-        if lower.ends_with(ext) && name.len() > ext.len() {
-            return name[..name.len() - ext.len()].to_string();
+    match split_extension(name) {
+        Some((len, _)) if name.is_char_boundary(name.len() - len) => {
+            name[..name.len() - len].to_string()
         }
+        _ => name.to_string(),
     }
-    name.to_string()
 }
 
 /// The format from the file's first bytes, falling back to its name (old
@@ -120,16 +162,21 @@ fn detect(path: &Path, name: &str) -> io::Result<Option<Format>> {
     let mut head = Vec::with_capacity(512);
     File::open(path)?.take(512).read_to_end(&mut head)?;
     let by_name = format_from_name(name);
+    // A compressed file holds a tar when its name says so; a single file
+    // that turns out to be a tar is found after unpacking.
+    let tar = by_name.is_some_and(|f| f.with_tar(true) == f);
     let found = if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
         Some(Format::Zip)
     } else if head.starts_with(b"7z\xBC\xAF\x27\x1C") {
         Some(Format::SevenZ)
     } else if head.starts_with(&[0x1f, 0x8b]) {
-        Some(Format::TarGz)
+        Some(Format::TarGz.with_tar(tar))
     } else if head.starts_with(b"BZh") {
-        Some(Format::TarBz2)
+        Some(Format::TarBz2.with_tar(tar))
     } else if head.starts_with(&[0xFD, b'7', b'z', b'X', b'Z', 0]) {
-        Some(Format::TarXz)
+        Some(Format::TarXz.with_tar(tar))
+    } else if head.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]) {
+        Some(Format::TarZst.with_tar(tar))
     } else if head.len() >= 262 && &head[257..262] == b"ustar" {
         Some(Format::Tar)
     } else {
@@ -497,6 +544,85 @@ fn index_7z(path: &Path, name: &str) -> Result<(Index, sevenz_rust2::Archive)> {
     Ok((index, archive))
 }
 
+/// Whether the file at `path` starts with a tar header (`ustar` magic).
+fn looks_like_tar(path: &Path) -> bool {
+    let mut head = [0u8; 262];
+    File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok()
+        && &head[257..262] == b"ustar"
+}
+
+/// The index of a single compressed file: one entry, named like the
+/// archive without its extension, whose bytes are the whole of `unpacked`.
+fn index_single(unpacked: &Path, name: &str, modified_ms: Option<i64>) -> Index {
+    let size = std::fs::metadata(unpacked).map(|m| m.len()).unwrap_or(0);
+    let mut inner = archive_stem(name);
+    if inner.is_empty() || inner == name {
+        inner = "data".into();
+    }
+    let parts = clean_parts(&inner, false);
+    let mut index = Index::new();
+    index.insert(
+        &parts,
+        Node {
+            kind: EntryKind::File,
+            symlink: false,
+            size,
+            modified_ms,
+            mode: None,
+            data: if size > 0 {
+                Data::Tar { offset: 0 }
+            } else {
+                Data::None
+            },
+        },
+    );
+    index
+}
+
+/// Zstandard decoding of every frame in a stream (`zstd` writes one per
+/// file; concatenated files hold several).
+struct ZstdFrames<R: Read> {
+    decoder: Option<
+        ruzstd::decoding::StreamingDecoder<io::BufReader<R>, ruzstd::decoding::FrameDecoder>,
+    >,
+    source: Option<io::BufReader<R>>,
+}
+
+impl<R: Read> ZstdFrames<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            decoder: None,
+            source: Some(io::BufReader::new(inner)),
+        }
+    }
+}
+
+impl<R: Read> Read for ZstdFrames<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        use io::BufRead;
+        loop {
+            if let Some(d) = self.decoder.as_mut() {
+                let n = d.read(buf)?;
+                if n > 0 || buf.is_empty() {
+                    return Ok(n);
+                }
+                self.source = self.decoder.take().map(|d| d.into_inner());
+            }
+            let Some(mut src) = self.source.take() else {
+                return Ok(0);
+            };
+            if src.fill_buf()?.is_empty() {
+                return Ok(0);
+            }
+            let d = ruzstd::decoding::StreamingDecoder::new(src)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            self.decoder = Some(d);
+        }
+    }
+}
+
 /// Unpack the compressed tar `src` into the plain tar `dst`, reporting
 /// (compressed bytes read, compressed total).
 fn unpack_tar(
@@ -516,10 +642,11 @@ fn unpack_tar(
         count: read.clone(),
     };
     let mut decoder: Box<dyn Read> = match format {
-        Format::TarGz => Box::new(flate2::read::MultiGzDecoder::new(counted)),
-        Format::TarBz2 => Box::new(bzip2::read::MultiBzDecoder::new(counted)),
-        Format::TarXz => Box::new(lzma_rust2::XzReader::new(counted, true)),
-        _ => return Err(Error::Invalid(format!("{name} is not a compressed tar"))),
+        Format::TarGz | Format::Gz => Box::new(flate2::read::MultiGzDecoder::new(counted)),
+        Format::TarBz2 | Format::Bz2 => Box::new(bzip2::read::MultiBzDecoder::new(counted)),
+        Format::TarXz | Format::Xz => Box::new(lzma_rust2::XzReader::new(counted, true)),
+        Format::TarZst | Format::Zst => Box::new(ZstdFrames::new(counted)),
+        _ => return Err(Error::Invalid(format!("{name} is not compressed"))),
     };
     let dir = dst.parent().unwrap_or(dst).to_string_lossy().into_owned();
     let limit = crate::places::available_space(&dir)
@@ -780,8 +907,13 @@ impl ArchiveFs {
                 let index = index_tar(&file, &name)?;
                 (file, Backing::Tar, index)
             }
-            Format::TarGz | Format::TarBz2 | Format::TarXz => {
+            f if f.is_compressed() => {
                 let tar = scratch.0.join("unpacked.tar");
+                let modified_ms = std::fs::metadata(&file)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64);
                 let report = |done, total| {
                     progress(OpenProgress {
                         phase: "unpack",
@@ -794,13 +926,19 @@ impl ArchiveFs {
                 if file.starts_with(&scratch.0) {
                     let _ = std::fs::remove_file(&file);
                 }
-                let index = index_tar(&tar, &name)?;
+                let is_tar = f.with_tar(true) == f || looks_like_tar(&tar);
+                let index = if is_tar {
+                    index_tar(&tar, &name)?
+                } else {
+                    index_single(&tar, &name, modified_ms)
+                };
                 (tar, Backing::Tar, index)
             }
             Format::SevenZ => {
                 let (index, archive) = index_7z(&file, &name)?;
                 (file, Backing::SevenZ(Box::new(archive)), index)
             }
+            _ => unreachable!("every format is handled above"),
         };
         Ok(Self {
             id,
@@ -1362,15 +1500,26 @@ mod tests {
             "a.tbz2",
             "a.tar.xz",
             "a.txz",
+            "a.tar.zst",
+            "a.tzst",
             "a.7z",
+            "a.gz",
+            "a.log.bz2",
+            "a.xz",
+            "a.ZST",
         ] {
             assert!(is_archive_name(n), "{n}");
         }
-        for n in ["a.gz", "zip", ".zip", "a.rar", "a.txt"] {
+        assert_eq!(format_from_name("a.tar.zst"), Some(Format::TarZst));
+        assert_eq!(format_from_name("a.txt.gz"), Some(Format::Gz));
+        assert_eq!(format_from_name("a.tar.gz"), Some(Format::TarGz));
+        for n in ["zip", ".zip", ".gz", "a.txt", "a.gzip"] {
             assert!(!is_archive_name(n), "{n}");
         }
         assert_eq!(archive_stem("photos.tar.gz"), "photos");
         assert_eq!(archive_stem("x.ZIP"), "x");
         assert_eq!(archive_stem("plain"), "plain");
+        assert_eq!(archive_stem("notes.txt.gz"), "notes.txt");
+        assert_eq!(archive_stem("site.tar.zst"), "site");
     }
 }

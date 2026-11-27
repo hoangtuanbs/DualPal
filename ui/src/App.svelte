@@ -36,7 +36,7 @@
   import { fsNames } from "./lib/fs-names.svelte";
   import { patternMatcher } from "./lib/fileTypes";
   import { PaneGroup, PaneState } from "./lib/pane-state.svelte";
-  import { cancelOpening, closeArchive, isArchiveFs, isArchiveName, openArchive, opening, setShownLocations } from "./lib/archives.svelte";
+  import { cancelOpening, closeArchive, isArchiveFs, isArchiveName, isSingleCompressed, openArchive, opening, setShownLocations } from "./lib/archives.svelte";
   import CompareView from "./lib/CompareView.svelte";
   import MultiRename from "./lib/MultiRename.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
@@ -1003,7 +1003,14 @@
       return;
     }
     try {
-      await enqueue({ type: "copy", sources: [{ fs: fsId, path: "/" }], destination: dest, conflict: "fail" });
+      // A single compressed file (notes.txt.gz) extracts as just that file,
+      // not as a folder holding it.
+      let sources = [{ fs: fsId, path: "/" }];
+      if (isSingleCompressed(entry.name)) {
+        const inside = await api.listDir({ fs: fsId, path: "/" });
+        if (inside.length === 1 && inside[0].kind === "file") sources = [{ fs: fsId, path: inside[0].path }];
+      }
+      await enqueue({ type: "copy", sources, destination: dest, conflict: "fail" });
     } finally {
       // The backend keeps it open until the copy ends.
       if (!allPanes().some((p) => p.location?.fs === fsId)) closeArchive(fsId);

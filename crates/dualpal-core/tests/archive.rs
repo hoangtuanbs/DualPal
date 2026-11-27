@@ -106,14 +106,40 @@ fn make(dir: &Path, name: &str, files: &[(&str, &[u8])], dirs: &[&str]) -> PathB
         e.write_all(&tar()).unwrap();
         std::fs::write(&path, e.finish().unwrap()).unwrap();
     } else if name.ends_with(".tar.xz") {
-        let mut e =
-            lzma_rust2::XzWriter::new(Vec::new(), lzma_rust2::XzOptions::with_preset(6)).unwrap();
-        e.write_all(&tar()).unwrap();
-        std::fs::write(&path, e.finish().unwrap()).unwrap();
+        std::fs::write(&path, compress("xz", &tar())).unwrap();
+    } else if name.ends_with(".tar.zst") || name.ends_with(".tzst") {
+        std::fs::write(&path, compress("zst", &tar())).unwrap();
     } else {
         panic!("unknown format {name}");
     }
     path
+}
+
+/// `data` compressed as gz, bz2, xz or zst.
+fn compress(how: &str, data: &[u8]) -> Vec<u8> {
+    match how {
+        "gz" => {
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        "bz2" => {
+            let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        "xz" => {
+            let mut e =
+                lzma_rust2::XzWriter::new(Vec::new(), lzma_rust2::XzOptions::with_preset(6))
+                    .unwrap();
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        "zst" => {
+            ruzstd::encoding::compress_to_vec(data, ruzstd::encoding::CompressionLevel::Fastest)
+        }
+        _ => panic!("unknown compression {how}"),
+    }
 }
 
 const FORMATS: &[&str] = &[
@@ -123,6 +149,8 @@ const FORMATS: &[&str] = &[
     "t.tar.gz",
     "t.tar.bz2",
     "t.tar.xz",
+    "t.tar.zst",
+    "t.tzst",
     "t.7z",
 ];
 
@@ -700,4 +728,69 @@ async fn folder_size_and_find_work_inside() {
     .unwrap();
     assert_eq!(found.hits.len(), 1);
     assert_eq!(found.hits[0].path, "/docs/deep/b.txt");
+}
+
+/// VFS-ARC-012: a single compressed file (.gz, .bz2, .xz, .zst) opens as a
+/// folder holding that file; one that holds a tar shows the tar's tree.
+#[tokio::test]
+async fn single_compressed_files_open_as_one_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry = Registry::with_local();
+    let text: Vec<u8> = b"line of a log file\n".repeat(5000);
+    for how in ["gz", "bz2", "xz", "zst"] {
+        let path = tmp.path().join(format!("server.log.{how}"));
+        std::fs::write(&path, compress(how, &text)).unwrap();
+        let fs = open_local(&registry, &path, &tmp.path().join("scratch"))
+            .await
+            .unwrap_or_else(|e| panic!("{how}: {e}"));
+        let list = fs.list("/").await.unwrap();
+        assert_eq!(names(&list), ["server.log"], "{how}");
+        assert_eq!(list[0].kind, EntryKind::File, "{how}");
+        assert_eq!(list[0].size, text.len() as u64, "{how}");
+        assert!(list[0].modified_ms.is_some(), "{how}");
+        assert_eq!(
+            read_all(fs.as_ref(), "/server.log").await.unwrap(),
+            text,
+            "{how}"
+        );
+        assert_eq!(fs.file_name("/").as_deref(), Some("server.log"), "{how}");
+
+        // A tar compressed under a plain name is still shown as a tar.
+        let path = tmp.path().join(format!("backup.{how}"));
+        std::fs::write(&path, compress(how, &tar_bytes(FILES, &["docs/"]))).unwrap();
+        let fs = open_local(&registry, &path, &tmp.path().join("scratch"))
+            .await
+            .unwrap_or_else(|e| panic!("backup.{how}: {e}"));
+        assert_eq!(
+            names(&fs.list("/").await.unwrap()),
+            ["docs", "top.txt"],
+            "{how}"
+        );
+        assert_eq!(
+            read_all(fs.as_ref(), "/docs/a.txt").await.unwrap(),
+            b"alpha"
+        );
+    }
+
+    // Concatenated zstd frames (as `cat a.zst b.zst` makes) read as one.
+    let mut two = compress("zst", b"first ");
+    two.extend(compress("zst", b"second"));
+    let path = tmp.path().join("joined.txt.zst");
+    std::fs::write(&path, two).unwrap();
+    let fs = open_local(&registry, &path, &tmp.path().join("scratch"))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_all(fs.as_ref(), "/joined.txt").await.unwrap(),
+        b"first second"
+    );
+
+    // An empty file compressed is an empty file.
+    let path = tmp.path().join("empty.txt.gz");
+    std::fs::write(&path, compress("gz", b"")).unwrap();
+    let fs = open_local(&registry, &path, &tmp.path().join("scratch"))
+        .await
+        .unwrap();
+    assert_eq!(fs.stat("/empty.txt").await.unwrap().size, 0);
+    assert_eq!(read_all(fs.as_ref(), "/empty.txt").await.unwrap(), b"");
 }

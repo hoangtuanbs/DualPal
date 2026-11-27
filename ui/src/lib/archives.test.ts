@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { PaneState } from "./pane-state.svelte";
-import { archiveCrumbs, archiveStem, isArchiveName, openArchives, releaseArchives, setShownLocations } from "./archives.svelte";
+import { archiveCrumbs, archiveStem, isArchiveName, isSingleCompressed, openArchives, releaseArchives, setShownLocations } from "./archives.svelte";
 import { defaultScenario, installMockBackend, tree, type MockHandle } from "../../tests/mock-backend";
 import type { Location } from "./api";
 
@@ -38,12 +38,18 @@ const entry = (p: PaneState, name: string) => p.visible.find((e) => e.name === n
 
 describe("UI-UNIT-019 archive names", () => {
   it("knows which files open as folders", () => {
-    for (const n of ["a.zip", "B.ZIP", "a.tar", "a.tar.gz", "a.tgz", "a.tar.bz2", "a.tbz2", "a.tar.xz", "a.txz", "a.7z"]) {
-      expect(isArchiveName(n), n).toBe(true);
-    }
-    for (const n of ["a.gz", ".zip", "zip", "a.rar", "a.txt"]) expect(isArchiveName(n), n).toBe(false);
+    const yes = ["a.zip", "B.ZIP", "a.tar", "a.tar.gz", "a.tgz", "a.tar.bz2", "a.tbz2", "a.tar.xz", "a.txz", "a.7z"];
+    yes.push("a.tar.zst", "a.tzst", "a.rar", "A.RAR", "a.gz", "log.txt.bz2", "a.xz", "a.zst");
+    for (const n of yes) expect(isArchiveName(n), n).toBe(true);
+    for (const n of [".zip", "zip", ".gz", "a.txt", "a.gzip"]) expect(isArchiveName(n), n).toBe(false);
     expect(archiveStem("photos.tar.gz")).toBe("photos");
     expect(archiveStem("x.7z")).toBe("x");
+    expect(archiveStem("site.tar.zst")).toBe("site");
+    expect(archiveStem("notes.txt.gz")).toBe("notes.txt");
+    expect(isSingleCompressed("notes.txt.gz")).toBe(true);
+    expect(isSingleCompressed("a.ZST")).toBe(true);
+    expect(isSingleCompressed("site.tar.gz")).toBe(false);
+    expect(isSingleCompressed("a.zip")).toBe(false);
   });
 });
 

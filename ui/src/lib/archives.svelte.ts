@@ -1,4 +1,5 @@
-// Archives (zip, tar, tar.gz, tar.bz2, tar.xz, 7z) opened as folders.
+// Archives (zip, tar, tar.gz, tar.bz2, tar.xz, tar.zst, 7z, rar) and single
+// compressed files (.gz, .bz2, .xz, .zst) opened as folders.
 //
 // The backend registers each open archive as a read-only file system with
 // an id like "archive:…". This module remembers where each one came from,
@@ -12,7 +13,10 @@ import { fsNames } from "./fs-names.svelte";
 /** Open archives, by file system id. */
 export const openArchives = new SvelteMap<string, OpenedArchive>();
 
-const ARCHIVE = /.+\.(zip|tar|tgz|tar\.gz|tbz|tbz2|tar\.bz2|txz|tar\.xz|7z)$/i;
+const EXT = String.raw`tar\.gz|tar\.bz2|tar\.xz|tar\.zst|tgz|tbz2|tbz|txz|tzst|zip|tar|7z|rar|gz|bz2|xz|zst`;
+const ARCHIVE = new RegExp(String.raw`^(.+?)\.(${EXT})$`, "i");
+/** Single compressed files: `notes.txt.gz` holds just `notes.txt`. */
+const SINGLE = /^(.+?)\.(gz|bz2|xz|zst)$/i;
 
 /** Whether a file with this name opens as a folder. */
 export function isArchiveName(name: string): boolean {
@@ -21,8 +25,14 @@ export function isArchiveName(name: string): boolean {
 
 /** The name without its archive extension: the folder "Extract Here" creates. */
 export function archiveStem(name: string): string {
-  const m = /^(.+?)\.(tar\.gz|tar\.bz2|tar\.xz|tgz|tbz2|tbz|txz|zip|tar|7z)$/i.exec(name);
+  const m = ARCHIVE.exec(name);
   return m ? m[1] : name;
+}
+
+/** Whether `name` is one compressed file rather than an archive of many
+ *  (`notes.txt.gz`, but not `site.tar.gz`). */
+export function isSingleCompressed(name: string): boolean {
+  return SINGLE.test(name) && !/\.tar\.[^.]+$/i.test(name);
 }
 
 /** Whether `fs` is the inside of an archive. */

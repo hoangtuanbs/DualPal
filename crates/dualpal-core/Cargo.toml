@@ -43,6 +43,7 @@ flate2.workspace = true
 bzip2.workspace = true
 lzma-rust2.workspace = true
 sevenz-rust2.workspace = true
+ruzstd.workspace = true
 
 [dev-dependencies]
 # Writers for the archive tests.
