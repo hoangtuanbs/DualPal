@@ -110,6 +110,8 @@
   let favorites = $state<Favorite[]>([]);
   let connections = $state<ConnectionView[]>([]);
   let editSessions = $state<EditSession[]>([]);
+  /** Sessions whose last save was skipped after a conflict: back to watching, but still unsent. */
+  const skippedSaves = new Set<string>();
   /** The connection being added (null) or edited; undefined when closed. */
   let editing = $state<Connection | null | undefined>(undefined);
   /** The "Import servers" dialog, opened from the server form. */
@@ -326,6 +328,7 @@
 
   function onEditSessionUpdated(s: EditSession) {
     const i = editSessions.findIndex((x) => x.id === s.id);
+    if (s.status === "stopped" || s.status === "uploaded") skippedSaves.delete(s.id);
     if (s.status === "stopped") {
       if (i >= 0) editSessions.splice(i, 1);
       return;
@@ -890,7 +893,7 @@
 
   function stopEditing(id: string) {
     const s = editSessions.find((x) => x.id === id);
-    if (s?.status !== "failed") {
+    if (!s || (s.status !== "failed" && s.status !== "conflict" && !skippedSaves.has(id))) {
       api.stopEditSession(id);
       return;
     }
@@ -901,6 +904,11 @@
       danger: true,
       onconfirm: () => api.stopEditSession(id),
     };
+  }
+
+  function resolveEditConflict(id: string, overwrite: boolean) {
+    if (!overwrite) skippedSaves.add(id);
+    api.resolveEditConflict(id, overwrite).catch((e) => (notice = errorMessage(e)));
   }
 
   /** Open the system terminal in the active pane's folder. */
@@ -1554,7 +1562,14 @@
       current={active.location}
       onopen={(loc) => active.open(loc)}
       onremovefavorite={async (loc) => (favorites = await api.removeFavorite(loc))}
-      onreorder={async (from, to) => (favorites = await api.reorderFavorites(from, to))}
+      onreorder={async (from, to) => {
+        try {
+          favorites = await api.reorderFavorites(from, to);
+        } catch {
+          // The list changed underneath (e.g. in another window): show it as it is.
+          favorites = await api.favorites();
+        }
+      }}
       {connections}
       {connecting}
       onconnect={(c, path) => connectTo(c, path)}
@@ -1627,6 +1642,7 @@
     sessions={editSessions}
     onstop={stopEditing}
     onupload={(id) => api.uploadEditSession(id).catch((e) => (notice = errorMessage(e)))}
+    onresolve={(id, overwrite) => resolveEditConflict(id, overwrite)}
   />
     <div class="ops">
       <OperationsPanel

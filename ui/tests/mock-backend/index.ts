@@ -444,6 +444,7 @@ const handlers: Record<string, Handler> = {
   open_file: () => null,
   stop_edit_session: () => false,
   upload_edit_session: () => null,
+  resolve_edit_conflict: () => null,
   preview_path: (a) => a.location.path,
   save_rename_preset: () => [],
   remove_rename_preset: () => [],

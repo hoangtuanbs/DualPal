@@ -147,13 +147,13 @@ async fn upload_now_forces_an_upload() {
 }
 
 /// EDIT-007 — if the file changed on the server since it was opened, a save
-/// must not silently replace the server's version.
+/// must not silently replace the server's version: it is held as a conflict.
 #[tokio::test]
-#[ignore = "BUG: a save uploads over the server copy without checking whether it changed since the file was opened"]
 async fn server_change_is_not_silently_overwritten() {
     let mem = MemFs::new("mem");
     mem.seed_file("/shared.txt", "original");
     let (editor, _tmp) = setup(&mem);
+    let mut events = editor.subscribe();
     let s = editor
         .start(Location::new("mem", "/shared.txt"))
         .await
@@ -165,8 +165,12 @@ async fn server_change_is_not_silently_overwritten() {
 
     let e = editor.clone();
     eventually("the save is handled", WAIT, move || {
-        session(&e, s.id)
-            .is_some_and(|s| matches!(s.status, EditStatus::Uploaded | EditStatus::Failed))
+        session(&e, s.id).is_some_and(|s| {
+            matches!(
+                s.status,
+                EditStatus::Uploaded | EditStatus::Failed | EditStatus::Conflict
+            )
+        })
     })
     .await;
     let after = session(&editor, s.id).unwrap();
@@ -175,5 +179,197 @@ async fn server_change_is_not_silently_overwritten() {
         b"changed by someone else",
         "the other change was overwritten; session: {after:?}"
     );
-    assert_eq!(after.status, EditStatus::Failed, "the conflict is reported");
+    assert_eq!(
+        after.status,
+        EditStatus::Conflict,
+        "the conflict is reported"
+    );
+    assert!(after.error.is_some());
+    assert_eq!(after.uploads, 0);
+    // The conflict reaches subscribers (the UI) as an event.
+    tokio::time::timeout(WAIT, async {
+        while events.recv().await.unwrap().status != EditStatus::Conflict {}
+    })
+    .await
+    .expect("a Conflict event is broadcast");
+    // The local edit is untouched, and a forced upload_now is still checked.
+    assert_eq!(std::fs::read_to_string(&s.local_path).unwrap(), "my edit");
+    let again = editor.upload_now(s.id).await.unwrap();
+    assert_eq!(again.status, EditStatus::Conflict);
+    assert_eq!(
+        mem.contents("/shared.txt").unwrap(),
+        b"changed by someone else"
+    );
+    editor.stop(s.id);
+}
+
+/// A session whose last save is held as a conflict.
+async fn conflicted(mem: &MemFs, editor: &RemoteEditor) -> EditSession {
+    mem.seed_file("/shared.txt", "original");
+    let s = editor
+        .start(Location::new("mem", "/shared.txt"))
+        .await
+        .unwrap();
+    mem.seed_file("/shared.txt", "theirs, longer");
+    std::fs::write(&s.local_path, "mine").unwrap();
+    let e = editor.clone();
+    eventually("the conflict is found", WAIT, move || {
+        session(&e, s.id).is_some_and(|s| s.status == EditStatus::Conflict)
+    })
+    .await;
+    s
+}
+
+/// EDIT-007 — "Overwrite server copy" uploads the local copy, and later
+/// saves upload normally again.
+#[tokio::test]
+async fn conflict_resolved_by_overwriting() {
+    let mem = MemFs::new("mem");
+    let (editor, _tmp) = setup(&mem);
+    let s = conflicted(&mem, &editor).await;
+
+    let done = editor.resolve_conflict(s.id, true).await.unwrap();
+    assert_eq!(done.status, EditStatus::Uploaded);
+    assert!(done.error.is_none());
+    assert_eq!(mem.contents("/shared.txt").unwrap(), b"mine");
+
+    // Our own upload is the new baseline: the next save is not a conflict.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    std::fs::write(&s.local_path, "mine, again").unwrap();
+    let m = mem.clone();
+    eventually("the next save is uploaded", WAIT, move || {
+        m.contents("/shared.txt").as_deref() == Some(b"mine, again".as_slice())
+    })
+    .await;
+    editor.stop(s.id);
+}
+
+/// EDIT-007 — "Skip this save" leaves both copies as they are; the next save
+/// is checked again.
+#[tokio::test]
+async fn conflict_resolved_by_skipping() {
+    let mem = MemFs::new("mem");
+    let (editor, _tmp) = setup(&mem);
+    let s = conflicted(&mem, &editor).await;
+
+    let skipped = editor.resolve_conflict(s.id, false).await.unwrap();
+    assert_eq!(skipped.status, EditStatus::Watching);
+    assert!(skipped.error.is_none());
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(mem.contents("/shared.txt").unwrap(), b"theirs, longer");
+    assert_eq!(std::fs::read_to_string(&s.local_path).unwrap(), "mine");
+    assert_eq!(
+        session(&editor, s.id).unwrap().status,
+        EditStatus::Watching,
+        "the skipped save is not sent by itself"
+    );
+
+    // Another save still finds the server changed.
+    std::fs::write(&s.local_path, "mine, edited more").unwrap();
+    let e = editor.clone();
+    eventually("the next save is checked", WAIT, move || {
+        session(&e, s.id).is_some_and(|s| s.status == EditStatus::Conflict)
+    })
+    .await;
+    assert_eq!(mem.contents("/shared.txt").unwrap(), b"theirs, longer");
+    editor.stop(s.id);
+}
+
+fn faulty_setup(mem: &MemFs) -> (Arc<FaultyFs<MemFs>>, RemoteEditor, tempfile::TempDir) {
+    let faulty = Arc::new(FaultyFs::with_id(mem.clone(), "mem"));
+    let registry = Arc::new(Registry::with_local());
+    registry.register(faulty.clone());
+    let tmp = tempfile::tempdir().unwrap();
+    let editor = RemoteEditor::new(registry, tmp.path());
+    (faulty, editor, tmp)
+}
+
+/// EDIT-007 — an upload whose result cannot be read back is not taken as
+/// a baseline that turns checking off: the next save is checked and held.
+#[tokio::test]
+async fn unverified_upload_keeps_later_saves_checked() {
+    let mem = MemFs::new("inner");
+    mem.seed_file("/f.txt", "old");
+    let (faulty, editor, _tmp) = faulty_setup(&mem);
+    let s = editor.start(Location::new("mem", "/f.txt")).await.unwrap();
+
+    // The check before the upload passes; the stat after it fails.
+    faulty.fail_later(FaultOp::Stat, 1, Error::Connection("dropped".into()));
+    std::fs::write(&s.local_path, "mine").unwrap();
+    let e = editor.clone();
+    eventually("the save is uploaded", WAIT, move || {
+        session(&e, s.id).is_some_and(|s| s.uploads == 1)
+    })
+    .await;
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"mine");
+
+    mem.seed_file("/f.txt", "theirs, meanwhile");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    std::fs::write(&s.local_path, "mine, edited more").unwrap();
+    let e = editor.clone();
+    eventually("the next save is handled", WAIT, move || {
+        session(&e, s.id).is_some_and(|s| matches!(s.status, EditStatus::Conflict) || s.uploads > 1)
+    })
+    .await;
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"theirs, meanwhile");
+    assert_eq!(session(&editor, s.id).unwrap().status, EditStatus::Conflict);
+    editor.stop(s.id);
+}
+
+/// EDIT-007 — an upload that fails part way leaves the server file as it
+/// was (the bytes go to a temporary name first), and is retried without
+/// being mistaken for someone else's change.
+#[tokio::test]
+async fn retry_after_a_partial_upload_is_not_a_conflict() {
+    let mem = MemFs::new("inner");
+    mem.seed_file("/f.txt", "old content");
+    let (faulty, editor, _tmp) = faulty_setup(&mem);
+    let s = editor.start(Location::new("mem", "/f.txt")).await.unwrap();
+
+    faulty.fail_write_after(3);
+    // A new length, so the save is seen even within one clock tick.
+    std::fs::write(&s.local_path, "new, longer content").unwrap();
+    let e = editor.clone();
+    eventually("the upload fails", WAIT, move || {
+        session(&e, s.id).is_some_and(|s| s.status == EditStatus::Failed)
+    })
+    .await;
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"old content");
+    assert_eq!(
+        mem.paths()
+            .iter()
+            .filter(|p| p.contains("dualpal-part"))
+            .count(),
+        0
+    );
+
+    let done = editor.upload_now(s.id).await.unwrap();
+    assert_eq!(done.status, EditStatus::Uploaded, "{:?}", done.error);
+    assert_eq!(mem.contents("/f.txt").unwrap(), b"new, longer content");
+    editor.stop(s.id);
+}
+
+/// EDIT-007 — an upload gives the server file the local copy's
+/// modification time, so a compare by date sees the two as equal.
+#[tokio::test]
+async fn upload_keeps_the_local_modification_time() {
+    let mem = MemFs::new("inner");
+    mem.seed_file("/f.txt", "old content");
+    let (_faulty, editor, _tmp) = faulty_setup(&mem);
+    let s = editor.start(Location::new("mem", "/f.txt")).await.unwrap();
+    std::fs::write(&s.local_path, "new content").unwrap();
+    let when = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&s.local_path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+    let done = editor.upload_now(s.id).await.unwrap();
+    assert_eq!(done.status, EditStatus::Uploaded, "{:?}", done.error);
+    let server = dualpal_core::vfs::FileSystem::stat(&mem, "/f.txt")
+        .await
+        .unwrap();
+    assert_eq!(server.modified_ms, Some(1_600_000_000_000));
+    editor.stop(s.id);
 }

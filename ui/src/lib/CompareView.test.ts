@@ -94,6 +94,20 @@ describe("UI-CMP-007 CompareView", () => {
     expect(rowOf("same.txt")).toHaveClass("same");
   });
 
+  it("compares by size and date or by content, and opens a favorite saved with Size as Size and date", async () => {
+    const be = backend();
+    const left = { fs: "local", path: "/a" };
+    const right = { fs: "local", path: "/b" };
+    const favorite = { id: "fav-1", name: "Docs", left, right, mode: "update" as const, options: { by: "size" as const, toleranceMs: 2000, exclude: [], includeHidden: false } };
+    render(CompareView, {
+      props: { left, right, favorite, nameOf: (fs: string) => fs, onclose: vi.fn(), onsavefavorite: vi.fn(), oncomparefiles: vi.fn(async () => {}) },
+    });
+    const select = screen.getByRole("combobox", { name: "Compare by" });
+    expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Size and date", "Content"]);
+    expect(select).toHaveValue("sizeAndDate");
+    await waitFor(() => expect(be.calls("sync_plan")[0]?.options?.by).toBe("sizeAndDate"));
+  });
+
   it("changes a row's action and sends it as an override", async () => {
     const user = userEvent.setup();
     const be = backend();

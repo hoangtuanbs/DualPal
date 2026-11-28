@@ -490,6 +490,8 @@ export function installBrowserMock(scenario: BrowserScenario) {
       return !!s;
     },
     upload_edit_session: (a) => updateSession(a.id, { status: "uploaded", error: null }),
+    resolve_edit_conflict: (a) =>
+      updateSession(a.id, a.overwrite ? { status: "uploaded", error: null } : { status: "watching", error: null }),
 
     // Syncs.
     sync_favorites: () => syncFavorites,

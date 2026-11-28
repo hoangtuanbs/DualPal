@@ -64,7 +64,6 @@ fn leftovers(dir: &Path) -> Vec<String> {
 /// OPS-COPY-004 — a copied file keeps its permission bits (`script.sh` 0755).
 #[cfg(unix)]
 #[tokio::test]
-#[ignore = "BUG: a copy to a new file does not carry the source's permission bits over; only a replaced file keeps the old target's mode"]
 async fn copy_keeps_mode_bits() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
@@ -452,7 +451,6 @@ async fn partial_delete_failure_names_the_path() {
 
 /// OPS-DEL-003 — the other targets are deleted even when one of them fails.
 #[tokio::test]
-#[ignore = "BUG: a delete stops at the first item it cannot remove, so the targets after it in the queue's order are left in place"]
 async fn partial_delete_failure_still_deletes_the_other_targets() {
     let tmp = tempfile::tempdir().unwrap();
     let (targets, blocker) = partial_delete_tree(tmp.path());
@@ -472,6 +470,50 @@ async fn partial_delete_failure_still_deletes_the_other_targets() {
     assert_eq!(info.status, OperationStatus::Failed);
     assert!(!targets[0].exists(), "first target deleted");
     assert!(!targets[2].exists(), "last target deleted");
+}
+
+/// OPS-DEL-003 — on any backend, a delete carries on past items it cannot
+/// remove, keeps the folders that still hold them, and reports every failure.
+#[tokio::test]
+async fn delete_reports_every_failure_and_removes_the_rest() {
+    use dualpal_core::vfs::FileSystem as _;
+    use dualpal_core::Error;
+    use dualpal_testkit::FaultOp;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(&root.join("a.txt"), "a");
+    write(&root.join("dir/x.txt"), "x");
+    write(&root.join("dir/y.txt"), "y");
+    write(&root.join("c.txt"), "c");
+    let faulty = Arc::new(FaultyFs::with_id(LocalFs::new(), "faulty"));
+    // Files go last target first: c.txt, then inside dir.
+    faulty.fail_next(FaultOp::RemoveFile, Error::PermissionDenied("c.txt".into()));
+    faulty.fail_next(
+        FaultOp::RemoveFile,
+        Error::PermissionDenied("dir/y.txt".into()),
+    );
+    let registry = Registry::with_local();
+    registry.register(faulty.clone());
+    let at = |p: &str| Location::new("faulty", faulty.join(&root.to_string_lossy(), p));
+
+    let info = run(
+        &queue_over(registry, 1),
+        Operation::Delete {
+            targets: vec![at("a.txt"), at("dir"), at("c.txt")],
+        },
+    )
+    .await;
+
+    assert_eq!(info.status, OperationStatus::Failed);
+    let err = info.error.unwrap();
+    assert_eq!(err.kind, "permissionDenied", "{err:?}");
+    assert!(err.message.starts_with("2 items failed"), "{err:?}");
+    assert!(!root.join("a.txt").exists(), "first target deleted");
+    assert!(root.join("c.txt").exists());
+    // One of the folder's files went, the other stayed, so the folder stays.
+    let left: Vec<_> = std::fs::read_dir(root.join("dir")).unwrap().collect();
+    assert_eq!(left.len(), 1);
 }
 
 // ---- OPS-MOVE-004 -----------------------------------------------------------
@@ -715,4 +757,100 @@ async fn compress_onto_an_existing_file_is_refused() {
         std::fs::read_to_string(&existing).unwrap(),
         "not a zip, but mine"
     );
+}
+
+/// OPS-ZIP-004 — a new archive is written under a temporary name and only
+/// takes its name once complete; a failed one leaves nothing behind.
+#[tokio::test]
+async fn compress_writes_under_a_temporary_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("a.txt");
+    write(&src, "some text to pack");
+    let out = tmp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let remote = Arc::new(FaultyFs::with_id(LocalFs::new(), "remote"));
+    let registry = Registry::with_local();
+    registry.register(remote.clone());
+    let q = queue_over(registry, 2);
+    let zip = out.join("packed.zip");
+    let job = || Operation::Compress {
+        sources: vec![loc(&src)],
+        destination: Location::new("remote", zip.to_string_lossy()),
+    };
+    let names = |dir: &Path| -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    };
+
+    // While it is being written, only the temporary name is there.
+    remote.slow_writes(Duration::from_millis(400));
+    let id = q.enqueue(job());
+    let o = out.clone();
+    eventually(
+        "the archive is being written",
+        Duration::from_secs(10),
+        move || names(&o).iter().any(|n| n.ends_with(".dualpal-part")),
+    )
+    .await;
+    assert!(!zip.exists());
+    let info = tokio::time::timeout(Duration::from_secs(60), q.wait(id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(info.status, OperationStatus::Completed, "{:?}", info.error);
+    assert!(zip.exists());
+    assert_eq!(names(&out), vec!["packed.zip".to_string()]);
+
+    // A write that fails leaves neither the archive nor its temporary file.
+    std::fs::remove_file(&zip).unwrap();
+    remote.slow_writes(Duration::ZERO);
+    remote.fail_write_after(10);
+    let info = run(&q, job()).await;
+    assert_eq!(info.status, OperationStatus::Failed);
+    assert_eq!(names(&out), Vec::<String>::new());
+}
+
+/// OPS-DEL-003 — a file that cannot be removed deep in a tree keeps every
+/// folder above it, and the folders beside it are still deleted.
+#[tokio::test]
+async fn delete_keeps_every_folder_above_a_kept_file() {
+    use dualpal_core::Error;
+    use dualpal_testkit::FaultOp;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("top");
+    // The only file in the tree, so it is the one removal that fails.
+    write(&root.join("a/b/c/stuck.txt"), "s");
+    std::fs::create_dir_all(root.join("a/b/side/empty")).unwrap();
+    std::fs::create_dir_all(root.join("other")).unwrap();
+    let faulty = Arc::new(FaultyFs::with_id(LocalFs::new(), "faulty"));
+    faulty.fail_next(
+        FaultOp::RemoveFile,
+        Error::PermissionDenied("stuck.txt".into()),
+    );
+    let registry = Registry::with_local();
+    registry.register(faulty.clone());
+
+    let info = run(
+        &queue_over(registry, 1),
+        Operation::Delete {
+            targets: vec![Location::new("faulty", root.to_string_lossy())],
+        },
+    )
+    .await;
+
+    assert_eq!(info.status, OperationStatus::Failed);
+    assert!(root.join("a/b/c/stuck.txt").exists());
+    assert!(!root.join("a/b/side").exists());
+    assert!(!root.join("other").exists());
+    let names = |p: &Path| -> Vec<String> {
+        std::fs::read_dir(p)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    };
+    assert_eq!(names(&root), vec!["a".to_string()]);
+    assert_eq!(names(&root.join("a/b")), vec!["c".to_string()]);
 }

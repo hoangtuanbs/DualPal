@@ -12,6 +12,7 @@ use crate::compare::{self, Side};
 use crate::error::{Error, Result};
 use crate::rename::RenameItem;
 use crate::sync::{SnapPair, SyncAction, SyncDone, SyncStep};
+use crate::vfs::{part_path, rename_over};
 use crate::vfs::{Entry, EntryKind, FileSystem, LocalFs, Location};
 
 const CHUNK: usize = 256 * 1024;
@@ -29,6 +30,8 @@ struct Item {
     dir: bool,
     size: u64,
     modified_ms: Option<i64>,
+    /// Unix permission bits of the source, when its backend reports them.
+    mode: Option<u32>,
 }
 
 struct Job {
@@ -242,6 +245,7 @@ impl Job {
                         dir: true,
                         size: 0,
                         modified_ms: entry.modified_ms,
+                        mode: entry.mode,
                     });
                     for child in children.into_iter().rev() {
                         check_name(dst_fs, &child.name)?;
@@ -256,6 +260,7 @@ impl Job {
                     dir: false,
                     size: entry.size,
                     modified_ms: entry.modified_ms,
+                    mode: entry.mode,
                 }),
                 _ => self.prog().skipped += 1,
             }
@@ -377,7 +382,7 @@ impl Job {
         let part = if dst_fs.atomic_writes() {
             item.dst.clone()
         } else {
-            part_path(dst_fs, &item.dst)
+            part_path(dst_fs.as_ref(), &item.dst)
         };
         let retry = item.src_fs.id() != LocalFs::ID || dst_fs.id() != LocalFs::ID;
         let mut offset = 0; // bytes of this file already in place
@@ -430,13 +435,27 @@ impl Job {
             }
             return Err(e);
         }
+        // A file that replaces another gets the old one's permissions, as
+        // writing into it would have kept them. A new file gets the
+        // source's permission bits where the target keeps modes.
+        let mode = match &existing {
+            Some(e) => e.mode.filter(|_| part != item.dst).map(|m| m & 0o7777),
+            None => item
+                .mode
+                .filter(|_| dst_fs.copies_modes())
+                .map(|m| m & 0o777),
+        };
+        if let Some(mode) = mode {
+            let _ = dst_fs.set_mode(&part, mode).await;
+        }
         if part != item.dst {
-            // The new file replaces the old one, so give it the old one's
-            // permissions, as writing into it would have kept them.
-            if let Some(mode) = existing.and_then(|e| e.mode) {
-                let _ = dst_fs.set_mode(&part, mode & 0o7777).await;
-            }
-            if let Err(e) = dst_fs.rename(&part, &item.dst).await {
+            // Only a file is moved aside; a folder in the way is never
+            // replaced by a rename.
+            let renamed = match existing {
+                Some(e) if !e.is_dir() => rename_over(dst_fs.as_ref(), &part, &item.dst).await,
+                _ => dst_fs.rename(&part, &item.dst).await,
+            };
+            if let Err(e) = renamed {
                 let _ = dst_fs.remove_file(&part).await;
                 return Err(e);
             }
@@ -512,36 +531,79 @@ impl Job {
 
     // ---- delete ------------------------------------------------------------
 
+    /// Delete every target. An item that cannot be removed does not stop
+    /// the others; the folders holding it are left, and every failure is
+    /// reported at the end.
     async fn delete(&mut self, targets: Vec<Location>) -> Result<()> {
-        // (fs, path, is_real_dir) in pre-order; deleted in reverse so that
-        // folder contents go before the folder itself.
-        let mut items: Vec<(Fs, String, bool)> = Vec::new();
+        let mut failed: Vec<Error> = Vec::new();
+        // (fs, path, is_real_dir, index of the folder it was listed from) in
+        // pre-order; deleted in reverse so that folder contents go before
+        // the folder itself.
+        let mut items: Vec<(Fs, String, bool, Option<usize>)> = Vec::new();
+        // Folders that still hold something that could not be removed, so
+        // they stay too. Marked through the parent index, so each check is
+        // one lookup however many removals fail.
+        let mut held: Vec<bool> = Vec::new();
         for t in &targets {
             let fs = self.fs(&t.fs)?;
-            let root = fs.stat(&t.path).await?;
-            let mut stack = vec![root];
-            while let Some(e) = stack.pop() {
-                self.check()?;
-                let real_dir = e.is_dir() && !e.symlink;
-                if real_dir {
-                    stack.extend(fs.list(&e.path).await?);
+            let root = match fs.stat(&t.path).await {
+                Ok(root) => root,
+                Err(e) => {
+                    failed.push(e);
+                    continue;
                 }
-                items.push((fs.clone(), e.path, real_dir));
+            };
+            let mut stack = vec![(root, None)];
+            while let Some((e, parent)) = stack.pop() {
+                self.check()?;
+                let index = items.len();
+                let real_dir = e.is_dir() && !e.symlink;
+                let mut unlisted = false;
+                if real_dir {
+                    match fs.list(&e.path).await {
+                        Ok(children) => {
+                            stack.extend(children.into_iter().map(|c| (c, Some(index))))
+                        }
+                        Err(err) => {
+                            failed.push(err);
+                            unlisted = true;
+                        }
+                    }
+                }
+                items.push((fs.clone(), e.path, real_dir, parent));
+                held.push(unlisted);
             }
         }
         self.prog().files_total = items.len() as u64;
         self.emit(true);
-        for (fs, path, dir) in items.into_iter().rev() {
+        for (index, (fs, path, dir, parent)) in items.into_iter().enumerate().rev() {
             self.check()?;
-            self.set_current(&path);
-            if dir {
-                fs.remove_dir(&path).await?;
+            let keep = if dir && held[index] {
+                true
             } else {
-                fs.remove_file(&path).await?;
+                self.set_current(&path);
+                let removed = if dir {
+                    fs.remove_dir(&path).await
+                } else {
+                    fs.remove_file(&path).await
+                };
+                match removed {
+                    Ok(()) => {
+                        self.prog().files_done += 1;
+                        false
+                    }
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    Err(e) => {
+                        failed.push(e);
+                        true
+                    }
+                }
+            };
+            if let (true, Some(p)) = (keep, parent) {
+                held[p] = true;
             }
-            self.prog().files_done += 1;
         }
-        Ok(())
+        Error::combine(failed).map_or(Ok(()), Err)
     }
 
     // ---- compress -----------------------------------------------------------
@@ -585,7 +647,14 @@ impl Job {
         }
         self.emit(true);
 
-        let writer = dst_fs.open_write(&dest.path).await?;
+        // The archive is written under a temporary name and only takes its
+        // name once complete, so a cut-off write never looks like an archive.
+        let part = if dst_fs.atomic_writes() {
+            dest.path.clone()
+        } else {
+            part_path(dst_fs.as_ref(), &dest.path)
+        };
+        let writer = dst_fs.open_write(&part).await?;
         let result: Result<()> = async {
             let zip_err = |e: async_zip::error::ZipError| Error::Io {
                 path: dest.path.clone(),
@@ -639,11 +708,16 @@ impl Job {
             inner
                 .shutdown()
                 .await
-                .map_err(|err| Error::io(&dest.path, err))
+                .map_err(|err| Error::io(&dest.path, err))?;
+            drop(inner);
+            if part != dest.path {
+                dst_fs.rename(&part, &dest.path).await?;
+            }
+            Ok(())
         }
         .await;
         if result.is_err() {
-            let _ = dst_fs.remove_file(&dest.path).await; // don't leave a broken archive
+            let _ = dst_fs.remove_file(&part).await; // don't leave a broken archive
         }
         result
     }
@@ -724,21 +798,6 @@ async fn resume_offset(dst_fs: &Fs, part: &str, size: u64) -> u64 {
         }
         _ => 0,
     }
-}
-
-/// The hidden name a file is written under until its copy is complete.
-/// It is new each time, so it never belongs to another file.
-fn part_path(fs: &Fs, dst: &str) -> String {
-    let parent = fs.parent(dst).unwrap_or_default();
-    let name = fs.file_name(dst).unwrap_or_default();
-    let tag = &Uuid::new_v4().simple().to_string()[..12];
-    // Keep within the usual 255-byte limit on a name.
-    let part = if name.len() <= 200 {
-        format!(".{name}.{tag}.dualpal-part")
-    } else {
-        format!(".dualpal-{tag}.part")
-    };
-    fs.join(&parent, &part)
 }
 
 async fn make_dir(fs: &Fs, path: &str) -> Result<()> {

@@ -10,6 +10,11 @@
 //! keeps a small manifest next to it so that saves that had not reached the
 //! server when the app closed (or the connection dropped) are offered again
 //! on the next run instead of being deleted.
+//!
+//! Saves never silently replace someone else's change either: the server
+//! file's size and date are remembered when it is downloaded or uploaded,
+//! and checked before each upload. If they changed, the save is held as a
+//! conflict until the user chooses to overwrite the server copy or skip it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +46,10 @@ pub enum EditStatus {
     /// The last save is not on the server yet (see `error`). It is retried
     /// while the server is connected, or with [`RemoteEditor::upload_now`].
     Failed,
+    /// The file changed on the server since it was opened or last uploaded,
+    /// so the last save was not uploaded. Resolve it with
+    /// [`RemoteEditor::resolve_conflict`].
+    Conflict,
     Stopped,
 }
 
@@ -59,6 +68,24 @@ pub struct EditSession {
 /// (modified time in ms, size) of a local file.
 type Signature = (i64, u64);
 
+/// Size and modification time of the server file, to notice changes made
+/// by someone else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ServerSig {
+    size: u64,
+    modified_ms: Option<i64>,
+}
+
+/// Remembered after an upload whose result could not be read back. It
+/// matches no real server file, so the next save is held as a conflict
+/// instead of being sent unchecked.
+const UNVERIFIED: ServerSig = ServerSig {
+    size: u64::MAX,
+    modified_ms: Some(i64::MIN),
+};
+
+const CONFLICT: &str = "the file changed on the server since you opened it";
+
 /// Kept next to each local copy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Manifest {
@@ -66,6 +93,10 @@ struct Manifest {
     file: String,
     /// Signature of the local copy as last downloaded or uploaded.
     synced: Option<Signature>,
+    /// The server file as last downloaded or uploaded; `None` if unknown
+    /// (e.g. a manifest from an older version), and then not checked.
+    #[serde(default)]
+    server: Option<ServerSig>,
 }
 
 struct Running {
@@ -124,13 +155,19 @@ pub async fn download(fs: &dyn FileSystem, path: &str, to: &Path) -> Result<()> 
     result
 }
 
+/// Send the local copy to the server. It goes to a temporary name there
+/// first and replaces the server file only once complete, so a dropped
+/// connection never leaves it cut short. The server file then gets the
+/// local copy's modification time, so a compare by date sees them as equal.
 async fn upload(fs: &dyn FileSystem, from: &Path, path: &str) -> Result<()> {
     let mut r = tokio::fs::File::open(from).await.map_err(|e| io(from, e))?;
     let mut buf = Vec::new();
     r.read_to_end(&mut buf).await.map_err(|e| io(from, e))?;
-    let mut w = fs.open_write(path).await?;
-    w.write_all(&buf).await.map_err(|e| Error::io(path, e))?;
-    w.shutdown().await.map_err(|e| Error::io(path, e))
+    crate::vfs::write_file_atomic(fs, path, &buf).await?;
+    if let Some((ms, _)) = signature(from) {
+        let _ = fs.set_modified(path, ms).await;
+    }
+    Ok(())
 }
 
 fn signature(p: &Path) -> Option<Signature> {
@@ -240,6 +277,7 @@ impl RemoteEditor {
             .map(|r| r.info.clone());
         if let Some(s) = existing {
             if s.status == EditStatus::Failed {
+                // (A conflict is left for the user to resolve.)
                 // Unsent changes: don't download over them, send them.
                 return self.upload_now(s.id).await;
             }
@@ -262,6 +300,10 @@ impl RemoteEditor {
                 remote: remote.clone(),
                 file,
                 synced: signature(&local),
+                server: Some(ServerSig {
+                    size: entry.size,
+                    modified_ms: entry.modified_ms,
+                }),
             },
         );
 
@@ -303,24 +345,58 @@ impl RemoteEditor {
         ));
     }
 
-    /// Upload the local copy now and (re)start watching it, e.g. for a save
-    /// that failed or was left over from an earlier run.
-    pub async fn upload_now(&self, id: Uuid) -> Result<EditSession> {
-        let info = self
-            .inner
+    fn session(&self, id: Uuid) -> Result<EditSession> {
+        self.inner
             .sessions
             .lock()
             .unwrap()
             .get(&id)
             .map(|r| r.info.clone())
-            .ok_or_else(|| Error::NotFound(format!("edit session {id}")))?;
+            .ok_or_else(|| Error::NotFound(format!("edit session {id}")))
+    }
+
+    /// Upload the local copy now and (re)start watching it, e.g. for a save
+    /// that failed or was left over from an earlier run. If the server copy
+    /// changed meanwhile, nothing is uploaded and the session is returned
+    /// in [`EditStatus::Conflict`].
+    pub async fn upload_now(&self, id: Uuid) -> Result<EditSession> {
+        self.send(id, false).await
+    }
+
+    /// Settle a save held as a conflict. `overwrite` uploads the local copy
+    /// over the server's; otherwise this save is skipped: the server copy
+    /// and the local copy are both left as they are, and the next save is
+    /// checked again.
+    pub async fn resolve_conflict(&self, id: Uuid, overwrite: bool) -> Result<EditSession> {
+        let info = self.session(id)?;
+        if overwrite {
+            return self.send(id, true).await;
+        }
+        let fs = self.inner.registry.get(&info.remote.fs)?;
+        let mut info = info;
+        info.status = EditStatus::Watching;
+        info.error = None;
+        // Keep the remembered `synced`, so the skipped save is still known
+        // as unsent if the app closes, but don't upload it from here.
+        let local = PathBuf::from(&info.local_path);
+        self.spawn_watcher(info.clone(), fs, signature(&local));
+        Ok(info)
+    }
+
+    async fn send(&self, id: Uuid, force: bool) -> Result<EditSession> {
+        let info = self.session(id)?;
         let fs = self.inner.registry.get(&info.remote.fs)?;
         let local = PathBuf::from(&info.local_path);
         update(&self.inner, id, |s| s.status = EditStatus::Uploading);
         let sig = signature(&local);
-        match upload(&*fs, &local, &info.remote.path).await {
-            Ok(()) => {
-                mark_synced(&local, sig);
+        let sent = if force {
+            upload_checked(&*fs, &local, &info.remote.path, None).await
+        } else {
+            upload_checked(&*fs, &local, &info.remote.path, server_sig(&local)).await
+        };
+        match sent {
+            Ok(server) => {
+                mark_synced(&local, sig, Some(server));
                 let mut info = info;
                 info.status = EditStatus::Uploaded;
                 info.uploads += 1;
@@ -329,7 +405,16 @@ impl RemoteEditor {
                 self.spawn_watcher(info.clone(), fs, sig);
                 Ok(info)
             }
-            Err(e) => {
+            Err(Sent::Conflict) => {
+                // Watch on, without sending this save again by itself.
+                let mut info = info;
+                info.status = EditStatus::Conflict;
+                info.error = Some(CONFLICT.into());
+                self.spawn_watcher(info.clone(), fs, sig);
+                Ok(info)
+            }
+            Err(Sent::Failed(e, left)) => {
+                mark_server(&local, left);
                 update(&self.inner, id, |s| {
                     s.status = EditStatus::Failed;
                     s.error = Some(e.to_string());
@@ -383,12 +468,80 @@ impl RemoteEditor {
     }
 }
 
-/// Record that the copy at `local` (with signature `sig`) is on the server.
-fn mark_synced(local: &Path, sig: Option<Signature>) {
+/// Record that the copy at `local` (with signature `sig`) is on the server,
+/// which now holds `server`.
+fn mark_synced(local: &Path, sig: Option<Signature>, server: Option<ServerSig>) {
     let Some(dir) = local.parent() else { return };
     if let Some(mut m) = read_manifest(dir) {
         m.synced = sig;
+        m.server = server;
         write_manifest(dir, &m);
+    }
+}
+
+/// Record that the server now holds `server` (e.g. what a failed upload
+/// left there), keeping the local copy unsent.
+fn mark_server(local: &Path, server: Option<ServerSig>) {
+    let (Some(dir), Some(server)) = (local.parent(), server) else {
+        return;
+    };
+    if let Some(mut m) = read_manifest(dir) {
+        if m.server.is_some() {
+            m.server = Some(server);
+            write_manifest(dir, &m);
+        }
+    }
+}
+
+/// The server file as remembered for the copy at `local`.
+fn server_sig(local: &Path) -> Option<ServerSig> {
+    read_manifest(local.parent()?)?.server
+}
+
+async fn stat_server(fs: &dyn FileSystem, path: &str) -> Result<Option<ServerSig>> {
+    match fs.stat(path).await {
+        Ok(e) => Ok(Some(ServerSig {
+            size: e.size,
+            modified_ms: e.modified_ms,
+        })),
+        Err(Error::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+enum Sent {
+    /// The server copy is not the one `expected`; nothing was uploaded.
+    Conflict,
+    /// The upload failed. Holds the server file as the failed upload left
+    /// it, when it could be read: a write may have truncated it, and that
+    /// is not someone else's change.
+    Failed(Error, Option<ServerSig>),
+}
+
+/// Upload `from` to `path`, first checking that the server file is still
+/// `expected` (when given). Returns the server file as it is afterwards,
+/// or [`UNVERIFIED`] if it cannot be read back.
+async fn upload_checked(
+    fs: &dyn FileSystem,
+    from: &Path,
+    path: &str,
+    expected: Option<ServerSig>,
+) -> std::result::Result<ServerSig, Sent> {
+    if let Some(expected) = expected {
+        let now = stat_server(fs, path)
+            .await
+            .map_err(|e| Sent::Failed(e, None))?;
+        // A file deleted on the server counts as changed, too.
+        if now != Some(expected) {
+            return Err(Sent::Conflict);
+        }
+    }
+    let sent = upload(fs, from, path).await;
+    // Servers may stamp the upload with their own time: remember theirs.
+    let after = stat_server(fs, path).await.ok().flatten();
+    match sent {
+        Ok(()) => Ok(after.unwrap_or(UNVERIFIED)),
+        Err(e) => Err(Sent::Failed(e, after)),
     }
 }
 
@@ -412,6 +565,8 @@ async fn watch(
     cancel: CancellationToken,
 ) {
     let mut delay = POLL;
+    // A local save that was not uploaded because of a conflict.
+    let mut held: Option<Signature> = None;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
@@ -427,12 +582,16 @@ async fn watch(
         if signature(&local) != now {
             continue;
         }
+        if now == held {
+            continue; // a save held as a conflict; the user decides
+        }
         update(&inner, id, |s| s.status = EditStatus::Uploading);
-        match upload(&*fs, &local, &remote_path).await {
-            Ok(()) => {
+        match upload_checked(&*fs, &local, &remote_path, server_sig(&local)).await {
+            Ok(server) => {
                 // Only a save that reached the server counts as synced.
                 synced = now;
-                mark_synced(&local, now);
+                held = None;
+                mark_synced(&local, now, Some(server));
                 update(&inner, id, |s| {
                     s.status = EditStatus::Uploaded;
                     s.uploads += 1;
@@ -440,7 +599,15 @@ async fn watch(
                     s.error = None;
                 });
             }
-            Err(e) => {
+            Err(Sent::Conflict) => {
+                held = now;
+                update(&inner, id, |s| {
+                    s.status = EditStatus::Conflict;
+                    s.error = Some(CONFLICT.into());
+                });
+            }
+            Err(Sent::Failed(e, left)) => {
+                mark_server(&local, left);
                 update(&inner, id, |s| {
                     s.status = EditStatus::Failed;
                     s.error = Some(e.to_string());

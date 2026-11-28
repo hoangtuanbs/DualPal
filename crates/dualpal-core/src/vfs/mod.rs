@@ -10,6 +10,7 @@ mod ftp;
 mod local;
 pub mod names;
 pub mod posix;
+mod replace;
 mod s3;
 mod sftp;
 mod text;
@@ -17,6 +18,7 @@ pub mod wsl;
 
 pub use ftp::{FtpFs, FtpParams, FtpSecurity};
 pub use local::LocalFs;
+pub use replace::{part_path, rename_over, write_file_atomic};
 pub use s3::{S3Fs, S3Params, WebDavParams};
 pub use sftp::{parse_ssh_config, ssh_config_hosts, SftpFs, SftpParams, SshConfigHost};
 pub use text::{read_text, write_text, TextFile};
@@ -178,6 +180,12 @@ pub trait FileSystem: Send + Sync {
     /// storage is faster with several, since each file waits on the network.
     fn parallel_transfers(&self) -> usize {
         1
+    }
+    /// True if a new file copied here should get the source file's
+    /// permission bits (so a script stays executable). Only backends where
+    /// [`FileSystem::set_mode`] is cheap and meaningful say yes.
+    fn copies_modes(&self) -> bool {
+        false
     }
     /// Move an item to the system Trash / Recycle Bin.
     async fn trash(&self, path: &str) -> Result<()> {

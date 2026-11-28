@@ -300,6 +300,10 @@ impl FileSystem for LocalFs {
         true
     }
 
+    fn copies_modes(&self) -> bool {
+        cfg!(unix)
+    }
+
     async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
         use tokio::io::AsyncSeekExt;
         let mut f = tokio::fs::OpenOptions::new()

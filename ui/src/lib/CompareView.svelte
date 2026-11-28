@@ -47,7 +47,11 @@
   // svelte-ignore state_referenced_locally
   let mode = $state<SyncMode>(favorite?.mode ?? "update");
   // svelte-ignore state_referenced_locally
-  let options = $state<CompareOptions>(favorite?.options ?? defaultCompareOptions());
+  // "By size" now also looks at the dates, the same as "Size and date", so a
+  // favorite saved with it opens with "Size and date".
+  let options = $state<CompareOptions>(
+    favorite ? { ...favorite.options, by: favorite.options.by === "size" ? "sizeAndDate" : favorite.options.by } : defaultCompareOptions(),
+  );
   // svelte-ignore state_referenced_locally
   let excludeText = $state(options.exclude.join("; "));
 
@@ -249,6 +253,7 @@
     conflict: "Changed on both sides: choose which to keep",
     changedAndDeleted: "Changed on one side, deleted on the other: it is copied back",
     kindMismatch: "A file on one side and a folder on the other: choose which to keep",
+    caseConflict: "Another item here has the same name in different case: rename one first",
   };
 
   const STATE: Record<string, string> = {
@@ -325,7 +330,6 @@
         Compare by
         <select bind:value={options.by} onchange={run}>
           <option value={"sizeAndDate" satisfies CompareBy}>Size and date</option>
-          <option value={"size" satisfies CompareBy}>Size</option>
           <option value={"content" satisfies CompareBy}>Content</option>
         </select>
       </label>

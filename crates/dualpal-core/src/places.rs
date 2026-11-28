@@ -335,41 +335,63 @@ impl Favorites {
 
     /// Add a favorite (ignored if that location is already a favorite).
     pub fn add(&self, fav: Favorite) -> std::io::Result<Vec<Favorite>> {
-        let mut items = self.items.lock().unwrap();
-        if !items.iter().any(|f| f.location == fav.location) {
-            items.push(fav);
-        }
-        self.save(&items)?;
-        Ok(items.clone())
+        self.change(|items| {
+            if !items.iter().any(|f| f.location == fav.location) {
+                items.push(fav);
+            }
+            Ok(())
+        })
     }
 
     pub fn remove(&self, location: &Location) -> std::io::Result<Vec<Favorite>> {
-        let mut items = self.items.lock().unwrap();
-        items.retain(|f| &f.location != location);
-        self.save(&items)?;
-        Ok(items.clone())
+        self.change(|items| {
+            items.retain(|f| &f.location != location);
+            Ok(())
+        })
     }
 
-    /// Reorder: move the favorite at `from` to index `to`.
+    /// Reorder: move the favorite at `from` to index `to`. Both must be
+    /// positions in the current list; otherwise nothing changes and an
+    /// `InvalidInput` error is returned (the list may have changed since).
     pub fn reorder(&self, from: usize, to: usize) -> std::io::Result<Vec<Favorite>> {
-        let mut items = self.items.lock().unwrap();
-        if from < items.len() {
+        self.change(|items| {
+            if from >= items.len() || to >= items.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "cannot move favorite {from} to {to}: there are {}",
+                        items.len()
+                    ),
+                ));
+            }
             let f = items.remove(from);
-            let to = to.min(items.len());
             items.insert(to, f);
-        }
-        self.save(&items)?;
-        Ok(items.clone())
+            Ok(())
+        })
     }
 
-    fn save(&self, items: &[Favorite]) -> std::io::Result<()> {
+    /// Apply `f` to the list and save it. With a file, the change is made
+    /// under a lock on it and to the list as it is on disk now, so a change
+    /// another copy of the app saved meanwhile is kept, not written over.
+    fn change(
+        &self,
+        f: impl FnOnce(&mut Vec<Favorite>) -> std::io::Result<()>,
+    ) -> std::io::Result<Vec<Favorite>> {
+        let mut items = self.items.lock().unwrap();
         let Some(path) = &self.file else {
-            return Ok(());
+            f(&mut items)?;
+            return Ok(items.clone());
         };
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let json = serde_json::to_string_pretty(items).map_err(std::io::Error::other)?;
-        std::fs::write(path, json)
+        crate::store_file::with_lock(path, || {
+            let mut next = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| items.clone());
+            f(&mut next)?;
+            let json = serde_json::to_string_pretty(&next).map_err(std::io::Error::other)?;
+            crate::store_file::write_atomic(path, json.as_bytes())?;
+            *items = next;
+            Ok(items.clone())
+        })
     }
 }

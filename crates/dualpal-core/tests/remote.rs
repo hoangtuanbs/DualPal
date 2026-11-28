@@ -442,6 +442,33 @@ async fn sftp_backend_against_a_real_server() {
     assert_eq!(st.modified_ms, Some(1_600_000_000_000));
     c.fs.remove_file(&c.fs.join(&base, "x.sh")).await.unwrap();
 
+    // OPS-COPY-004 — a script uploaded with a copy stays executable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = tmp.path().join("run.sh");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let registry = Arc::new(Registry::with_local());
+        registry.register(c.fs.clone());
+        let q = OperationQueue::new(registry, Arc::new(ActivityLog::in_memory(10)), 1);
+        run(
+            &q,
+            Operation::Copy {
+                sources: vec![Location::new("local", script.to_string_lossy())],
+                destination: Location::new(c.fs.id(), &base),
+                conflict: ConflictPolicy::Fail,
+            },
+        )
+        .await;
+        let up = c.fs.join(&base, "run.sh");
+        assert_eq!(
+            c.fs.stat(&up).await.unwrap().mode.map(|m| m & 0o777),
+            Some(0o755)
+        );
+        c.fs.remove_file(&up).await.unwrap();
+    }
+
     // With DUALPAL_TEST_SFTP_DROP (a command that cuts open SSH sessions,
     // e.g. `docker exec dualpal-test-sftp drop-connections`), an upload that
     // loses its connection midway carries on and arrives intact.
