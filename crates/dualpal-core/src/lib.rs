@@ -17,6 +17,7 @@
 //! * [`releases`] — the newest published release, for the upgrade notice.
 //! * [`upgrade`] — pick, download and verify the installer for an upgrade.
 //! * [`import`] — read saved servers from WinSCP, FileZilla and Cyberduck exports.
+//! * [`viewer`] — the file viewer: byte ranges, encodings and streamed search.
 //!
 //! Nothing in this crate depends on Tauri, so it can be tested on any OS and
 //! reused by other front ends (CLI, tests).
@@ -42,6 +43,7 @@ pub mod terminal;
 pub mod upgrade;
 pub mod vault;
 pub mod vfs;
+pub mod viewer;
 
 pub use activity::{ActivityLog, ActivityRecord};
 pub use error::{Error, Result};

@@ -35,6 +35,7 @@ rustls-native-certs = "0.8"
 sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
 bytes = "1"
+memchr = "2"
 opendal = { version = "0.55", features = ["services-s3", "services-webdav"] }
 # The optional master password: Argon2id stretches it into an AES-256-GCM key
 # that encrypts the saved connection secrets.

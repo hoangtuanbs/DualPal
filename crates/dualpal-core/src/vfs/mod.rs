@@ -10,6 +10,7 @@ mod ftp;
 mod local;
 pub mod names;
 pub mod posix;
+pub mod range;
 mod s3;
 mod sftp;
 mod text;
@@ -17,6 +18,7 @@ pub mod wsl;
 
 pub use ftp::{FtpFs, FtpParams, FtpSecurity};
 pub use local::LocalFs;
+pub use range::{RangeReader, PAGE_SIZE};
 pub use s3::{S3Fs, S3Params, WebDavParams};
 pub use sftp::{parse_ssh_config, ssh_config_hosts, SftpFs, SftpParams, SshConfigHost};
 pub use text::{read_text, write_text, TextFile};
@@ -158,6 +160,28 @@ pub trait FileSystem: Send + Sync {
             )));
         }
         Ok(r)
+    }
+    /// True if [`FileSystem::open_read_at`] starts at the offset without
+    /// reading the bytes before it. Without it, reading the end of a big file
+    /// means streaming everything before it, so callers keep a stream open
+    /// and read on from where it is (see [`RangeReader`]).
+    fn seekable_reads(&self) -> bool {
+        false
+    }
+    /// Read up to `len` bytes starting `offset` bytes in. The result is
+    /// shorter at the end of the file and empty from the end on, so asking
+    /// past the end is not an error.
+    async fn read_range(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let entry = self.stat(path).await?;
+        if entry.is_dir() {
+            return Err(Error::Invalid(format!("not a file: {path}")));
+        }
+        if len == 0 || offset >= entry.size {
+            return Ok(Vec::new());
+        }
+        let want = (entry.size - offset).min(len as u64);
+        let reader = self.open_read_at(path, offset).await?;
+        range::read_up_to(reader, want, path).await
     }
     /// Open an existing file for writing at `offset`, to finish a copy that
     /// was cut off. Bytes past `offset` may be left until they are written over.

@@ -458,6 +458,16 @@ impl FileSystem for S3Fs {
     }
 
     async fn open_read(&self, path: &str) -> Result<Reader> {
+        self.open_read_at(path, 0).await
+    }
+
+    /// A ranged GET, so the viewer reads the end of a big object without
+    /// downloading the start.
+    fn seekable_reads(&self) -> bool {
+        true
+    }
+
+    async fn open_read_at(&self, path: &str, offset: u64) -> Result<Reader> {
         let k = key(path);
         let size = self
             .op
@@ -465,13 +475,20 @@ impl FileSystem for S3Fs {
             .await
             .map_err(|e| map_err(path, e))?
             .content_length();
+        // Reading past the end is an invalid request, as on the local disk
+        // (VFS-CON-020).
+        if offset > size {
+            return Err(Error::Invalid(format!(
+                "reading {path} from byte {offset}, but it is {size} bytes"
+            )));
+        }
         let r = self
             .op
             .reader_with(&k)
             .chunk(PART_SIZE)
             .await
             .map_err(|e| map_err(path, e))?
-            .into_futures_async_read(0..size)
+            .into_futures_async_read(offset..size)
             .await
             .map_err(|e| map_err(path, e))?;
         Ok(Box::new(r.compat()))

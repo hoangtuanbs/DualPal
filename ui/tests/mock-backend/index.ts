@@ -23,6 +23,8 @@ import type {
 /** A file or folder entry with optional text content. */
 export interface MemEntry extends Entry {
   content?: string;
+  /** Raw content, for files that are not UTF-8 text (wins over `content`). */
+  bytes?: Uint8Array;
 }
 
 /** One file system: path → entry. POSIX paths, case-sensitive. */
@@ -184,6 +186,8 @@ class State {
   upgradeOutcome: "restart" | "exit" | "opened" = "restart";
   upgradeDownloaded: string | null = null;
   listeners = new Map<string, Set<(payload: any) => void>>();
+  /** Files open in the viewer, by session - 1. */
+  viewer: Uint8Array[] = [];
   constructor(scenario: Scenario) {
     this.scenario = scenario;
   }
@@ -228,6 +232,44 @@ const handlers: Record<string, Handler> = {
     if (!e) throw { kind: "notFound", message: `not found: ${loc.path}` };
     return { text: e.content ?? "", truncated: false, binary: false };
   },
+  viewer_open: (a, s) => {
+    const loc: Location = a.location;
+    const t = s.scenario.trees[loc.fs] ?? s.scenario.trees.local;
+    const e = t.get(loc.path);
+    if (!e || e.kind !== "file") throw { kind: "notFound", message: `not found: ${loc.path}` };
+    const bytes = e.bytes ?? new TextEncoder().encode(e.content ?? "");
+    s.viewer.push(bytes);
+    const [b0, b1, b2] = bytes;
+    const detected =
+      b0 === 0xef && b1 === 0xbb && b2 === 0xbf
+        ? { encoding: "utf-8", bom: 3, binary: false }
+        : b0 === 0xff && b1 === 0xfe
+          ? { encoding: "utf-16le", bom: 2, binary: false }
+          : b0 === 0xfe && b1 === 0xff
+            ? { encoding: "utf-16be", bom: 2, binary: false }
+            : { encoding: "utf-8", bom: 0, binary: bytes.subarray(0, 8192).includes(0) };
+    return { session: s.viewer.length, size: bytes.length, modifiedMs: e.modifiedMs, detected, seekable: true };
+  },
+  viewer_read: (a, s) => {
+    const bytes = s.viewer[a.session - 1];
+    if (!bytes) throw { kind: "invalid", message: `the viewer file ${a.session} is not open` };
+    return bytes.slice(a.offset, a.offset + a.length);
+  },
+  viewer_search: (a, s) => {
+    const bytes = s.viewer[a.session - 1] ?? new Uint8Array();
+    const fold = (b: number) => (a.ignoreCase && b >= 65 && b <= 90 ? b + 32 : b);
+    const n: number[] = a.needle.map(fold);
+    const at = (i: number) => n.every((b, j) => fold(bytes[i + j]) === b);
+    if (a.backward) {
+      for (let i = Math.min(a.from - 1, bytes.length - n.length); i >= 0; i--) if (at(i)) return i;
+    } else {
+      for (let i = a.from; i + n.length <= bytes.length; i++) if (at(i)) return i;
+    }
+    return null;
+  },
+  viewer_count_lines: (a, s) => (s.viewer[a.session - 1] ?? new Uint8Array()).subarray(0, a.upto).filter((b) => b === 10).length,
+  viewer_cancel: () => null,
+  viewer_close: () => null,
   write_text: (a, s) => {
     const loc: Location = a.location;
     const t = s.scenario.trees[loc.fs] ?? s.scenario.trees.local;

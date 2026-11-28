@@ -652,6 +652,10 @@ impl FileSystem for SftpFs {
         Ok(Box::new(f))
     }
 
+    fn seekable_reads(&self) -> bool {
+        true
+    }
+
     fn resumable_writes(&self) -> bool {
         true
     }

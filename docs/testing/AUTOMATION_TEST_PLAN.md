@@ -389,6 +389,7 @@ Each case runs in `unique_base(fs)`.
 | VFS-CON-028 | empty folders survive | P1 | NEW | S3 marker semantics: create empty dir, list parent shows it, remove_dir removes it |
 | VFS-CON-029 | display_name and id stable | P2 | NEW | |
 | VFS-CON-030 | errors serialise as `{kind, message}` | P0 | NEW | for each Error variant `serde_json::to_value` → snapshot (insta) |
+| VFS-CON-031 | `read_range` | P0 | NEW | bytes inside the file; cut at the end; empty at and past the end, for 0 bytes and for an empty file; a folder is an error |
 
 ### 8.2 Local backend and path helpers — `VFS-LOC`, `VFS-PATH`, `VFS-WSL`, `VFS-TXT`
 
@@ -634,6 +635,25 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | DIFF-005 | detect finds a fake tool on PATH | P1 | NEW | put `meld` (shell script) in a temp dir on PATH → detected |
 | DIFF-006 | compare_files downloads remote files first | P1 | NEW (L4) | PREP-04 log lists two local paths whose contents equal the remote files |
 
+### 8.11.1 File viewer — `VIEW`
+
+Core of the F3 viewer (`dualpal_core::vfs::range`, `dualpal_core::viewer`), in `crates/dualpal-core/tests/viewer.rs`. The non-seeking backend is `FaultyFs::set_seekable(false)` over `MemFs`.
+
+| ID | Title | P | Status | Assert |
+|---|---|---|---|---|
+| VIEW-001 | `RangeReader` on the local disk | P0 | NEW | ranges inside, across a page boundary, cut at the end, past the end, 0 bytes, empty file; a second read of the same range opens nothing |
+| VIEW-002 | `RangeReader` without seeking | P0 | NEW | reading forwards and skipping ahead use one stream; skipped pages are cached; every byte is read once |
+| VIEW-003 | `RangeReader` faults and eviction | P1 | NEW | a failed open is reported and the next read works; never more than the page limit cached |
+| VIEW-004 | encoding detection | P0 | NEW | UTF-8/UTF-16 BOMs, UTF-16 without BOM, UTF-8 cut at the sample end, Windows-1252 fallback, binary |
+| VIEW-005 | decode / encode | P0 | NEW | round trip in each encoding; € in Windows-1252; unmappable characters → None; serde labels are TextDecoder names |
+| VIEW-006 | streamed search across chunk boundaries | P0 | NEW | needle at every offset around 16-byte chunks; forward/backward, seekable or not, ignore case; stepping next/previous |
+| VIEW-007 | search cancel and progress | P1 | NEW | progress reaches the end; cancelled → `Cancelled` |
+| VIEW-008 | line counts | P1 | NEW | UTF-8 and UTF-16 with chunks that cut code units; cancel |
+| VIEW-009 | `Sessions` | P0 | NEW | open detects BOM; read; limit closes the oldest; closed/unknown → invalid; folder and missing file are errors |
+| VIEW-010 | 1 GiB local file | P0 | NEW | open + read at the end and the middle under 2 s; backward search from the end finds the marker |
+| VIEW-011 | UTF-16 text search | P0 | NEW | ignore case folds whole code units ("Ł" is not "š"); matches start on code units only, forwards/backwards, seekable or not; raw byte search matches anywhere |
+| VIEW-012 | cancel while waiting for the reader | P1 | NEW | a search and a line count waiting behind a slow page read stop at once when cancelled |
+
 ### 8.12 Tauri command layer — `CMD` (L4)
 
 New folder `src-tauri/tests/` with `common/mod.rs` that builds the app:
@@ -696,6 +716,8 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
 | CMD-039 | `latest_release` reads GitHub's latest release (tag, page, date) from `DUALPAL_RELEASES_URL` and sends a User-Agent | P1 | |
 | CMD-040 | `apply_upgrade` needs a finished `download_upgrade`; `download_upgrade` refuses a version that is no longer the newest release | P1 | |
+| CMD-050 | `viewer_open`, `viewer_read`, `viewer_close` | P0 | encoding and BOM detected; raw bytes for a range, empty past the end; closed session → `invalid`; missing file → `notFound` |
+| CMD-051 | `viewer_search`, `viewer_count_lines`, `viewer_cancel` | P0 | forward / backward / ignore case, null when none; line feeds before an offset; UTF-16 `encoding` folds whole code units |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
@@ -719,6 +741,13 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-014 | `PaneState.navigated` hook fires (linked browsing) | P1 | |
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
+| UI-UNIT-030 | viewer `encoding.ts` | P0 | decode/encode each encoding, € in Windows-1252, unmappable → null, hex search terms |
+| UI-UNIT-031 | viewer `layout.ts` | P0 | lines, CR, empty lines; long lines cut without splitting UTF-8 and numbered once; UTF-16 after a BOM; no surrogate pair split by a cut or a wrap; wrapped row → byte; wrap; up and down agree on a 1 GB source and read only near the place |
+| UI-UNIT-032 | viewer `PagedSource` | P0 | joins pages, reads each once, shares a fetch on its way, evicts, retries a failed page |
+| UI-UNIT-034 | `TextView` | P0 | 1 GB source: PageDown/arrows/wheel/End/Home read only around the screen; line numbers counted after End; scroll to offset + highlight; wrap and line-number toggles; encoding switch; moves during a read add up; a slow jump replaced by a later move is dropped; top byte inside a wrapped line; scroll bar at the bottom at the end, whole-byte jumps; read error + retry |
+| UI-UNIT-035 | `HexView` | P1 | offset / 16 bytes / ASCII columns; End/Home; highlight and scroll to offset; read error + retry |
+| UI-UNIT-036 | `Viewer` | P0 | opens through `viewer_open`; 1/2/3 and buttons switch modes; images show as images; binary opens in hex; reads only the pages on screen; find beyond the loaded pages with next/previous (Enter, F3, Shift F3); hex search; Esc closes find, then the viewer; F3 closes; open error; text encoding passed to search (none for hex); a changed term drops the search on its way; closing cancels the line count and a late progress listener; focus moves into the media view |
+| UI-UNIT-037 | viewer api argument names | P0 | every `viewer_*` call's exact argument object |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
 | UI-CMP-003 | `CommandPalette` fuzzy filter, arrow keys, Enter runs, lists servers/favorites/syncs | P0 | |
@@ -773,6 +802,8 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-KEY-028 | Ctrl/⌘ Shift L | linked browsing toggles; entering folder in one pane enters same name in other |
 | UI-KEY-029 | shortcuts ignored while typing in an input/editor | F5 inside rename prompt does not copy |
 | UI-KEY-030 | shortcuts disabled while auto-sync locks panes (`frozen`) | F5/F6/F8 make no calls |
+| UI-KEY-040 | F3 | viewer opens on the cursor file (`viewer_open`), Esc and F3 close it (`viewer_close`); nothing on a folder |
+| UI-KEY-041 | 1 / 2 / 3, Ctrl/⌘ F, F3 / Shift F3 in the viewer | text/hex switch (3 needs media); find focuses the field; Enter/F3 next, Shift F3 previous (`viewer_search` backward); Esc closes find, then the viewer |
 
 **Mouse**
 
@@ -825,6 +856,8 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-E2E-028 | narrow window (800×480 min size): names readable, toolbar wraps, no horizontal scroll in panes | P1 | |
 | UI-E2E-029 | Windows path scenario: `C:\Users\…` breadcrumbs and parent navigation | P1 | scenario "windows-paths" |
 | UI-E2E-030 | 5 000 entries render and scroll; cursor End reaches last | P1 | |
+| UI-E2E-040 | *View* in the item menu and the command palette opens the viewer | P1 | |
+| UI-E2E-041 | the viewer has no serious axe violations in text and hex view | P1 | |
 | UI-E2E-031 | unsaved state survives nothing unexpected: reload restores favorites/servers from backend, not localStorage | P2 | |
 
 ### 8.15 Full-stack desktop E2E — `DESK` (L7)
