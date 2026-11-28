@@ -1,97 +1,74 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, errorMessage, type Entry, type Location } from "./api";
+  import type { Entry, Location, SearchHit } from "./api";
   import { glyph } from "./fileTypes";
+  import { formatBytes } from "./format";
+  import { FindSession, hasCriteria, REMOTE_CONTENT_LIMIT } from "./find-session.svelte";
 
-  /** Find files by name below the folder `location`. */
+  /** Find files below the folder `location`: by name, text inside, size, date. */
   let {
     location,
     onopen,
     onclose,
+    onfeed,
+    session: given,
+    showHidden = false,
   }: {
     location: Location;
     /** Show the entry's folder in the pane, with the entry selected. */
     onopen: (entry: Entry) => void;
     onclose: () => void;
+    /** Show the session's results in the active pane. */
+    onfeed?: (session: FindSession) => void;
+    /** A search that outlives the dialog. Without one, closing stops the search. */
+    session?: FindSession;
+    /** Whether the pane shows hidden files: the first default of "Hidden items". */
+    showHidden?: boolean;
   } = $props();
 
-  let query = $state("");
-  /** Matches so far: filled by progress events while searching. */
-  let hits = $state<Entry[]>([]);
-  let folders = $state(0);
-  let searching = $state(false);
-  let truncated = $state(false);
-  let skipped = $state(0);
-  let error = $state("");
+  // svelte-ignore state_referenced_locally
+  const session = given ?? new FindSession();
+  // svelte-ignore state_referenced_locally
+  if (!session.ran && !hasCriteria(session.form)) session.form.includeHidden = showHidden;
+  const form = session.form;
+
   let cursor = $state(0);
+  let optionsOpen = $state(false);
   let field: HTMLInputElement | undefined = $state();
   let list: HTMLUListElement | undefined = $state();
-  // Each search gets a new request id; events and answers for older ones are ignored.
-  let latest = 0;
-  let running = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const sameBase = (a: Location | null, b: Location) => !!a && a.fs === b.fs && a.path === b.path;
 
   onMount(() => {
     field?.focus();
-    const off = api.onFindProgress((p) => {
-      if (p.request !== latest || !searching) return;
-      if (p.hits.length) hits = [...hits, ...p.hits];
-      folders = p.folders;
-    });
+    field?.select();
+    // A remembered search: show its results here, or run it again in a new folder.
+    if (hasCriteria(form) && !sameBase(session.base, location)) void session.start(location);
     return () => {
       clearTimeout(timer);
-      if (running) void api.cancelFindFiles(running);
-      off.then((f) => f()).catch(() => {});
+      if (!given) session.dispose();
     };
   });
 
   function schedule() {
     clearTimeout(timer);
-    const text = query.trim();
-    // Clear at once so old matches never sit under a new query.
-    if (!text) {
-      void run("");
-      return;
-    }
-    timer = setTimeout(() => run(text), 200);
-  }
-
-  async function run(text: string) {
-    const id = ++latest;
-    if (running) void api.cancelFindFiles(running);
-    running = 0;
-    error = "";
-    hits = [];
-    folders = 0;
-    truncated = false;
-    skipped = 0;
     cursor = 0;
-    if (!text) {
-      searching = false;
+    // Clear at once so old matches never sit under a new query.
+    if (!hasCriteria(form)) {
+      session.clear();
       return;
     }
-    searching = true;
-    running = id;
-    try {
-      const found = await api.findFiles(location, text, id);
-      if (id !== latest) return;
-      hits = found.hits;
-      truncated = found.truncated;
-      skipped = found.skipped;
-      cursor = Math.min(cursor, Math.max(0, hits.length - 1));
-    } catch (e) {
-      if (id !== latest || (e as { kind?: string })?.kind === "cancelled") return;
-      error = errorMessage(e);
-    } finally {
-      if (id === latest) {
-        searching = false;
-        running = 0;
-      }
-    }
+    timer = setTimeout(() => session.start(location), form.content ? 400 : 200);
   }
 
   function stop() {
-    if (running) void api.cancelFindFiles(running);
+    session.stop();
+  }
+
+  function feed() {
+    if (!onfeed || (!session.hits.length && !session.searching)) return;
+    onfeed(session);
   }
 
   /** The folder of `hit`, relative to the folder being searched. */
@@ -103,17 +80,23 @@
   }
 
   function move(delta: number) {
-    if (!hits.length) return;
-    cursor = Math.max(0, Math.min(hits.length - 1, cursor + delta));
+    if (!session.hits.length) return;
+    cursor = Math.max(0, Math.min(session.hits.length - 1, cursor + delta));
     list?.children[cursor]?.scrollIntoView({ block: "nearest" });
   }
 
   function keydown(e: KeyboardEvent) {
     e.stopPropagation();
+    const hits = session.hits;
     if (e.key === "Escape") {
       e.preventDefault();
-      if (searching) stop();
+      if (session.searching) stop();
       else onclose();
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      feed();
+    } else if ((e.target as HTMLElement).tagName === "SELECT") {
+      // Arrows and Enter belong to the drop-down.
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       move(1);
@@ -126,15 +109,33 @@
     } else if (e.key === "PageUp") {
       e.preventDefault();
       move(-10);
-    } else if (e.key === "Enter" && hits[cursor]) {
+    } else if (e.key === "Enter" && (e.target as HTMLElement).tagName !== "BUTTON" && hits[cursor]) {
       e.preventDefault();
       stop();
       onopen(hits[cursor]);
     }
   }
 
-  const count = $derived(`${hits.length} ${hits.length === 1 ? "match" : "matches"}`);
-  const scanned = $derived(`${folders.toLocaleString()} ${folders === 1 ? "folder" : "folders"}`);
+  const n = $derived(session.hits.length);
+  const count = $derived(`${n} ${n === 1 ? "match" : "matches"}`);
+  const scanned = $derived(`${session.folders.toLocaleString()} ${session.folders === 1 ? "folder" : "folders"}`);
+  const read = $derived(session.files ? ` · ${session.files.toLocaleString()} ${session.files === 1 ? "file" : "files"} read` : "");
+  const remote = $derived(location.fs !== "local");
+  /** How many options differ from the defaults, shown on the Options button. */
+  const changed = $derived(
+    [
+      form.nameRegex,
+      form.contentRegex,
+      !form.ignoreCase,
+      form.includeBinary,
+      form.includeHidden !== showHidden,
+      form.kind !== "any",
+      form.minSize.trim() !== "",
+      form.maxSize.trim() !== "",
+      form.date !== "any",
+    ].filter(Boolean).length,
+  );
+  const nameOnly = $derived(!form.content && changed === 0);
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -144,33 +145,94 @@
     <input
       bind:this={field}
       class="query"
-      placeholder="Find files named…"
+      placeholder="Find files named…  (e.g. report or *.rs;*.toml)"
       aria-label="Find files named"
       spellcheck="false"
       autocomplete="off"
-      bind:value={query}
+      bind:value={form.name}
       oninput={schedule}
     />
+    <div class="second">
+      <input
+        class="content"
+        placeholder="Containing text (optional)"
+        aria-label="Containing text"
+        spellcheck="false"
+        autocomplete="off"
+        bind:value={form.content}
+        oninput={schedule}
+      />
+      <button class="disclose" aria-expanded={optionsOpen} aria-controls="find-options" onclick={() => (optionsOpen = !optionsOpen)}>
+        {optionsOpen ? "▾" : "▸"} Options{changed ? ` (${changed})` : ""}
+      </button>
+    </div>
+    {#if optionsOpen}
+      <div class="options" id="find-options" role="group" aria-label="Search options">
+        <div class="line">
+          <label><input type="checkbox" bind:checked={form.ignoreCase} onchange={schedule} /> Ignore case</label>
+          <label><input type="checkbox" bind:checked={form.nameRegex} onchange={schedule} /> Regex in name</label>
+          <label><input type="checkbox" bind:checked={form.contentRegex} onchange={schedule} /> Regex in text</label>
+        </div>
+        <div class="line">
+          <select aria-label="Kind" bind:value={form.kind} onchange={schedule}>
+            <option value="any">Files and folders</option>
+            <option value="files">Files only</option>
+            <option value="folders">Folders only</option>
+          </select>
+          <label><input type="checkbox" bind:checked={form.includeHidden} onchange={schedule} /> Hidden items</label>
+          <label><input type="checkbox" bind:checked={form.includeBinary} onchange={schedule} /> Search binary files</label>
+        </div>
+        <div class="line">
+          <span class="caption">Size</span>
+          <input class="size" aria-label="At least" placeholder="at least, e.g. 1 MB" bind:value={form.minSize} oninput={schedule} />
+          <span class="caption">to</span>
+          <input class="size" aria-label="At most" placeholder="at most" bind:value={form.maxSize} oninput={schedule} />
+        </div>
+        <div class="line">
+          <span class="caption">Modified</span>
+          <select aria-label="Modified" bind:value={form.date} onchange={schedule}>
+            <option value="any">Any time</option>
+            <option value="today">Today</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="newer">On or after…</option>
+            <option value="older">Before…</option>
+          </select>
+          {#if form.date === "newer" || form.date === "older"}
+            <input type="date" aria-label="Day" bind:value={form.day} onchange={schedule} />
+          {/if}
+        </div>
+        {#if remote}
+          <p class="note">On servers, files over {formatBytes(REMOTE_CONTENT_LIMIT)} are not searched for text.</p>
+        {/if}
+      </div>
+    {/if}
     <div class="status" role="status" aria-live="polite">
       <span class="scope" title={location.path}>In {location.path}</span>
       <span class="spacer"></span>
-      {#if error}
-        <span class="error">{error}</span>
-      {:else if searching}
+      {#if session.error}
+        <span class="error">{session.error}</span>
+      {:else if session.searching}
         <span class="spinner" aria-hidden="true"></span>
-        Searching… {count} · {scanned}
+        Searching… {count} · {scanned}{read}
         <button class="link" onclick={stop}>Stop</button>
-      {:else if query.trim()}
-        {folders ? `${count} in ${scanned}` : count}
-        {#if truncated}· stopped early, more may match{/if}
-        {#if skipped}· {skipped} {skipped === 1 ? "folder" : "folders"} could not be read{/if}
+      {:else if session.ran}
+        {session.folders ? `${count} in ${scanned}` : count}{read}
+        {#if session.truncated}· stopped early, more may match{/if}
+        {#if session.skipped}· {session.skipped} {session.skipped === 1 ? "folder" : "folders"} could not be read{/if}
+        {#if session.filesSkipped}· {session.filesSkipped} {session.filesSkipped === 1 ? "file" : "files"} could not be read{/if}
+        {#if session.binary}· {session.binary} binary {session.binary === 1 ? "file" : "files"} skipped{/if}
+        {#if session.tooLarge}· {session.tooLarge} {session.tooLarge === 1 ? "file" : "files"} over {formatBytes(REMOTE_CONTENT_LIMIT)} not searched{/if}
       {:else}
         Type part of a name. Enter opens the selected match.
       {/if}
+      {#if onfeed && (n || session.searching)}
+        <button class="link" title="Show the matches in the pane (Ctrl/⌘ Enter)" onclick={feed}>Show in pane</button>
+      {/if}
     </div>
-    {#if hits.length}
+    {#if n}
       <ul class="hits" role="listbox" aria-label="Matches" bind:this={list}>
-        {#each hits as hit, i (hit.path)}
+        {#each session.hits as hit, i (hit.path)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <li
             role="option"
@@ -187,11 +249,17 @@
             <span class="icon" aria-hidden="true">{glyph(hit)}</span>
             <span class="name">{hit.name}</span>
             <span class="path">{where(hit)}</span>
+            {#if (hit as SearchHit).snippet}
+              {@const s = (hit as SearchHit).snippet!}
+              <span class="snippet"><span class="line">{s.line}:</span> {s.text}</span>
+            {/if}
           </li>
         {/each}
       </ul>
-    {:else if query.trim() && !searching && !error}
-      <p class="empty">No file or folder names contain “{query.trim()}”.</p>
+    {:else if session.ran && !session.searching && !session.error}
+      <p class="empty">
+        {nameOnly ? `No file or folder names contain “${form.name.trim()}”.` : "Nothing matches."}
+      </p>
     {/if}
   </div>
 </div>
@@ -229,6 +297,73 @@
     background: transparent;
     color: var(--text);
     outline: none;
+  }
+  .second {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .content {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    padding: 8px 14px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    outline: none;
+  }
+  .disclose {
+    border: none;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 14px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .disclose:hover,
+  .disclose[aria-expanded="true"] {
+    color: var(--text);
+  }
+  .options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 14px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .options .line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+  }
+  .options label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .options select,
+  .options input:not([type="checkbox"]) {
+    font: inherit;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--pane-bg);
+    color: var(--text);
+  }
+  .options .size {
+    width: 9em;
+  }
+  .caption {
+    color: var(--muted);
+  }
+  .note {
+    margin: 0;
+    color: var(--muted);
   }
   .status {
     display: flex;
@@ -288,6 +423,22 @@
     padding: 5px 10px;
     border-radius: 7px;
     cursor: default;
+  }
+  .snippet {
+    grid-column: 2 / -1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .snippet .line {
+    opacity: 0.7;
+  }
+  li.active .snippet {
+    color: inherit;
+    opacity: 0.85;
   }
   li.active {
     background: var(--selection);

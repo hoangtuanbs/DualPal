@@ -4,6 +4,18 @@ import { fsNames } from "./fs-names.svelte";
 import { nameFilter } from "./quick-filter";
 
 export type SortKey = "name" | "size" | "modified";
+
+/** Search results shown in a pane in place of a folder listing. The pane's
+ *  `location` stays the folder that was searched; every entry is a real item
+ *  on that same file system, so its Location is `{ fs: base.fs, path }`. */
+export interface PaneResults {
+  /** The folder searched. */
+  base: Location;
+  /** What was searched for, for the title and the results bar. */
+  label: string;
+  /** The search that produced them, which may still be adding matches. */
+  search: number;
+}
 export type ViewMode = "list" | "icons";
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -47,18 +59,22 @@ export class PaneState {
   filterOpen = $state(false);
   /** Bumped to move focus into the filter bar, even when it is already open. */
   filterFocus = $state(0);
+  /** Set while the pane shows search results instead of a folder. */
+  results = $state<PaneResults | null>(null);
 
   /** Entries shown before the quick filter: hidden files left out, sorted. */
   listed = $derived.by(() => {
-    const list = this.showHidden ? this.entries : this.entries.filter((e) => !e.hidden);
+    // Search results hold what the search was asked to find, hidden or not.
+    const list = this.showHidden || this.results ? this.entries : this.entries.filter((e) => !e.hidden);
     const dir = this.sortAsc ? 1 : -1;
+    const name = (e: Entry) => (this.results ? this.displayName(e) : e.name);
     return [...list].sort((a, b) => {
       // Folders always first.
       if ((a.kind === "dir") !== (b.kind === "dir")) return a.kind === "dir" ? -1 : 1;
       let c = 0;
       if (this.sortKey === "size") c = this.sizeOf(a) - this.sizeOf(b);
       else if (this.sortKey === "modified") c = (a.modifiedMs ?? 0) - (b.modifiedMs ?? 0);
-      return (c || collator.compare(a.name, b.name)) * dir;
+      return (c || collator.compare(name(a), name(b))) * dir;
     });
   });
 
@@ -88,6 +104,7 @@ export class PaneState {
         this.future = [];
       }
       this.location = loc;
+      this.results = null;
       this.entries = entries;
       this.forgetSizes();
       this.filter = "";
@@ -103,6 +120,59 @@ export class PaneState {
     } finally {
       this.loading = false;
     }
+  }
+
+  /** Show search results in this pane: `entries` found below `base` by
+   *  search `search`. Back, Backspace or opening a folder leaves them. */
+  showResults(base: Location, label: string, entries: Entry[], search: number) {
+    if (this.location && !this.results) {
+      this.history.push(this.location);
+      this.future = [];
+    }
+    // A copy: `base` may belong to another reactive object (the search).
+    base = { fs: base.fs, path: base.path };
+    this.location = base;
+    this.results = { base, label, search };
+    this.entries = dedupe(entries);
+    this.forgetSizes();
+    this.filter = "";
+    this.filterOpen = false;
+    this.selected.clear();
+    this.error = null;
+    this.cursor = 0;
+    this.loading = false;
+    this.updateSpace();
+  }
+
+  /** Matches that search `search` found later, when this pane shows its results. */
+  addResults(search: number, entries: Entry[]) {
+    if (this.results?.search !== search || !entries.length) return;
+    const keep = this.current?.path;
+    this.entries = dedupe([...this.entries, ...entries]);
+    const idx = keep ? this.visible.findIndex((e) => e.path === keep) : -1;
+    if (idx >= 0) this.cursor = idx;
+  }
+
+  /** Go back to browsing the folder that was searched. */
+  async leaveResults() {
+    const r = this.results;
+    if (!r) return;
+    await this.open(r.base, { record: false });
+  }
+
+  /** The name to show for `e`: in search results, its path below the folder searched. */
+  displayName(e: Entry): string {
+    const base = this.results?.base.path;
+    if (!base || !e.path.startsWith(base)) return e.name;
+    const rel = e.path.slice(base.length).replace(/^[\\/]+/, "");
+    return rel || e.name;
+  }
+
+  /** Open the folder holding `entry` with it under the cursor (from search results). */
+  async showInFolder(entry: Entry) {
+    if (!this.location) return;
+    const parent = await api.parentLocation({ fs: this.location.fs, path: entry.path }).catch(() => null);
+    if (parent) await this.open(parent, { focusName: entry.name });
   }
 
   /** Size used for sorting: a folder's calculated size when it is known. */
@@ -164,6 +234,7 @@ export class PaneState {
 
   /** A short name for tab titles. */
   get title(): string {
+    if (this.results) return `Search: ${this.results.label}`;
     const path = this.location?.path ?? "";
     const last = path.split(/[\\/]/).filter(Boolean).pop();
     return last ?? (this.location && fsNames[this.location.fs]) ?? path;
@@ -180,6 +251,7 @@ export class PaneState {
 
   /** Reload, keeping the cursor on the same item where possible. */
   async refresh() {
+    if (this.results) return this.refreshResults();
     const here = this.location;
     if (!here) return;
     const keep = this.current?.name;
@@ -202,6 +274,29 @@ export class PaneState {
     for (const e of this.entries) if (marked.has(e.path)) this.selected.add(e.path);
     this.unmarkFiltered();
     const idx = keep ? this.visible.findIndex((e) => e.name === keep) : -1;
+    this.cursor = idx >= 0 ? idx : Math.min(this.cursor, Math.max(0, this.visible.length - 1));
+    this.updateSpace();
+  }
+
+  /** Check the results again: items deleted or moved away drop out, the rest
+   *  show their new size and date. */
+  private async refreshResults() {
+    const r = this.results;
+    if (!r) return;
+    const keep = this.current?.path;
+    const checked = await Promise.all(
+      this.entries.map((e) =>
+        api.stat({ fs: r.base.fs, path: e.path }).then(
+          (fresh) => fresh,
+          (err) => (errorKind(err) === "notFound" ? null : e),
+        ),
+      ),
+    );
+    if (this.results?.search !== r.search || this.results.base.path !== r.base.path) return; // the user went elsewhere meanwhile
+    this.entries = checked.filter((e): e is Entry => e !== null);
+    const paths = new Set(this.entries.map((e) => e.path));
+    for (const p of [...this.selected]) if (!paths.has(p)) this.selected.delete(p);
+    const idx = keep ? this.visible.findIndex((e) => e.path === keep) : -1;
     this.cursor = idx >= 0 ? idx : Math.min(this.cursor, Math.max(0, this.visible.length - 1));
     this.updateSpace();
   }
@@ -256,6 +351,7 @@ export class PaneState {
   }
 
   async up() {
+    if (this.results) return this.leaveResults();
     if (!this.location) return;
     const parent = await api.parentLocation(this.location);
     if (!parent || parent.path === this.location.path) return;
@@ -324,6 +420,12 @@ export class PaneState {
       this.sortAsc = true;
     }
   }
+}
+
+/** `entries` without repeated paths, keeping the first of each. */
+function dedupe(entries: Entry[]): Entry[] {
+  const seen = new Set<string>();
+  return entries.filter((e) => !seen.has(e.path) && (seen.add(e.path), true));
 }
 
 /** The tabs of one side of the window. */

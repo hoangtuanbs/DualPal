@@ -5,6 +5,7 @@
   import type { PaneGroup, SortKey } from "./pane-state.svelte";
   import { fsNames } from "./fs-names.svelte";
   import { drag, dragging, fromKeyboard, type DropTarget } from "./drag.svelte";
+  import type { FindSession } from "./find-session.svelte";
 
   let {
     group,
@@ -13,6 +14,7 @@
     onfocus,
     oncontext,
     ondrop,
+    search,
   }: {
     group: PaneGroup;
     /** 0 = left pane, 1 = right pane. */
@@ -23,9 +25,14 @@
     oncontext: (x: number, y: number, entry: Entry | null) => void;
     /** Dragged items let go over a folder. */
     ondrop: (items: Entry[], from: Location, target: DropTarget, move: boolean) => void;
+    /** The Find dialog's search, whose results a pane may be showing. */
+    search?: FindSession;
   } = $props();
+
   const pane = $derived(group.current);
   const side = $derived(index === 0 ? "left" : "right");
+  /** The search behind the results shown, while it is the latest one. */
+  const live = $derived(pane.results && search && search.id === pane.results.search ? search : null);
 
   /** Icon grid cell width incl. gap, in px. */
   const CELL = 112;
@@ -264,7 +271,7 @@
   data-pane={index}
   data-testid={`pane-${side}`}
   data-fs={pane.location?.fs}
-  data-path={pane.location?.path}
+  data-path={pane.results ? undefined : pane.location?.path}
   data-title={pane.title}
   onclick={onfocus}
 >
@@ -288,6 +295,19 @@
       <button title="Forward" disabled={!pane.canForward} onclick={() => pane.forward()}>›</button>
       <button title="Enclosing folder (Backspace)" onclick={() => pane.up()}>↑</button>
     </div>
+    {#if pane.results}
+      <div class="results-bar" data-testid={`pane-${side}-results`} role="status">
+        <span class="results-title" title={pane.results.base.path}>
+          Search results for “{pane.results.label}” in {pane.results.base.path}
+        </span>
+        {#if live?.searching}
+          <span class="spinner" aria-hidden="true"></span>
+          <span class="results-progress">{live.folders.toLocaleString()} folders{live.files ? `, ${live.files.toLocaleString()} files` : ""}</span>
+          <button class="results-action" onclick={() => live?.stop()}>Stop</button>
+        {/if}
+        <button class="results-action" title="Back to the folder (Backspace)" aria-label="Close search results" onclick={() => pane.leaveResults()}>×</button>
+      </div>
+    {:else}
     <nav class="crumbs" aria-label="Path" data-testid={`pane-${side}-crumbs`} bind:this={crumbsEl}>
       {#each crumbs as c, i (c.path)}
         {#if i > 0}<span class="sep">›</span>{/if}
@@ -297,6 +317,7 @@
         >
       {/each}
     </nav>
+    {/if}
   </header>
 
   {#if pane.view === "list"}
@@ -342,7 +363,7 @@
     {#if pane.error}
       <p class="message error" data-testid={`pane-${side}-error`}>{pane.error}</p>
     {:else if pane.visible.length === 0 && !pane.loading}
-      <p class="message">{pane.filter ? "No items match the filter." : "This folder is empty."}</p>
+      <p class="message">{pane.filter ? "No items match the filter." : pane.results ? (live?.searching ? "Searching…" : "No matches.") : "This folder is empty."}</p>
     {/if}
     {#each pane.visible as entry, i (entry.path)}
       {#if pane.view === "list"}
@@ -359,7 +380,7 @@
           role="option"
           aria-selected={pane.selected.has(entry.path)}
           tabindex="-1"
-          title={entry.modifiedMs != null ? `${entry.name} — modified ${formatDate(entry.modifiedMs)}` : entry.name}
+          title={entry.modifiedMs != null ? `${pane.results ? entry.path : entry.name} — modified ${formatDate(entry.modifiedMs)}` : pane.results ? entry.path : entry.name}
           onclick={(e) => click(e, entry, i)}
           ondblclick={() => pane.activate(entry)}
           onpointerdown={(e) => pointerdown(e, entry, i)}
@@ -367,7 +388,7 @@
         >
           <span class="name">
             <span class="icon" aria-hidden="true">{glyph(entry)}</span>
-            <span class="label">{entry.name}</span>
+            <span class="label">{pane.results ? pane.displayName(entry) : entry.name}</span>
             {#if entry.symlink}<span class="badge" title="Symbolic link">↪</span>{/if}
           </span>
           <span class="size">{sizeText(entry)}</span>
@@ -387,7 +408,7 @@
           role="option"
           aria-selected={pane.selected.has(entry.path)}
           tabindex="-1"
-          title={entry.name}
+          title={pane.results ? entry.path : entry.name}
           onclick={(e) => click(e, entry, i)}
           ondblclick={() => pane.activate(entry)}
           onpointerdown={(e) => pointerdown(e, entry, i)}
@@ -438,6 +459,47 @@
     height: 24px;
     border-radius: 6px;
     font-size: 15px;
+  }
+  .results-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .results-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .results-progress {
+    white-space: nowrap;
+  }
+  .results-action {
+    padding: 1px 6px;
+    border-radius: 5px;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .spinner {
+    width: 9px;
+    height: 9px;
+    flex-shrink: 0;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .crumbs {
     display: flex;

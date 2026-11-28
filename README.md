@@ -94,7 +94,8 @@ npm run test:unit                    # L5 UI unit/component tests
 | Shift F8 / Shift Delete | Delete permanently (asks first) |
 | + / − | Select / deselect by name pattern (e.g. `*.jpg; *.png`) |
 | Ctrl/⌘ F | Filter the list by name (`*` and `?` as wildcards); Enter moves to the list, Esc clears |
-| Ctrl/⌘ Shift F | Find files and folders by name below the current folder; matches appear as they are found |
+| Ctrl/⌘ Shift F | Find files and folders below the current folder by name, text inside, size or date; matches appear as they are found (see [Find](#find)) |
+| Ctrl/⌘ Enter (in Find) | Show the matches in the active pane as a flat list; Backspace returns to the folder |
 | Ctrl/⌘ 1 / Ctrl/⌘ 2 | List / icon view |
 | Ctrl/⌘ T, Ctrl/⌘ W | New tab / close tab |
 | Ctrl Tab, Ctrl Shift Tab | Next / previous tab |
@@ -107,6 +108,15 @@ npm run test:unit                    # L5 UI unit/component tests
 | Ctrl/⌘ Shift Y | Compare & Sync the folders of both panes |
 | Ctrl/⌘ Shift D | Compare two files in your compare app |
 | Ctrl/⌘ Shift L | Synchronized browsing on / off |
+
+## Find
+
+**Ctrl/⌘ Shift F** searches the current folder and everything below it, on this computer or on a server. Matches appear as they are found, shallowest first, and the search can be stopped at any time.
+
+- **Name**: part of a name (`report`), or masks such as `*.rs;*.toml` (a mask with `*` or `?` matches the whole name). Leave it empty to search by text, size or date alone.
+- **Containing text**: finds files with that text in them and shows the first matching line. Files are read in pieces, so big files are fine. Files that look binary (a NUL byte in the first 8 KB) are skipped unless *Search binary files* is on. On servers each file has to be downloaded, so files over 10 MB are not searched for text (the status line says how many were left out).
+- **Options**: *Ignore case*, *Regex in name* and *Regex in text* (regular expressions; text is matched one line at a time), *Files only* or *Folders only*, *Hidden items* (on when the pane shows hidden files), a size range (`500 KB` to `2 MB`), and the modified date (today, the last 7 or 30 days, or on/after or before a day). `.git`, `node_modules` and similar tool folders are not searched inside.
+- **Show in pane** (or **Ctrl/⌘ Enter**) puts the matches into the active pane as a flat list, each with its path below the folder searched. Copy, move, delete, view and open them as usual; *Show in Folder* in the right-click menu opens the folder of a match. While the search is still running, new matches join the list and a bar at the top shows its progress with *Stop*. Backspace, Back or opening a folder goes back to browsing. Closing the dialog does not stop the search: open it again to see where it is.
 
 ## Servers (SFTP, FTP, WebDAV and S3)
 

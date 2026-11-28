@@ -40,6 +40,7 @@
   import MultiRename from "./lib/MultiRename.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import FindDialog from "./lib/FindDialog.svelte";
+  import { FindSession } from "./lib/find-session.svelte";
   import Insights from "./lib/Insights.svelte";
   import Icon from "./lib/Icon.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
@@ -152,6 +153,10 @@
   let renaming = $state<{ items: Entry[]; folder: Location; others: string[] } | null>(null);
   let showPalette = $state(false);
   let showFind = $state(false);
+  /** The Find dialog's search. It keeps running when the dialog closes, and
+   *  panes showing its results receive new matches as they are found. */
+  const findSession = new FindSession();
+  findSession.onhits = (id, hits) => allPanes().forEach((p) => p.addResults(id, hits));
   let showInsights = $state(false);
   let aboutPage = $state<"about" | "donate" | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
@@ -819,7 +824,7 @@
       { id: "edit", group: "File", title: "Edit in Editor", shortcut: "F4", run: editInEditor },
       { id: "terminal", group: "File", title: "Open Terminal Here", shortcut: `${MOD}Shift+T`, run: openTerminal },
       { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
-      { id: "find", group: "File", title: "Find files by name…", shortcut: `${MOD}Shift+F`, run: () => (showFind = true) },
+      { id: "find", group: "File", title: "Find files…", shortcut: `${MOD}Shift+F`, run: () => (showFind = true) },
       { id: "trash", group: "File", title: "Move to Trash", shortcut: "F8", run: trash },
       { id: "delete", group: "File", title: "Delete Permanently", shortcut: "Shift+Delete", run: remove },
       { id: "compareFolders", group: "Compare", title: "Compare & Sync Folders…", shortcut: `${MOD}Shift+Y`, run: compareFolders },
@@ -975,6 +980,10 @@
   function transfer(type: "copy" | "move") {
     const sources = locationsOf(active);
     if (!sources.length || !other.location) return;
+    if (other.results) {
+      notice = "The other pane shows search results. Go back to a folder there to copy or move into it.";
+      return;
+    }
     enqueue({ type, sources, destination: other.location, conflict: "fail" });
   }
 
@@ -1016,9 +1025,20 @@
     };
   }
 
+  /** Show the Find dialog's matches in the active pane as a flat list. */
+  function feedResults(session: FindSession) {
+    const base = session.base;
+    if (!base) return;
+    const f = session.form;
+    const name = f.name.trim();
+    const label = [name, f.content ? `containing “${f.content}”` : ""].filter(Boolean).join(" ") || "files";
+    showFind = false;
+    active.showResults(base, label, session.hits, session.id);
+  }
+
   function newFolder() {
     const loc = active.location;
-    if (!loc) return;
+    if (!loc || active.results) return;
     dialog = {
       title: "New folder",
       input: "untitled folder",
@@ -1115,6 +1135,9 @@
         : { label: `Open ${files.length} Files`, disabled: !files.length, run: () => openFiles(false) },
       ...(single?.kind === "dir" && active.location
         ? [{ label: "Open in New Tab", icon: "new-tab", run: () => openInNewTab(single) }]
+        : []),
+      ...(single && active.results
+        ? [{ label: "Show in Folder", icon: "folder-open", run: () => active.showInFolder(single) }]
         : []),
       {
         label: files.length > 1 ? `Edit ${files.length} Files` : "Edit in Editor",
@@ -1608,6 +1631,7 @@
           onfocus={() => (activeIndex = i)}
           oncontext={openMenu}
           ondrop={dropped}
+          search={findSession}
         />
       {/each}
     </main>
@@ -1711,6 +1735,9 @@
 {#if showFind && active.location}
   <FindDialog
     location={active.location}
+    session={findSession}
+    showHidden={active.showHidden}
+    onfeed={feedResults}
     onclose={() => (showFind = false)}
     onopen={async (hit) => {
       showFind = false;

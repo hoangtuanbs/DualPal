@@ -365,15 +365,36 @@ const handlers: Record<string, Handler> = {
     const here = t.get(loc.path);
     if (!here || here.kind !== "dir") throw { kind: "notFound", message: `not found: ${loc.path}` };
     const q = String(a.query).trim().toLowerCase();
+    // A small part of the core's criteria: text inside, kind, hidden, size.
+    const c = a.criteria ?? {};
+    const text = String(c.content ?? "");
+    const ic = c.ignoreCase !== false;
     const prefix = loc.path === "/" ? "/" : `${loc.path}/`;
-    const hits: Entry[] = [];
-    if (q) {
+    const hits: (Entry & { snippet?: { line: number; text: string } })[] = [];
+    let filesRead = 0;
+    if (q || text || c.minSize != null || c.maxSize != null) {
       // Shallowest first, like the core search.
       const depth = (p: string) => p.split("/").length;
       const sorted = [...t.entries()].filter(([p]) => p !== loc.path && p.startsWith(prefix)).sort((x, y) => depth(x[0]) - depth(y[0]));
-      for (const [, e] of sorted) if (e.name.toLowerCase().includes(q)) hits.push({ ...e });
+      for (const [, e] of sorted) {
+        if (q && !e.name.toLowerCase().includes(q)) continue;
+        if (c.includeHidden === false && e.hidden) continue;
+        if (c.kind === "files" && e.kind !== "file") continue;
+        if (c.kind === "folders" && e.kind !== "dir") continue;
+        if ((c.minSize != null || c.maxSize != null) && (e.kind !== "file" || e.size < (c.minSize ?? 0) || e.size > (c.maxSize ?? Infinity))) continue;
+        const { content, ...entry } = e;
+        if (!text) {
+          hits.push({ ...entry });
+          continue;
+        }
+        if (e.kind !== "file") continue;
+        filesRead++;
+        const lines = (content ?? "").split("\n");
+        const i = lines.findIndex((l) => (ic ? l.toLowerCase().includes(text.toLowerCase()) : l.includes(text)));
+        if (i >= 0) hits.push({ ...entry, snippet: { line: i + 1, text: lines[i].trim() } });
+      }
     }
-    return { hits, truncated: false, skipped: 0 };
+    return { hits, truncated: false, skipped: 0, filesRead, filesSkipped: 0, tooLarge: 0, binary: 0 };
   },
   cancel_find_files: () => null,
   run_sync: () => "op-1",

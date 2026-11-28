@@ -634,6 +634,26 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | DIFF-005 | detect finds a fake tool on PATH | P1 | NEW | put `meld` (shell script) in a temp dir on PATH → detected |
 | DIFF-006 | compare_files downloads remote files first | P1 | NEW (L4) | PREP-04 log lists two local paths whose contents equal the remote files |
 
+### 8.11.1 Search — `SEARCH`
+
+Core tests in `crates/dualpal-core/src/search.rs` (unit) and `crates/dualpal-core/tests/search.rs` (MemFs and FaultyFs stand in for a server).
+
+| ID | Title | P | Status | Assert |
+|---|---|---|---|---|
+| SEARCH-001 | text match found wherever the chunks are cut | P0 | NEW | chunk sizes 1…39: line 51 found, snippet is the line |
+| SEARCH-002 | regex matches one line at a time; a last line without `\n` counts; `\r` is not part of a line | P1 | NEW | |
+| SEARCH-003 | NUL in the first 8 KB = binary, also after a matching line; later NULs do not count; include_binary searches it | P0 | NEW | |
+| SEARCH-004 | a line longer than 1 MB is searched in pieces with overlap; snippet is cut around the match | P1 | NEW | |
+| SEARCH-005 | name masks (`*.rs;*.toml`, `?`, plain substring, regex specials literal), name regex, bad regex is `invalid` | P0 | NEW | |
+| SEARCH-006 | content search on a "server" across the 64 KB chunk boundary, case sensitivity | P0 | NEW | MemFs |
+| SEARCH-007 | binary files skipped and counted unless included | P0 | NEW | |
+| SEARCH-008 | regex in names and in text; invalid text regex → `invalid` | P1 | NEW | |
+| SEARCH-009 | size, date, kind and hidden filters; kind alone finds nothing | P0 | NEW | |
+| SEARCH-010 | server files over the content limit are not opened | P0 | NEW | FaultyFs read count |
+| SEARCH-011 | a file that cannot be read is counted, the search goes on | P1 | NEW | FaultyFs fail_next(OpenRead) |
+| SEARCH-012 | cancelling while files are read stops at once; progress counts files | P0 | NEW | FaultyFs latency |
+| SEARCH-013 | local content search streams a file bigger than one chunk, with no size limit | P1 | NEW | |
+
 ### 8.12 Tauri command layer — `CMD` (L4)
 
 New folder `src-tauri/tests/` with `common/mod.rs` that builds the app:
@@ -696,6 +716,7 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
 | CMD-039 | `latest_release` reads GitHub's latest release (tag, page, date) from `DUALPAL_RELEASES_URL` and sends a User-Agent | P1 | |
 | CMD-040 | `apply_upgrade` needs a finished `download_upgrade`; `download_upgrade` refuses a version that is no longer the newest release | P1 | |
+| CMD-070 | `find_files(location, query, criteria, request)` returns hits with `snippet {line,text}` and `filesRead`/`binary` counts; bad regex → `invalid` | P0 | |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
@@ -719,6 +740,13 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-014 | `PaneState.navigated` hook fires (linked browsing) | P1 | |
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
+| UI-UNIT-050 | Find form helpers: `parseSize`, date presets, `toCriteria`, `hasCriteria` | P1 | |
+| UI-UNIT-051 | `api.findFiles` passes `criteria`; mock returns snippets | P0 | |
+| UI-UNIT-052 | `PaneState` search results: relative names, real locations, later matches join, up/Back/opening a folder leave, refresh drops deleted, Show in Folder | P0 | |
+| UI-UNIT-053 | `FindDialog` text + options → criteria; snippet and files-read status | P0 | |
+| UI-UNIT-054 | `FindDialog` bad size / bad regex shown instead of results | P1 | |
+| UI-UNIT-055 | `FindDialog` Show in pane / Ctrl/⌘ Enter; search keeps running after the dialog closes; server size note | P0 | |
+| UI-UNIT-056 | `Pane` results bar (progress, Stop, close) and relative-path rows | P1 | |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
 | UI-CMP-003 | `CommandPalette` fuzzy filter, arrow keys, Enter runs, lists servers/favorites/syncs | P0 | |
@@ -773,6 +801,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-KEY-028 | Ctrl/⌘ Shift L | linked browsing toggles; entering folder in one pane enters same name in other |
 | UI-KEY-029 | shortcuts ignored while typing in an input/editor | F5 inside rename prompt does not copy |
 | UI-KEY-030 | shortcuts disabled while auto-sync locks panes (`frozen`) | F5/F6/F8 make no calls |
+| UI-KEY-050 | Ctrl/⌘ Enter (in Find) | matches shown in the pane with relative paths; Backspace returns |
 
 **Mouse**
 
@@ -826,6 +855,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-E2E-029 | Windows path scenario: `C:\Users\…` breadcrumbs and parent navigation | P1 | scenario "windows-paths" |
 | UI-E2E-030 | 5 000 entries render and scroll; cursor End reaches last | P1 | |
 | UI-E2E-031 | unsaved state survives nothing unexpected: reload restores favorites/servers from backend, not localStorage | P2 | |
+| UI-E2E-070 | text search → Show in pane → F5 copies from the real path; copying into the results pane is refused; Back returns | P0 | |
 
 ### 8.15 Full-stack desktop E2E — `DESK` (L7)
 
@@ -1133,6 +1163,7 @@ cargo insta review
 | Feature (README) | Test IDs |
 |---|---|
 | Two-pane browsing, tabs, views, sort, hidden | UI-UNIT-009…012, UI-KEY-001/002/018…021/024, UI-MOUSE-009/010, UI-E2E-001, DESK-001 |
+| Find (name, text, filters, results in a pane) | SEARCH-*, CMD-037/070, UI-UNIT-050…056, UI-KEY-031/050, UI-E2E-070 |
 | Folder disappears → nearest parent | UI-UNIT-013, UI-E2E-006, DESK-014 |
 | Selection and patterns | UI-UNIT-006/011, UI-KEY-005…007/017, UI-MOUSE-001, UI-E2E-021 |
 | Copy / move / conflicts / progress / cancel | OPS-COPY-*, OPS-MOVE-*, OPS-Q-*, CMD-006/007, UI-KEY-012/013, UI-E2E-002…005, DESK-002/003/005 |

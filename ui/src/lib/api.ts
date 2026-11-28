@@ -38,21 +38,59 @@ export interface FolderSize {
   skipped: number;
 }
 
-/** Name matches below a folder, from `find_files`. */
+/** Where a text search matched in a file: the first matching line. */
+export interface Snippet {
+  /** Line number, from 1. */
+  line: number;
+  text: string;
+}
+
+/** A match of `find_files`: the entry, and for a text search, the line that matched. */
+export interface SearchHit extends Entry {
+  snippet?: Snippet | null;
+}
+
+/** What `find_files` looks for besides the name (see the core's SearchCriteria). */
+export interface SearchCriteria {
+  nameRegex?: boolean;
+  /** Text inside files; empty searches names only. */
+  content?: string;
+  contentRegex?: boolean;
+  ignoreCase?: boolean;
+  includeBinary?: boolean;
+  minSize?: number | null;
+  maxSize?: number | null;
+  newerThanMs?: number | null;
+  olderThanMs?: number | null;
+  kind?: "any" | "files" | "folders";
+  includeHidden?: boolean;
+}
+
+/** Matches below a folder, from `find_files`. */
 export interface SearchResult {
-  hits: Entry[];
+  hits: SearchHit[];
   /** The result cap was reached, so more matches may exist. */
   truncated: boolean;
   /** Subfolders that could not be read and are not searched. */
   skipped: number;
+  /** Files whose text was searched. */
+  filesRead?: number;
+  /** Files that could not be read for a text search. */
+  filesSkipped?: number;
+  /** Server files too large to search for text. */
+  tooLarge?: number;
+  /** Files left out of a text search because they look binary. */
+  binary?: number;
 }
 
 /** Matches found so far by search `request` (`find-files-progress`). */
 export interface FindProgress {
   request: number;
-  hits: Entry[];
+  hits: SearchHit[];
   /** Folders read so far. */
   folders: number;
+  /** Files whose text was read so far. */
+  files?: number;
 }
 
 export type ConflictPolicy = "fail" | "skip" | "overwrite";
@@ -490,9 +528,10 @@ export const api = {
   /** Size of a folder. `request` names the calculation for `cancelFolderSize`. */
   folderSize: (location: Location, request: number) => invoke<FolderSize>("folder_size", { location, request }),
   cancelFolderSize: (request: number) => invoke<void>("cancel_folder_size", { request }),
-  /** Search names below `location`. `request` names the search for `cancelFindFiles`. */
-  findFiles: (location: Location, query: string, request: number) =>
-    invoke<SearchResult>("find_files", { location, query, request }),
+  /** Search below `location` for names matching `query` (and `criteria`, when
+   *  given). `request` names the search for `cancelFindFiles`. */
+  findFiles: (location: Location, query: string, request: number, criteria?: SearchCriteria) =>
+    invoke<SearchResult>("find_files", criteria ? { location, query, criteria, request } : { location, query, request }),
   cancelFindFiles: (request: number) => invoke<void>("cancel_find_files", { request }),
   readText: (location: Location, maxBytes: number) => invoke<TextFile>("read_text", { location, maxBytes }),
   writeText: (location: Location, text: string) => invoke<void>("write_text", { location, text }),

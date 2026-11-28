@@ -1278,3 +1278,54 @@ fn find_files_matches_names_and_cancel() {
 
     call_ok(&app, "cancel_find_files", json!({ "request": 99 }));
 }
+
+/// CMD-070 — find_files with criteria: text inside files comes back with a
+/// snippet in camelCase JSON, filters apply, and a bad regex is `invalid`.
+#[test]
+fn find_files_searches_contents_with_criteria() {
+    let TestApp { app, tmp } = app();
+    let dir = tmp.path().join("d");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/main.rs"),
+        "fn main() {\n    println!(\"Hello\");\n}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+    std::fs::write(dir.join("hello.bin"), b"\x00hello").unwrap();
+    std::fs::write(dir.join("notes.txt"), "hello there").unwrap();
+
+    let found: Value = call(
+        &app,
+        "find_files",
+        json!({
+            "location": local(&dir.to_string_lossy()),
+            "query": "*.rs;*.bin",
+            "criteria": { "content": "hello", "kind": "files", "maxSize": 1000 },
+            "request": 3
+        }),
+    )
+    .unwrap();
+    let hits = found["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1, "{found}");
+    assert_eq!(hits[0]["name"], "main.rs");
+    assert_eq!(
+        hits[0]["snippet"],
+        json!({ "line": 2, "text": "println!(\"Hello\");" })
+    );
+    assert_eq!(found["filesRead"], 3);
+    assert_eq!(found["binary"], 1);
+
+    let bad = call::<Value>(
+        &app,
+        "find_files",
+        json!({
+            "location": local(&dir.to_string_lossy()),
+            "query": "",
+            "criteria": { "content": "(", "contentRegex": true },
+            "request": 4
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(bad["kind"], "invalid");
+}

@@ -170,4 +170,14 @@ describe("find files", () => {
     await api.cancelFindFiles(9);
     expect(mock.lastCall("cancel_find_files")).toEqual({ request: 9 });
   });
+
+  it("UI-UNIT-051 passes search criteria and returns snippets", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/d/": "", "/d/a.rs": "fn main() {\n  hello()\n}", "/d/b.rs": "nothing", "/d/hello/": "" }));
+    const criteria = { content: "HELLO", kind: "files" as const };
+    const res = await api.findFiles({ fs: "local", path: "/d" }, "", 10, criteria);
+    expect(mock.lastCall("find_files")).toEqual({ location: { fs: "local", path: "/d" }, query: "", criteria, request: 10 });
+    expect(res.hits.map((h) => [h.name, h.snippet])).toEqual([["a.rs", { line: 2, text: "hello()" }]]);
+    expect(res.filesRead).toBe(2);
+  });
 });
