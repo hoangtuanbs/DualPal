@@ -372,3 +372,51 @@ test.describe("UI-E2E compare", () => {
     await expect.poll(async () => (await calls(page, "sync_plan")).length).toBe(before + 2);
   });
 });
+
+test.describe("UI-E2E find", () => {
+  test("UI-E2E-070 text search fed to a pane: copy uses real paths, copying into it is refused, Back returns", async ({ page }) => {
+    await openApp(page);
+    await rightInDocs(page);
+    await point(page, "left", "a.txt");
+    await page.keyboard.press(`${MOD}+Shift+f`);
+    const find = page.getByRole("dialog", { name: "Find files" });
+    await find.getByRole("textbox", { name: "Containing text" }).fill("ALPHA");
+    await expect(find.getByRole("option", { name: /notes\.txt/ })).toContainText("1: alpha");
+    expect((await calls(page, "find_files")).at(-1)).toMatchObject({
+      location: { fs: "local", path: "/home/user" },
+      query: "",
+      criteria: { content: "ALPHA", ignoreCase: true },
+    });
+    await find.getByRole("button", { name: "Show in pane" }).click();
+    await expect(page.getByTestId("pane-left-results")).toBeVisible();
+    await expect(pane(page, "left").locator(".label")).toHaveText(["docs/notes.txt"]);
+
+    // F5 copies the match from where it really is; the other pane is the destination.
+    await page.getByTestId("pane-left-list").focus();
+    await clearCalls(page);
+    await page.keyboard.press("F5");
+    await expect.poll(() => enqueued(page)).toEqual([
+      {
+        type: "copy",
+        sources: [{ fs: "local", path: "/home/user/docs/notes.txt" }],
+        destination: { fs: "local", path: "/home/user/docs" },
+        conflict: "fail",
+      },
+    ]);
+
+    // Copying into a pane that shows results is refused.
+    await page.keyboard.press("Tab");
+    await point(page, "right", "report.pdf");
+    await clearCalls(page);
+    await page.keyboard.press("F5");
+    await expect(page.getByText(/shows search results/)).toBeVisible();
+    expect(await enqueued(page)).toEqual([]);
+
+    // Back on the results pane, Back returns to the folder.
+    await page.keyboard.press("Tab");
+    await page.getByTestId("pane-left").getByTitle("Back", { exact: true }).click();
+    await expect(page.getByTestId("pane-left-results")).toHaveCount(0);
+    await expect(row(page, "left", "a.txt")).toBeVisible();
+  });
+});
+

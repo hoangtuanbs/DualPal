@@ -339,12 +339,26 @@ export function installBrowserMock(scenario: BrowserScenario) {
       const t = fsOf(a.location.fs);
       if (!t.dirs.has(a.location.path)) throw t.notFound(a.location.path);
       const q = String(a.query).trim().toLowerCase();
-      const hits = q
-        ? t.subtree(a.location.path)
-            .filter(([rel]) => rel !== "" && t.base(rel).toLowerCase().includes(q))
-            .map(([rel]) => t.entry(a.location.path + rel))
-        : [];
-      return { hits, truncated: false, skipped: 0 };
+      // Text inside files, a small part of the core's criteria.
+      const text = String(a.criteria?.content ?? "").toLowerCase();
+      const hits: (Entry & { snippet?: { line: number; text: string } })[] = [];
+      let filesRead = 0;
+      if (q || text) {
+        for (const [rel, content, dir] of t.subtree(a.location.path)) {
+          if (rel === "" || (q && !t.base(rel).toLowerCase().includes(q))) continue;
+          const e = t.entry(a.location.path + rel);
+          if (!text) {
+            hits.push(e);
+            continue;
+          }
+          if (dir) continue;
+          filesRead++;
+          const lines = content.split("\n");
+          const i = lines.findIndex((l) => l.toLowerCase().includes(text));
+          if (i >= 0) hits.push({ ...e, snippet: { line: i + 1, text: lines[i].trim() } });
+        }
+      }
+      return { hits, truncated: false, skipped: 0, filesRead, filesSkipped: 0, tooLarge: 0, binary: 0 };
     },
     cancel_find_files: () => null,
     parent_location: (a) => {

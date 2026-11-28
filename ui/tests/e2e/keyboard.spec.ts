@@ -401,6 +401,22 @@ test.describe("UI-KEY keyboard", () => {
     await expect(find).toHaveCount(0);
   });
 
+  test("UI-KEY-050 Ctrl/Cmd Enter in Find shows the matches in the pane; Backspace goes back", async ({ page }) => {
+    await start(page);
+    await page.keyboard.press(`${MOD}+Shift+f`);
+    const find = page.getByRole("dialog", { name: "Find files" });
+    await find.getByRole("textbox", { name: "Find files named" }).fill(".txt");
+    await expect(find.getByRole("option", { name: /notes\.txt/ })).toBeVisible();
+    await page.keyboard.press(`${MOD}+Enter`);
+    await expect(find).toHaveCount(0);
+    await expect(page.getByTestId("pane-left-results")).toContainText("Search results for “.txt”");
+    // Each match shows its path below the folder searched.
+    await expect(pane(page, "left").locator(".label", { hasText: "docs/notes.txt" })).toBeVisible();
+    await page.keyboard.press("Backspace");
+    await expect(page.getByTestId("pane-left-results")).toHaveCount(0);
+    await expect(row(page, "left", "docs")).toBeVisible();
+  });
+
   test("UI-KEY-032 Space on a folder marks it and calculates its size", async ({ page }) => {
     await start(page);
     await point(page, "left", "docs");
