@@ -1,8 +1,10 @@
 use dualpal_core::folder_size::FolderSize;
+use dualpal_core::ops::FailedItem;
 use dualpal_core::places::Favorite;
 use dualpal_core::search::{SearchOptions, SearchResult};
 use dualpal_core::{
-    ActivityRecord, CancellationToken, Entry, Error, Location, Operation, OperationInfo,
+    ActivityRecord, CancellationToken, ConflictPolicy, Entry, Error, Location, Operation,
+    OperationInfo, TransferOptions,
 };
 use serde::Serialize;
 use tauri::State;
@@ -70,8 +72,85 @@ pub fn parent_location(
 pub async fn enqueue_operation(
     state: State<'_, AppState>,
     operation: Operation,
+    options: Option<TransferOptions>,
 ) -> CmdResult<Uuid> {
-    Ok(state.queue.enqueue(operation))
+    Ok(state
+        .queue
+        .enqueue_with(operation, options.unwrap_or_default()))
+}
+
+/// Pause an operation after the chunk it is writing.
+#[tauri::command]
+pub fn pause_operation(state: State<'_, AppState>, id: Uuid) -> bool {
+    state.queue.pause(id)
+}
+
+/// Resume a paused operation, or start one kept from the last run. Async so
+/// that it runs on the Tokio runtime.
+#[tauri::command]
+pub async fn resume_operation(state: State<'_, AppState>, id: Uuid) -> CmdResult<bool> {
+    Ok(state.queue.resume(id))
+}
+
+#[tauri::command]
+pub fn set_queue_paused(state: State<'_, AppState>, paused: bool) {
+    state.queue.set_queue_paused(paused)
+}
+
+#[tauri::command]
+pub fn queue_paused(state: State<'_, AppState>) -> bool {
+    state.queue.queue_paused()
+}
+
+/// Set the global bandwidth limit (bytes per second, 0 for none) and keep it
+/// in the settings.
+#[tauri::command]
+pub fn set_bandwidth_limit(state: State<'_, AppState>, bytes_per_sec: u64) -> CmdResult<()> {
+    let mut s = state.settings.get();
+    s.bandwidth_limit = (bytes_per_sec > 0).then_some(bytes_per_sec);
+    state.settings.set(s)?;
+    state.queue.set_bandwidth_limit(bytes_per_sec);
+    Ok(())
+}
+
+/// Give one operation its own limit (0 for none), or `null` for the global one.
+#[tauri::command]
+pub fn set_operation_limit(
+    state: State<'_, AppState>,
+    id: Uuid,
+    bytes_per_sec: Option<u64>,
+) -> bool {
+    state.queue.set_operation_limit(id, bytes_per_sec)
+}
+
+#[tauri::command]
+pub fn failed_items(state: State<'_, AppState>, id: Uuid) -> Vec<FailedItem> {
+    state.queue.failed_items(id)
+}
+
+/// Copy or move the failed items of `id` again as a new operation.
+#[tauri::command]
+pub async fn retry_failed(
+    state: State<'_, AppState>,
+    id: Uuid,
+    conflict: Option<ConflictPolicy>,
+) -> CmdResult<Uuid> {
+    state
+        .queue
+        .retry_failed(id, conflict)
+        .ok_or_else(|| Error::Invalid("nothing to retry".into()))
+}
+
+/// Save the list of failed items of `id` as a new text file at `location`.
+#[tauri::command]
+pub async fn save_failure_report(
+    state: State<'_, AppState>,
+    id: Uuid,
+    location: Location,
+) -> CmdResult<()> {
+    let text = dualpal_core::ops::failure_report(&state.queue.failed_items(id));
+    let fs = state.registry.get(&location.fs)?;
+    dualpal_core::vfs::create_text(fs.as_ref(), &location.path, &text).await
 }
 
 #[tauri::command]

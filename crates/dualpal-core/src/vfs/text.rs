@@ -49,6 +49,34 @@ pub async fn read_text(fs: &dyn FileSystem, path: &str, max_bytes: usize) -> Res
     })
 }
 
+/// Save text as a new file at `path`; an existing file is not replaced
+/// (`alreadyExists`). Written under a temporary name and renamed when done.
+pub async fn create_text(fs: &dyn FileSystem, path: &str, text: &str) -> Result<()> {
+    if fs.exists(path).await? {
+        return Err(Error::AlreadyExists(path.to_string()));
+    }
+    let dir = fs
+        .parent(path)
+        .ok_or_else(|| Error::Invalid(format!("cannot save {path}")))?;
+    let name = fs.file_name(path).unwrap_or_default();
+    let tmp = fs.join(&dir, &format!(".{name}.dualpal-save"));
+    let result = async {
+        let mut w = fs.open_write(&tmp).await?;
+        w.write_all(text.as_bytes())
+            .await
+            .map_err(|e| Error::io(&tmp, e))?;
+        w.flush().await.map_err(|e| Error::io(&tmp, e))?;
+        w.shutdown().await.map_err(|e| Error::io(&tmp, e))?;
+        drop(w);
+        fs.rename(&tmp, path).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = fs.remove_file(&tmp).await;
+    }
+    result
+}
+
 /// Save text to a file. Writes a temporary sibling first and renames it over
 /// the original, so a failed save never leaves a half-written file. The
 /// original's permission bits are kept.
