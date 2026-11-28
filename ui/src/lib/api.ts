@@ -66,9 +66,32 @@ export type Operation =
   | { type: "setMode"; location: Location; mode: number }
   | { type: "createDir"; location: Location }
   | { type: "rename"; location: Location; newName: string }
-  | { type: "batchRename"; items: { location: Location; newName: string }[] };
+  | { type: "batchRename"; items: { location: Location; newName: string }[] }
+  | {
+      type: "copyItems";
+      items: { source: Location; target: Location }[];
+      isMove?: boolean;
+      conflict?: ConflictPolicy;
+    };
 
-export type OperationStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type OperationStatus = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
+
+/** Per-operation choices for copies and moves. */
+export interface TransferOptions {
+  /** Don't stop on errors: skip failed items and list them at the end. */
+  keepGoing?: boolean;
+  /** Check each copied file against its source. */
+  verify?: boolean;
+  /** Bytes per second; null or missing = the global limit, 0 = none. */
+  limit?: number | null;
+}
+
+/** An item a copy or move skipped because it failed. */
+export interface FailedItem {
+  source: Location;
+  target: Location;
+  error: ErrorInfo;
+}
 
 export interface ErrorInfo {
   kind: string;
@@ -97,6 +120,13 @@ export interface OperationInfo {
   startedMs: number | null;
   finishedMs: number | null;
   places: string[];
+  options?: TransferOptions;
+  /** Items skipped because they failed (with keepGoing). */
+  failed?: number;
+  /** Id of a server that is not connected and that this operation waits for. */
+  waitingFor?: string | null;
+  /** Kept from the last run of the app: waits for Resume or Discard. */
+  restored?: boolean;
 }
 
 export interface ActivityRecord {
@@ -227,6 +257,12 @@ export interface Settings {
   updateChecks?: boolean | null;
   /** A release the person chose to skip; the automatic check stays quiet about it. */
   skippedVersion?: string | null;
+  /** Global bandwidth limit for copies, bytes per second. Empty or 0 = none. */
+  bandwidthLimit?: number | null;
+  /** New copies and moves check each file after writing it. */
+  verifyCopies?: boolean | null;
+  /** New copies and moves don't stop on errors. */
+  keepGoing?: boolean | null;
 }
 
 /** The newest published release on GitHub. */
@@ -462,8 +498,21 @@ export const api = {
   homeLocation: () => invoke<Location>("home_location"),
   listDir: (location: Location) => invoke<Entry[]>("list_dir", { location }),
   parentLocation: (location: Location) => invoke<Location | null>("parent_location", { location }),
-  enqueue: (operation: Operation) => invoke<string>("enqueue_operation", { operation }),
+  enqueue: (operation: Operation, options?: TransferOptions) =>
+    invoke<string>("enqueue_operation", { operation, options: options ?? null }),
   cancel: (id: string) => invoke<boolean>("cancel_operation", { id }),
+  pauseOperation: (id: string) => invoke<boolean>("pause_operation", { id }),
+  resumeOperation: (id: string) => invoke<boolean>("resume_operation", { id }),
+  setQueuePaused: (paused: boolean) => invoke<void>("set_queue_paused", { paused }),
+  queuePaused: () => invoke<boolean>("queue_paused"),
+  setBandwidthLimit: (bytesPerSec: number) => invoke<void>("set_bandwidth_limit", { bytesPerSec }),
+  setOperationLimit: (id: string, bytesPerSec: number | null) =>
+    invoke<boolean>("set_operation_limit", { id, bytesPerSec }),
+  failedItems: (id: string) => invoke<FailedItem[]>("failed_items", { id }),
+  retryFailed: (id: string, conflict?: ConflictPolicy) =>
+    invoke<string>("retry_failed", { id, conflict: conflict ?? null }),
+  saveFailureReport: (id: string, location: Location) =>
+    invoke<void>("save_failure_report", { id, location }),
   operations: () => invoke<OperationInfo[]>("operations"),
   clearFinished: () => invoke<void>("clear_finished_operations"),
   activity: () => invoke<ActivityRecord[]>("activity"),

@@ -23,6 +23,7 @@
   } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import OperationsPanel from "./lib/OperationsPanel.svelte";
+  import type { TransferDefaults } from "./lib/transfers";
   import Pane from "./lib/Pane.svelte";
   import Inspector from "./lib/Inspector.svelte";
   import ContextMenu, { type MenuItem } from "./lib/ContextMenu.svelte";
@@ -116,6 +117,10 @@
   let importing = $state(false);
 
   let operations = $state<OperationInfo[]>([]);
+  /** Queue controls shown in the Operations panel. */
+  let queuePaused = $state(false);
+  let bandwidthLimit = $state(0);
+  let transferDefaults = $state<TransferDefaults>({ verify: false, keepGoing: false });
   // An update waits for queued and running file operations, and for saves
   // of files edited on a server that are still uploading.
   updates.setBusyCheck(
@@ -192,6 +197,7 @@
         }),
       );
       operations = await api.operations();
+      loadQueueControls().catch(() => {});
       activity = await api.activity();
       favorites = await api.favorites();
       volumes = await api.volumes();
@@ -953,9 +959,89 @@
     };
   }
 
+  async function loadQueueControls() {
+    const s = await api.settings();
+    bandwidthLimit = s.bandwidthLimit ?? 0;
+    transferDefaults = { verify: !!s.verifyCopies, keepGoing: !!s.keepGoing };
+    queuePaused = await api.queuePaused();
+  }
+
+  async function saveTransferDefaults(d: TransferDefaults) {
+    transferDefaults = d;
+    try {
+      const s = await api.settings();
+      await api.saveSettings({ ...s, verifyCopies: d.verify, keepGoing: d.keepGoing });
+    } catch (e) {
+      notice = errorMessage(e);
+    }
+  }
+
+  async function setBandwidthLimit(bytesPerSec: number) {
+    try {
+      await api.setBandwidthLimit(bytesPerSec);
+      bandwidthLimit = bytesPerSec;
+    } catch (e) {
+      notice = errorMessage(e);
+    }
+  }
+
+  async function setQueuePaused(paused: boolean) {
+    try {
+      await api.setQueuePaused(paused);
+      queuePaused = paused;
+    } catch (e) {
+      notice = errorMessage(e);
+    }
+  }
+
+  function askOperationLimit(id: string) {
+    const op = operations.find((o) => o.id === id);
+    const limit = op?.options?.limit;
+    dialog = {
+      title: "Limit this operation",
+      message: "KB/s for this operation. Leave empty to use the limit in the Operations panel, 0 for no limit.",
+      input: limit == null ? "" : String(Math.round(limit / 1024)),
+      allowEmpty: true,
+      confirmLabel: "Set",
+      onconfirm: (text) => {
+        const t = text.trim();
+        const n = t === "" ? null : Number(t);
+        if (n !== null && (!Number.isFinite(n) || n < 0)) {
+          notice = "Enter a number of KB/s.";
+          return;
+        }
+        api.setOperationLimit(id, n === null ? null : Math.round(n * 1024)).catch((e) => (notice = errorMessage(e)));
+      },
+    };
+  }
+
+  function saveFailures(id: string) {
+    const folder = active.location;
+    if (!folder) return;
+    dialog = {
+      title: "Save list of errors",
+      message: "Saves the failed items and their reasons as a text file in the current folder.",
+      input: join(folder, "errors.txt"),
+      confirmLabel: "Save",
+      onconfirm: (path) =>
+        api
+          .saveFailureReport(id, { fs: folder.fs, path })
+          .then(() => (notice = `Saved ${path}`))
+          .catch((e) => (notice = errorMessage(e))),
+    };
+  }
+
+  function retryFailed(id: string) {
+    api.retryFailed(id).catch((e) => (notice = errorMessage(e)));
+  }
+
   async function enqueue(op: Operation) {
     try {
-      const id = await api.enqueue(op);
+      const transfer = op.type === "copy" || op.type === "move";
+      const id = await api.enqueue(
+        op,
+        transfer ? { verify: transferDefaults.verify, keepGoing: transferDefaults.keepGoing } : undefined,
+      );
       requests.set(id, op);
     } catch (e) {
       notice = errorMessage(e);
@@ -1637,6 +1723,18 @@
         onclear={clearFinished}
         onclearactivity={clearActivity}
         oninsights={() => (showInsights = true)}
+        onpause={(id) => api.pauseOperation(id).catch((e) => (notice = errorMessage(e)))}
+        onresume={(id) => api.resumeOperation(id).catch((e) => (notice = errorMessage(e)))}
+        {queuePaused}
+        onpauseall={setQueuePaused}
+        {bandwidthLimit}
+        onlimit={setBandwidthLimit}
+        onoplimit={askOperationLimit}
+        defaults={transferDefaults}
+        ondefaults={saveTransferDefaults}
+        loadfailures={(id) => api.failedItems(id)}
+        onsavefailures={saveFailures}
+        onretryfailed={retryFailed}
       />
     </div>
   </div>
