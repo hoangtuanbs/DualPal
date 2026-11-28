@@ -396,6 +396,10 @@ fn operation_info_json_shape() {
         started_ms: Some(1_700_000_000_010),
         finished_ms: Some(1_700_000_000_020),
         places: vec!["local".into()],
+        options: Default::default(),
+        failed: 0,
+        waiting_for: None,
+        restored: false,
     };
     insta::assert_json_snapshot!(info, @r###"
     {
@@ -417,7 +421,15 @@ fn operation_info_json_shape() {
       "finishedMs": 1700000000020,
       "places": [
         "local"
-      ]
+      ],
+      "options": {
+        "keepGoing": false,
+        "verify": false,
+        "limit": null
+      },
+      "failed": 0,
+      "waitingFor": null,
+      "restored": false
     }
     "###);
 

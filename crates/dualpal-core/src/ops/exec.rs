@@ -1,13 +1,20 @@
 //! Executors for each [`Operation`] kind.
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::{ConflictPolicy, Inner, Operation, Progress};
+use super::limit::chunk_for;
+use super::{
+    ConflictPolicy, Control, FailedItem, Inner, ItemPair, Operation, OperationStatus, Progress,
+    TransferOptions, LIMIT_GLOBAL,
+};
 use crate::compare::{self, Side};
 use crate::error::{Error, Result};
 use crate::rename::RenameItem;
@@ -39,6 +46,20 @@ struct Job {
     // once. Never held across an await.
     progress: Mutex<Progress>,
     last_emit: Mutex<Instant>,
+    ctl: Arc<Control>,
+    options: TransferOptions,
+    /// A restored operation carrying on from an earlier run of the app.
+    resumed: bool,
+    /// The queue slot, given up while paused. An async lock, so that only one
+    /// of several copying workers gives it up and takes it back.
+    permit: tokio::sync::Mutex<Option<OwnedSemaphorePermit>>,
+}
+
+/// What the queue hands a job besides the operation.
+pub(super) struct JobParts {
+    pub ctl: Arc<Control>,
+    pub resumed: bool,
+    pub permit: OwnedSemaphorePermit,
 }
 
 pub(super) async fn run(
@@ -46,13 +67,25 @@ pub(super) async fn run(
     id: Uuid,
     cancel: CancellationToken,
     op: Operation,
+    parts: JobParts,
 ) -> Result<()> {
+    let options = inner
+        .slots
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|s| s.info.options.clone())
+        .unwrap_or_default();
     let mut job = Job {
         inner,
         id,
         cancel,
         progress: Mutex::new(Progress::default()),
         last_emit: Mutex::new(Instant::now()),
+        ctl: parts.ctl,
+        options,
+        resumed: parts.resumed,
+        permit: tokio::sync::Mutex::new(Some(parts.permit)),
     };
     let result = match op {
         Operation::Copy {
@@ -76,6 +109,11 @@ pub(super) async fn run(
         Operation::Rename { location, new_name } => job.rename(location, new_name).await,
         Operation::BatchRename { items } => job.batch_rename(items).await,
         Operation::Sync { left, right, steps } => job.sync(left, right, steps).await,
+        Operation::CopyItems {
+            items,
+            is_move,
+            conflict,
+        } => job.transfer_items(items, conflict, is_move).await,
     };
     job.emit(true);
     result
@@ -92,6 +130,85 @@ impl Job {
         } else {
             Ok(())
         }
+    }
+
+    fn paused(&self) -> bool {
+        self.ctl.paused() || self.inner.queue_paused()
+    }
+
+    /// Check for cancellation, and while the operation or the queue is
+    /// paused, give up the slot and wait.
+    async fn gate(&self) -> Result<()> {
+        self.check()?;
+        if !self.paused() {
+            return Ok(());
+        }
+        let mut permit = self.permit.lock().await;
+        if !self.paused() {
+            return self.check();
+        }
+        self.emit(true);
+        self.inner
+            .update(self.id, |i| i.status = OperationStatus::Paused);
+        permit.take();
+        let mut op_rx = self.ctl.pause.subscribe();
+        let mut q_rx = self.inner.queue_pause.subscribe();
+        loop {
+            if !*op_rx.borrow_and_update() && !*q_rx.borrow_and_update() {
+                break;
+            }
+            tokio::select! {
+                _ = op_rx.changed() => {}
+                _ = q_rx.changed() => {}
+                _ = self.cancel.cancelled() => return Err(Error::Cancelled),
+            }
+        }
+        self.inner
+            .update(self.id, |i| i.status = OperationStatus::Queued);
+        let p = tokio::select! {
+            p = self.inner.permits.clone().acquire_owned() => p.expect("semaphore never closed"),
+            _ = self.cancel.cancelled() => return Err(Error::Cancelled),
+        };
+        *permit = Some(p);
+        self.inner
+            .update(self.id, |i| i.status = OperationStatus::Running);
+        Ok(())
+    }
+
+    /// Bytes per second this operation may send now, 0 for no limit.
+    fn rate(&self) -> u64 {
+        match self.ctl.limit.load(Ordering::SeqCst) {
+            LIMIT_GLOBAL => self.inner.limiter.rate(),
+            n => n,
+        }
+    }
+
+    /// Wait as long as the bandwidth limit asks before sending `n` bytes.
+    async fn throttle(&self, n: u64, stop: &CancellationToken) -> Result<()> {
+        let wait = match self.ctl.limit.load(Ordering::SeqCst) {
+            LIMIT_GLOBAL => self.inner.limiter.reserve(n),
+            0 => Duration::ZERO,
+            _ => self.ctl.bucket.reserve(n),
+        };
+        if wait.is_zero() {
+            return Ok(());
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => Ok(()),
+            _ = stop.cancelled() => Err(Error::Cancelled),
+        }
+    }
+
+    /// Note an item that failed and was skipped ("don't stop on errors").
+    fn fail(&self, source: Location, target: Location, e: &Error) {
+        self.inner.add_failure(
+            self.id,
+            FailedItem {
+                source,
+                target,
+                error: e.into(),
+            },
+        );
     }
 
     fn prog(&self) -> MutexGuard<'_, Progress> {
@@ -131,61 +248,79 @@ impl Job {
                 dest.path
             )));
         }
+        let mut pairs = Vec::new();
+        for src in sources {
+            self.check()?;
+            let target = self.fs(&src.fs).and_then(|src_fs| {
+                let name = src_fs
+                    .file_name(&src.path)
+                    .ok_or_else(|| Error::Invalid(format!("cannot copy {}", src.path)))?;
+                check_name(&dst_fs, &name)?;
+                Ok(dst_fs.join(&dest.path, &name))
+            });
+            match target {
+                Ok(t) => pairs.push(ItemPair {
+                    source: src,
+                    target: Location::new(dest.fs.clone(), t),
+                }),
+                Err(e) if self.options.keep_going => self.fail(src, dest.clone(), &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.transfer_pairs(&dst_fs, pairs, conflict, is_move, false)
+            .await
+    }
 
+    /// Copy or move each item to its own target (retrying failed items).
+    async fn transfer_items(
+        &mut self,
+        items: Vec<ItemPair>,
+        conflict: ConflictPolicy,
+        is_move: bool,
+    ) -> Result<()> {
+        let Some(first) = items.first() else {
+            return Ok(());
+        };
+        if items.iter().any(|i| i.target.fs != first.target.fs) {
+            return Err(Error::Invalid(
+                "all targets must be on one file system".into(),
+            ));
+        }
+        let dst_fs = self.fs(&first.target.fs)?;
+        self.transfer_pairs(&dst_fs, items, conflict, is_move, true)
+            .await
+    }
+
+    async fn transfer_pairs(
+        &mut self,
+        dst_fs: &Fs,
+        pairs: Vec<ItemPair>,
+        conflict: ConflictPolicy,
+        is_move: bool,
+        make_parents: bool,
+    ) -> Result<()> {
         let mut plan = Vec::new();
         // Source roots of a cross-device move, removed once their contents are copied.
         let mut move_roots: Vec<(Fs, String)> = Vec::new();
 
-        for src in &sources {
+        for pair in &pairs {
             self.check()?;
-            let src_fs = self.fs(&src.fs)?;
-            let entry = src_fs.stat(&src.path).await?;
-            let name = src_fs
-                .file_name(&src.path)
-                .ok_or_else(|| Error::Invalid(format!("cannot copy {}", src.path)))?;
-            check_name(&dst_fs, &name)?;
-            let target = dst_fs.join(&dest.path, &name);
-            let same_fs = src.fs == dest.fs;
-
-            if same_fs && target == src.path {
-                if is_move {
-                    continue; // moving an item into the folder it is already in
+            let planned = self
+                .plan_source(
+                    dst_fs,
+                    pair,
+                    (conflict, is_move, make_parents),
+                    &mut plan,
+                    &mut move_roots,
+                )
+                .await;
+            match planned {
+                Ok(()) => {}
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(e) if self.options.keep_going => {
+                    self.fail(pair.source.clone(), pair.target.clone(), &e)
                 }
-                return Err(Error::Invalid(format!(
-                    "source and destination are the same: {}",
-                    src.path
-                )));
-            }
-            if same_fs && entry.is_dir() && dst_fs.is_within(&dest.path, &src.path) {
-                return Err(Error::Invalid(format!(
-                    "cannot put a folder inside itself: {}",
-                    src.path
-                )));
-            }
-
-            if is_move && same_fs {
-                let exists = dst_fs.exists(&target).await?;
-                if exists && conflict == ConflictPolicy::Fail {
-                    return Err(Error::AlreadyExists(target));
-                }
-                if exists && conflict == ConflictPolicy::Skip {
-                    self.prog().skipped += 1;
-                    continue;
-                }
-                // Fast path: a rename. Falls back to copy + delete when it
-                // fails (e.g. across volumes) or the target must be merged.
-                if !exists && src_fs.rename(&src.path, &target).await.is_ok() {
-                    self.prog().files_total += 1;
-                    self.prog().files_done += 1;
-                    self.set_current(&src.path);
-                    continue;
-                }
-            }
-
-            self.plan(&src_fs, &dst_fs, entry, target, &mut plan)
-                .await?;
-            if is_move {
-                move_roots.push((src_fs, src.path.clone()));
+                Err(e) => return Err(e),
             }
         }
 
@@ -197,7 +332,7 @@ impl Job {
         }
         self.emit(true);
 
-        self.copy_all(&plan, &dst_fs, conflict, is_move).await?;
+        self.copy_all(&plan, dst_fs, conflict, is_move).await?;
 
         // Remove now-empty source folders of a move, deepest first. Folders
         // that still hold skipped files stay where they are.
@@ -218,6 +353,74 @@ impl Job {
         Ok(())
     }
 
+    /// Check one source of a copy or move and add what it takes to `plan`,
+    /// or move it at once when a rename does.
+    async fn plan_source(
+        &mut self,
+        dst_fs: &Fs,
+        pair: &ItemPair,
+        (conflict, is_move, make_parents): (ConflictPolicy, bool, bool),
+        plan: &mut Vec<Item>,
+        move_roots: &mut Vec<(Fs, String)>,
+    ) -> Result<()> {
+        let src = &pair.source;
+        let target = pair.target.path.clone();
+        let src_fs = self.fs(&src.fs)?;
+        let entry = match src_fs.stat(&src.path).await {
+            Ok(e) => e,
+            // Moved already, before the app was closed.
+            Err(Error::NotFound(_)) if self.resumed && is_move => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let same_fs = src.fs == pair.target.fs;
+
+        if same_fs && target == src.path {
+            if is_move {
+                return Ok(()); // moving an item into the folder it is already in
+            }
+            return Err(Error::Invalid(format!(
+                "source and destination are the same: {}",
+                src.path
+            )));
+        }
+        if same_fs && entry.is_dir() && dst_fs.is_within(&target, &src.path) {
+            return Err(Error::Invalid(format!(
+                "cannot put a folder inside itself: {}",
+                src.path
+            )));
+        }
+        if make_parents {
+            if let Some(parent) = dst_fs.parent(&target) {
+                make_dirs(dst_fs, &parent).await?;
+            }
+        }
+
+        if is_move && same_fs {
+            let exists = dst_fs.exists(&target).await?;
+            if exists && conflict == ConflictPolicy::Fail {
+                return Err(Error::AlreadyExists(target));
+            }
+            if exists && conflict == ConflictPolicy::Skip {
+                self.prog().skipped += 1;
+                return Ok(());
+            }
+            // Fast path: a rename. Falls back to copy + delete when it
+            // fails (e.g. across volumes) or the target must be merged.
+            if !exists && src_fs.rename(&src.path, &target).await.is_ok() {
+                self.prog().files_total += 1;
+                self.prog().files_done += 1;
+                self.set_current(&src.path);
+                return Ok(());
+            }
+        }
+
+        self.plan(&src_fs, dst_fs, entry, target, plan).await?;
+        if is_move {
+            move_roots.push((src_fs, src.path.clone()));
+        }
+        Ok(())
+    }
+
     /// Walk `entry` and append the folders (before their contents) and files
     /// to copy into `out`.
     async fn plan(
@@ -234,7 +437,18 @@ impl Job {
             match entry.kind {
                 // Symlinked folders are not followed, to avoid cycles.
                 EntryKind::Dir if !entry.symlink => {
-                    let children = src_fs.list(&entry.path).await?;
+                    let children = match src_fs.list(&entry.path).await {
+                        Ok(c) => c,
+                        Err(e) if self.options.keep_going && !matches!(e, Error::Cancelled) => {
+                            self.fail(
+                                Location::new(src_fs.id(), &entry.path),
+                                Location::new(dst_fs.id(), &dst),
+                                &e,
+                            );
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
                     out.push(Item {
                         src_fs: src_fs.clone(),
                         src: entry.path,
@@ -244,8 +458,18 @@ impl Job {
                         modified_ms: entry.modified_ms,
                     });
                     for child in children.into_iter().rev() {
-                        check_name(dst_fs, &child.name)?;
                         let child_dst = dst_fs.join(&dst, &child.name);
+                        if let Err(e) = check_name(dst_fs, &child.name) {
+                            if !self.options.keep_going {
+                                return Err(e);
+                            }
+                            self.fail(
+                                Location::new(src_fs.id(), &child.path),
+                                Location::new(dst_fs.id(), &child_dst),
+                                &e,
+                            );
+                            continue;
+                        }
                         stack.push((child, child_dst));
                     }
                 }
@@ -273,12 +497,41 @@ impl Job {
         conflict: ConflictPolicy,
         is_move: bool,
     ) -> Result<()> {
+        // Folders that could not be created, with all they hold ("don't
+        // stop on errors" only).
+        let mut broken: Vec<&str> = Vec::new();
+        let in_broken = |broken: &[&str], p: &str| broken.iter().any(|b| dst_fs.is_within(p, b));
         for item in plan.iter().filter(|i| i.dir) {
-            self.check()?;
+            self.gate().await?;
+            if in_broken(&broken, &item.dst) {
+                continue;
+            }
             self.set_current(&item.src);
-            make_dir(dst_fs, &item.dst).await?;
+            if let Err(e) = make_dir(dst_fs, &item.dst).await {
+                if !self.options.keep_going || matches!(e, Error::Cancelled) {
+                    return Err(e);
+                }
+                self.fail(
+                    Location::new(item.src_fs.id(), &item.src),
+                    Location::new(dst_fs.id(), &item.dst),
+                    &e,
+                );
+                broken.push(&item.dst);
+            }
         }
-        let files: Vec<&Item> = plan.iter().filter(|i| !i.dir).collect();
+        let files: Vec<&Item> = plan
+            .iter()
+            .filter(|i| !i.dir)
+            .filter(|i| {
+                let keep = !in_broken(&broken, &i.dst);
+                if !keep {
+                    let mut p = self.prog();
+                    p.files_total -= 1;
+                    p.bytes_total -= i.size;
+                }
+                keep
+            })
+            .collect();
         let workers = files
             .iter()
             .map(|i| i.src_fs.parallel_transfers())
@@ -323,6 +576,10 @@ impl Job {
         stop: &CancellationToken,
     ) -> Result<()> {
         loop {
+            if let Err(e) = self.gate().await {
+                stop.cancel();
+                return Err(e);
+            }
             let Some(item) = queue.lock().unwrap().next() else {
                 return Ok(());
             };
@@ -333,9 +590,17 @@ impl Job {
                 Ok(())
             }
             .await;
-            if result.is_err() {
-                stop.cancel();
-                return result;
+            match result {
+                Ok(()) => {}
+                Err(e) if self.options.keep_going && !matches!(e, Error::Cancelled) => self.fail(
+                    Location::new(item.src_fs.id(), &item.src),
+                    Location::new(dst_fs.id(), &item.dst),
+                    &e,
+                ),
+                Err(e) => {
+                    stop.cancel();
+                    return Err(e);
+                }
             }
         }
     }
@@ -362,6 +627,14 @@ impl Job {
             Err(Error::NotFound(_)) => None,
             Err(e) => return Err(e),
         };
+        // Carrying on after a restart: a file that was copied before the
+        // app closed is done.
+        if self.resumed && existing.as_ref().is_some_and(|e| same_file(item, e)) {
+            let mut p = self.prog();
+            p.files_done += 1;
+            p.bytes_done += item.size;
+            return Ok(true);
+        }
         if existing.is_some() {
             match conflict {
                 ConflictPolicy::Fail => return Err(Error::AlreadyExists(item.dst.clone())),
@@ -374,15 +647,32 @@ impl Job {
                 ConflictPolicy::Overwrite => {}
             }
         }
-        let part = if dst_fs.atomic_writes() {
+        let atomic = dst_fs.atomic_writes();
+        // A temporary file left by an earlier run, to carry on with.
+        let saved = if self.resumed && !atomic {
+            self.inner.store.part(self.id, &item.dst)
+        } else {
+            None
+        };
+        let part = if atomic {
             item.dst.clone()
         } else {
-            part_path(dst_fs, &item.dst)
+            saved
+                .clone()
+                .unwrap_or_else(|| part_path(dst_fs, &item.dst))
         };
+        if !atomic {
+            self.inner.store.set_part(self.id, &item.dst, Some(&part));
+        }
         let retry = item.src_fs.id() != LocalFs::ID || dst_fs.id() != LocalFs::ID;
         let mut offset = 0; // bytes of this file already in place
         let mut attempt = 0;
         let mut created = false; // whether `part` is ours to remove
+        if saved.is_some() && dst_fs.exists(&part).await.unwrap_or(false) {
+            created = true;
+            offset = resume_offset(dst_fs, &part, item.size).await;
+            self.prog().bytes_done += offset;
+        }
         let result = loop {
             let mut sent = offset;
             let tried = self
@@ -421,13 +711,23 @@ impl Job {
                 }
             }
         };
+        let mut checked_bad = false;
+        let result = match result {
+            Ok(()) if self.options.verify => {
+                let r = self.verify(item, dst_fs, &part, stop).await;
+                checked_bad = r.is_err();
+                r
+            }
+            other => other,
+        };
         if let Err(e) = result {
             // Don't leave a partial file. An upload that only appears once
             // complete has left nothing, and the file at `part` is the
-            // original there.
-            if created && !dst_fs.atomic_writes() {
+            // original there, unless it is a copy that failed its check.
+            if created && (!atomic || checked_bad) {
                 let _ = dst_fs.remove_file(&part).await;
             }
+            self.inner.store.set_part(self.id, &item.dst, None);
             return Err(e);
         }
         if part != item.dst {
@@ -436,10 +736,12 @@ impl Job {
             if let Some(mode) = existing.and_then(|e| e.mode) {
                 let _ = dst_fs.set_mode(&part, mode & 0o7777).await;
             }
-            if let Err(e) = dst_fs.rename(&part, &item.dst).await {
+            let renamed = dst_fs.rename(&part, &item.dst).await;
+            if renamed.is_err() {
                 let _ = dst_fs.remove_file(&part).await;
-                return Err(e);
             }
+            self.inner.store.set_part(self.id, &item.dst, None);
+            renamed?;
         }
         if let Some(ms) = item.modified_ms {
             let _ = dst_fs.set_modified(&item.dst, ms).await;
@@ -477,13 +779,16 @@ impl Job {
             if stop.is_cancelled() {
                 return Err(Error::Cancelled);
             }
+            self.gate().await?;
+            let len = chunk_for(self.rate(), CHUNK);
             let n = reader
-                .read(&mut buf)
+                .read(&mut buf[..len])
                 .await
                 .map_err(|e| Error::io(&item.src, e))?;
             if n == 0 {
                 break;
             }
+            self.throttle(n as u64, stop).await?;
             writer
                 .write_all(&buf[..n])
                 .await
@@ -496,13 +801,39 @@ impl Job {
         writer.shutdown().await.map_err(|e| Error::io(part, e))
     }
 
+    /// Check the copy at `written` against its source: by checksum where
+    /// both sides can be read back cheaply, else by size.
+    async fn verify(
+        &self,
+        item: &Item,
+        dst_fs: &Fs,
+        written: &str,
+        stop: &CancellationToken,
+    ) -> Result<()> {
+        let same = if item.src_fs.checksum_reads() && dst_fs.checksum_reads() {
+            let a = hash_file(&item.src_fs, &item.src, stop).await?;
+            let b = hash_file(dst_fs, written, stop).await?;
+            a == b
+        } else {
+            dst_fs.stat(written).await?.size == item.size
+        };
+        if same {
+            Ok(())
+        } else {
+            Err(Error::Io {
+                path: item.dst.clone(),
+                source: std::io::Error::other("the copy does not match the original"),
+            })
+        }
+    }
+
     // ---- trash -------------------------------------------------------------
 
     async fn trash(&mut self, targets: Vec<Location>) -> Result<()> {
         self.prog().files_total = targets.len() as u64;
         self.emit(true);
         for t in &targets {
-            self.check()?;
+            self.gate().await?;
             self.set_current(&t.path);
             self.fs(&t.fs)?.trash(&t.path).await?;
             self.prog().files_done += 1;
@@ -532,7 +863,7 @@ impl Job {
         self.prog().files_total = items.len() as u64;
         self.emit(true);
         for (fs, path, dir) in items.into_iter().rev() {
-            self.check()?;
+            self.gate().await?;
             self.set_current(&path);
             if dir {
                 fs.remove_dir(&path).await?;
@@ -739,6 +1070,56 @@ fn part_path(fs: &Fs, dst: &str) -> String {
         format!(".dualpal-{tag}.part")
     };
     fs.join(&parent, &part)
+}
+
+/// True if `existing` is the finished copy of `item`: copies take their
+/// source's size and modified time.
+fn same_file(item: &Item, existing: &Entry) -> bool {
+    existing.kind == EntryKind::File
+        && existing.size == item.size
+        && item.modified_ms.is_some()
+        && existing.modified_ms == item.modified_ms
+}
+
+/// SHA-256 of a whole file, read as a stream.
+async fn hash_file(fs: &Fs, path: &str, stop: &CancellationToken) -> Result<Vec<u8>> {
+    let mut r = fs.open_read(path).await?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        if stop.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let n = r.read(&mut buf).await.map_err(|e| Error::io(path, e))?;
+        if n == 0 {
+            return Ok(h.finalize().to_vec());
+        }
+        h.update(&buf[..n]);
+    }
+}
+
+/// Create `path` and any missing folders above it.
+async fn make_dirs(fs: &Fs, path: &str) -> Result<()> {
+    let mut missing = Vec::new();
+    let mut p = path.to_string();
+    loop {
+        match fs.stat(&p).await {
+            Ok(e) if e.is_dir() => break,
+            Ok(_) => return Err(Error::AlreadyExists(p)),
+            Err(Error::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+        let parent = fs.parent(&p);
+        missing.push(p);
+        match parent {
+            Some(up) if !missing.contains(&up) => p = up,
+            _ => break,
+        }
+    }
+    for dir in missing.iter().rev() {
+        make_dir(fs, dir).await?;
+    }
+    Ok(())
 }
 
 async fn make_dir(fs: &Fs, path: &str) -> Result<()> {

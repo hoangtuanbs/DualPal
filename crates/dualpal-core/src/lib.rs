@@ -46,7 +46,8 @@ pub mod vfs;
 pub use activity::{ActivityLog, ActivityRecord};
 pub use error::{Error, Result};
 pub use ops::{
-    ConflictPolicy, Operation, OperationInfo, OperationQueue, OperationStatus, Progress,
+    ConflictPolicy, FailedItem, ItemPair, Operation, OperationInfo, OperationQueue,
+    OperationStatus, Progress, TransferOptions,
 };
 pub use tokio_util::sync::CancellationToken;
 pub use vfs::{Entry, EntryKind, FileSystem, Location, Registry};
