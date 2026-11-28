@@ -7,6 +7,26 @@ export type SortKey = "name" | "size" | "modified";
 export type ViewMode = "list" | "icons";
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+/** Folders kept in each pane's back list, and in its forward list. */
+export const HISTORY_LIMIT = 100;
+
+/** One step of a pane's history: a folder, and the item the cursor was on in it. */
+export interface NavEntry {
+  loc: Location;
+  focus?: string;
+}
+
+const sameLocation = (a: Location, b: Location | null) => !!b && a.fs === b.fs && a.path === b.path;
+
+/** Errors that mean a folder in the history cannot be opened again, so back
+ *  and forward skip it: it was deleted, or its server is no longer connected. */
+const GONE = new Set(["notFound", "unknownFileSystem"]);
+
+/** Push onto a history list, dropping the oldest step past the limit. */
+function pushStep(stack: NavEntry[], entry: NavEntry) {
+  stack.push(entry);
+  if (stack.length > HISTORY_LIMIT) stack.shift();
+}
 /** Ids of folder size calculations, unique across all panes. */
 let nextSizeRequest = 1;
 
@@ -39,8 +59,14 @@ export class PaneState {
   private sizeRequests = new Map<string, number>();
   /** Changes whenever the listing does, so that late results are dropped. */
   private sizeEpoch = 0;
-  private history = $state<Location[]>([]);
-  private future = $state<Location[]>([]);
+  /** Folders to go back to, most recent last. */
+  private history = $state<NavEntry[]>([]);
+  /** Folders to go forward to, after going back; most recent last. */
+  private future = $state<NavEntry[]>([]);
+  /** Back or forward is queued: steps run one after another. */
+  private travelling: Promise<void> = Promise.resolve();
+  /** Set when back or forward skipped folders that cannot be opened any more. */
+  notice = $state<string | null>(null);
   /** Quick filter text; empty when no filter is set. */
   filter = $state("");
   /** Whether the filter bar is shown. */
@@ -83,12 +109,13 @@ export class PaneState {
     try {
       const entries = opts.entries ?? (await api.listDir(loc));
       const from = this.location;
-      if (opts.record !== false && this.location) {
-        this.history.push(this.location);
+      if (opts.record !== false && from && !sameLocation(loc, from)) {
+        pushStep(this.history, { loc: from, focus: this.current?.name });
         this.future = [];
       }
       this.location = loc;
       this.entries = entries;
+      this.notice = null;
       this.forgetSizes();
       this.filter = "";
       this.filterOpen = false;
@@ -263,18 +290,69 @@ export class PaneState {
     await this.open(parent, { focusName: name });
   }
 
-  async back() {
-    const prev = this.history.pop();
-    if (!prev || !this.location) return;
-    this.future.push(this.location);
-    await this.open(prev, { record: false });
+  /** Go back to the previous folder. */
+  back(): Promise<void> {
+    return this.step("back");
   }
 
-  async forward() {
-    const next = this.future.pop();
-    if (!next || !this.location) return;
-    this.history.push(this.location);
-    await this.open(next, { record: false });
+  /** Go forward again after going back. */
+  forward(): Promise<void> {
+    return this.step("forward");
+  }
+
+  private step(dir: "back" | "forward"): Promise<void> {
+    this.travelling = this.travelling.then(() => this.walk(dir));
+    return this.travelling;
+  }
+
+  /** Take the next step of the history: open each folder in turn, skipping
+   *  those that are gone for good (deleted, or on a server that is no longer
+   *  connected). Any other failure, such as a denied permission or a dropped
+   *  connection, stops here with its own error and keeps the step, so that it
+   *  can be tried again. */
+  private async walk(dir: "back" | "forward") {
+    const from = dir === "back" ? this.history : this.future;
+    const to = dir === "back" ? this.future : this.history;
+    const here = this.location;
+    if (!here) return;
+    // The cursor where we leave this folder, so that going back again lands on it.
+    const leaving = this.current?.name;
+    const skipped: string[] = [];
+    const report = () => {
+      if (skipped.length > 0) this.notice = `Skipped “${skipped.join("”, “")}”: it is no longer available.`;
+    };
+    while (from.length > 0) {
+      const entry = from[from.length - 1];
+      let entries: Entry[];
+      try {
+        entries = await api.listDir(entry.loc);
+      } catch (e) {
+        // The user went somewhere else meanwhile: that wins, and the history
+        // it replaced is not walked any further.
+        if (this.location !== here) return;
+        if (!GONE.has(errorKind(e) ?? "")) {
+          report();
+          this.error = errorMessage(e);
+          return;
+        }
+        from.pop();
+        skipped.push(this.nameOf(entry.loc));
+        continue;
+      }
+      if (this.location !== here) return;
+      from.pop();
+      await this.open(entry.loc, { record: false, focusName: entry.focus, entries });
+      pushStep(to, { loc: here, focus: leaving });
+      report();
+      return;
+    }
+    report();
+  }
+
+  /** A short name for a folder, for notices. */
+  private nameOf(loc: Location): string {
+    const last = loc.path.split(/[\\/]/).filter(Boolean).pop();
+    return last ?? fsNames[loc.fs] ?? loc.path;
   }
 
   get canBack() {

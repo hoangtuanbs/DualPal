@@ -69,6 +69,7 @@ npm run test:unit                    # L5 UI unit/component tests
 - **Click** an item to put the cursor on it; **Ctrl/⌘-click** marks several, **Shift-click** marks a range. Operations act on all marked items, or on the item under the cursor when none are marked.
 - **Right-click** an item for its menu: open, edit, copy or move to the other pane, rename, compress, copy path, compare, trash or delete. With several items marked, the menu acts on all of them. Right-click empty space for new folder, refresh, select and more.
 - **Drag** items to the other pane, or onto a folder in either pane, to copy them there. Hold **Shift** when you let go to move instead; **Esc** cancels. Files dragged in from Explorer or Finder are copied to the folder they are dropped on.
+- **Side buttons** on a mouse go back and forward in the pane under the pointer. Each pane remembers the folders it has shown (up to 100, servers included); a folder that is gone, or on a server that is no longer connected, is skipped with a notice.
 - **Drag the divider** between the panes to make one wider. Double-click it to make them equal again; the width is remembered. With the divider focused, the arrow keys move it (Shift for bigger steps).
 
 ## Keyboard
@@ -79,6 +80,7 @@ npm run test:unit                    # L5 UI unit/component tests
 | ↑ ↓ / Page Up / Page Down / Home / End | Move cursor |
 | Enter | Open folder, or open file in its default app |
 | Backspace, Ctrl/⌘ ↑ | Enclosing folder |
+| Alt ← / Alt →, ⌘[ / ⌘] on macOS | Back / forward in the active pane (also Go Back / Go Forward in the command palette) |
 | Space / Insert | Mark item |
 | Space on a folder | Mark it and calculate its size (shown in the Size column and the Info panel) |
 | Alt Shift Enter | Calculate the sizes of all folders in the pane |

@@ -719,6 +719,7 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-014 | `PaneState.navigated` hook fires (linked browsing) | P1 | |
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
+| UI-UNIT-017 | `PaneState` back/forward history | P1 | push on each folder change; new navigation clears forward; cap 100; cursor restored; missing folder and disconnected server skipped with notice |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
 | UI-CMP-003 | `CommandPalette` fuzzy filter, arrow keys, Enter runs, lists servers/favorites/syncs | P0 | |
@@ -773,6 +774,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-KEY-028 | Ctrl/⌘ Shift L | linked browsing toggles; entering folder in one pane enters same name in other |
 | UI-KEY-029 | shortcuts ignored while typing in an input/editor | F5 inside rename prompt does not copy |
 | UI-KEY-030 | shortcuts disabled while auto-sync locks panes (`frozen`) | F5/F6/F8 make no calls |
+| UI-KEY-036 | Alt ← / Alt →, ⌘[ / ⌘] (macOS) | back / forward in the active pane; the folder left gets the cursor back; `historyKey` maps keys only on macOS for ⌘ |
 
 **Mouse**
 
@@ -790,6 +792,7 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-MOUSE-010 | breadcrumb click navigates | P1 | |
 | UI-MOUSE-011 | dragging the divider between the panes resizes them; arrow keys on it move it; double-click evens them; the split survives a reload | P1 | |
 | UI-MOUSE-012 | the Command Palette toolbar button opens the palette; Open Terminal calls `open_terminal` with the active folder | P1 | |
+| UI-MOUSE-013 | mouse side buttons (buttons 3 and 4) go back and forward in the pane under the pointer; the event default is prevented | P1 | |
 
 **Flows**
 

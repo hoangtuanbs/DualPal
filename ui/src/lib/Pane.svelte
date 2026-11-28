@@ -82,6 +82,17 @@
     return out;
   });
 
+  /** The mouse's side buttons (4 = back, 5 = forward) go back and forward in
+   *  this pane. The webview's own navigation is stopped on every event. */
+  function sideButton(e: MouseEvent) {
+    if (e.button !== 3 && e.button !== 4) return;
+    e.preventDefault();
+    if (e.type !== "mouseup") return;
+    onfocus();
+    if (e.button === 3) pane.back();
+    else pane.forward();
+  }
+
   // ---- drag and drop ------------------------------------------------------
   // Pointer events rather than HTML drag and drop, which the Windows webview
   // only delivers when the app does not take file drops from Explorer.
@@ -267,6 +278,9 @@
   data-path={pane.location?.path}
   data-title={pane.title}
   onclick={onfocus}
+  onmousedown={sideButton}
+  onmouseup={sideButton}
+  onauxclick={sideButton}
 >
   {#if group.tabs.length > 1}
     <div class="tabs" role="tablist">
@@ -284,8 +298,8 @@
   {/if}
   <header>
     <div class="nav">
-      <button title="Back" disabled={!pane.canBack} onclick={() => pane.back()}>‹</button>
-      <button title="Forward" disabled={!pane.canForward} onclick={() => pane.forward()}>›</button>
+      <button title="Back (Alt+←, or the mouse's back button)" aria-label="Back" disabled={!pane.canBack} onclick={() => pane.back()}>‹</button>
+      <button title="Forward (Alt+→, or the mouse's forward button)" aria-label="Forward" disabled={!pane.canForward} onclick={() => pane.forward()}>›</button>
       <button title="Enclosing folder (Backspace)" onclick={() => pane.up()}>↑</button>
     </div>
     <nav class="crumbs" aria-label="Path" data-testid={`pane-${side}-crumbs`} bind:this={crumbsEl}>
@@ -339,9 +353,12 @@
       oncontext(e.clientX, e.clientY, null);
     }}
   >
+    {#if pane.notice}
+      <p class="message notice" data-testid={`pane-${side}-notice`}>{pane.notice}</p>
+    {/if}
     {#if pane.error}
       <p class="message error" data-testid={`pane-${side}-error`}>{pane.error}</p>
-    {:else if pane.visible.length === 0 && !pane.loading}
+    {:else if !pane.notice && pane.visible.length === 0 && !pane.loading}
       <p class="message">{pane.filter ? "No items match the filter." : "This folder is empty."}</p>
     {/if}
     {#each pane.visible as entry, i (entry.path)}
@@ -586,6 +603,9 @@
   }
   .message.error {
     color: var(--danger);
+  }
+  .message.notice {
+    color: var(--muted);
   }
   .tabs {
     display: flex;
