@@ -26,6 +26,14 @@ pub struct Settings {
     /// A release the person chose to skip, e.g. `0.3.0`. The automatic check
     /// does not announce it again; a newer release is announced as usual.
     pub skipped_version: Option<String>,
+    /// Global bandwidth limit for copies and moves, in bytes per second.
+    /// Empty or 0 means none.
+    pub bandwidth_limit: Option<u64>,
+    /// New copies and moves check each file after writing it.
+    pub verify_copies: Option<bool>,
+    /// New copies and moves don't stop on errors: they skip failed items
+    /// and list them at the end.
+    pub keep_going: Option<bool>,
 }
 
 pub struct SettingsStore {

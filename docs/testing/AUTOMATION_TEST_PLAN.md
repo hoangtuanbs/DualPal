@@ -91,7 +91,7 @@ This document is written so that an AI coding agent (or a person) can implement 
 
 ### 2.3 Persistent files (app data folder)
 
-`favorites.json`, `connections.json` (no secrets), `settings.json`, `activity.jsonl`, `syncs.json`, `rename-presets.json`, `sync-state/` (two-way snapshots), `edits/` (unsent remote edits). Cache: `preview/` (cleared at start). These are the state an E2E test must isolate and may pre-seed.
+`favorites.json`, `connections.json` (no secrets), `settings.json`, `activity.jsonl`, `syncs.json`, `rename-presets.json`, `queue.json` (unfinished copies and moves), `sync-state/` (two-way snapshots), `edits/` (unsent remote edits). Cache: `preview/` (cleared at start). These are the state an E2E test must isolate and may pre-seed.
 
 ---
 
@@ -476,6 +476,28 @@ All in `crates/dualpal-core/tests/ops.rs` / `transfers.rs` (local + FaultyFs) un
 | OPS-Q-007 | OperationInfo JSON shape snapshot | P0 | NEW | insta |
 | OPS-Q-008 | 50 ops enqueued at once all finish | P1 | NEW | no deadlock, ≤ 2 running at any moment |
 
+**Transfer queue upgrades** — `crates/dualpal-core/tests/queue_upgrades.rs` (MemFs and FaultyFs; timing tests on tokio's paused clock or with tolerant bounds)
+
+| ID | Title | P | Status | Assert |
+|---|---|---|---|---|
+| QUEUE-001 | pause and resume mid-file | P0 | EXISTS: pause_and_resume_mid_file | paused after the chunk in flight: `bytes_done` frozen, status `paused`, partial file kept; resume finishes without reopening the file, content equal |
+| QUEUE-002 | a paused operation frees its slot; a queued one paused stays put | P0 | EXISTS: paused_operations_free_their_slot | max 1 slot: a new op runs while the first is paused; the paused queued op does not start until resumed |
+| QUEUE-003 | pause the whole queue | P1 | EXISTS: pause_the_whole_queue | running op pauses, queued op never starts, both finish after resume |
+| QUEUE-004 | copies survive a restart and resume mid-file | P0 | EXISTS: copies_survive_a_restart_and_resume_mid_file | `queue.json` holds the op, options and its partial file (other kinds not kept); a second queue restores it paused + restored, never runs by itself; resume continues at an offset > 0; store empty afterwards |
+| QUEUE-005 | non-resumable target restarts the file after a restart | P0 | EXISTS: restart_on_a_non_resumable_target_starts_the_file_again | no `open_write_at`, content equal, no temporary file left |
+| QUEUE-006 | discard a restored copy | P0 | EXISTS: discarding_a_restored_copy_cleans_up | status cancelled, partial file removed, store empty |
+| QUEUE-007 | restored op waits for its server | P1 | EXISTS: restored_operations_wait_for_their_server | `waitingFor` names the missing fs; after resume it starts once the fs is registered |
+| QUEUE-008 | `refresh_waiting` after a connect | P1 | EXISTS: refresh_waiting_notices_a_connected_server | |
+| QUEUE-009 | token bucket keeps to its rate | P0 | EXISTS: limiter_keeps_to_its_rate | paused clock: 10 × 500 B at 1000 B/s takes 5 s ± 0.1; saved-up time capped at 1 s; rate 0 never waits |
+| QUEUE-010 | global limit shared by running copies | P0 | EXISTS: global_limit_is_shared_by_running_copies | two 32 KiB copies at 32 KiB/s take ≈ 2 s together; an op limit of 0 ignores the global one |
+| QUEUE-011 | per-operation limit changed while running | P1 | EXISTS: operation_limit_changes_while_running | |
+| QUEUE-012 | verify catches a corrupt copy | P0 | EXISTS: verify_catches_a_corrupt_copy | FaultyFs `corrupt_writes`: status failed, "does not match", no target and no temporary file; unchecked copy completes |
+| QUEUE-013 | verify passes good copies; size-only where reads are expensive | P1 | EXISTS: verify_passes_good_copies_and_falls_back_to_size | |
+| QUEUE-014 | unattended copy lists failures and retries them | P0 | EXISTS: unattended_copy_lists_failures_and_retries_them | conflict, missing source and nested conflict collected (path + error kind); others copied; status completed with `failed` = 3; activity "3 items failed"; `retry_failed` with overwrite copies them to the same targets |
+| QUEUE-015 | unattended move keeps failed sources; default still stops | P0 | EXISTS: unattended_move_keeps_failed_sources | |
+| QUEUE-016 | options and `copyItems` JSON; old OperationInfo JSON loads | P1 | EXISTS: options_and_copy_items_json | |
+| QUEUE-017 | corrupt `queue.json` starts empty | P1 | EXISTS: corrupt_store_starts_empty | |
+
 ### 8.4 Activity, places, settings — `ACT`, `PLC`, `SET`
 
 | ID | Title | Layer | P | Status | Assert |
@@ -696,6 +718,10 @@ pub fn call<T: serde::de::DeserializeOwned>(app: &App, cmd: &str, args: serde_js
 | CMD-038 | `open_terminal` records a local folder to `DUALPAL_TERMINAL_LOG`; missing folders are `notFound`, server locations `unsupported` | P1 | |
 | CMD-039 | `latest_release` reads GitHub's latest release (tag, page, date) from `DUALPAL_RELEASES_URL` and sends a User-Agent | P1 | |
 | CMD-040 | `apply_upgrade` needs a finished `download_upgrade`; `download_upgrade` refuses a version that is no longer the newest release | P1 | |
+| CMD-080 | `pause_operation`, `resume_operation`, `set_queue_paused`, `queue_paused`, `set_operation_limit` | P1 | a limited copy pauses, stays unfinished while the queue is paused, completes after |
+| CMD-081 | `set_bandwidth_limit` keeps the limit in settings (`bandwidthLimit`, null for 0) | P1 | |
+| CMD-082 | a copy saved in `queue.json` comes back paused and restored at start, runs on `resume_operation` | P1 | |
+| CMD-083 | `failed_items`, `save_failure_report` (new file only), `retry_failed` | P1 | |
 
 ### 8.13 UI unit and component tests — `UI-UNIT`, `UI-CMP` (L5)
 
@@ -719,6 +745,14 @@ Setup: `vitest.config.ts` at repo root reusing `vite.config.ts`, `environment: "
 | UI-UNIT-014 | `PaneState.navigated` hook fires (linked browsing) | P1 | |
 | UI-UNIT-015 | `drag.svelte.ts` state transitions | P1 | start, over target, Shift toggles move, Esc cancels |
 | UI-UNIT-016 | `about.ts` constants (email, donate address) | P1 | address equals README address `0xF8352b493e7750C03bde4bdA94A203B010933735` |
+| UI-UNIT-060 | `OperationsPanel` Pause / Resume / Discard per status | P1 | only copies and moves pause; restored ops say so and offer Discard |
+| UI-UNIT-061 | `OperationsPanel` Pause all / Resume all | P1 | queued ops show Paused while the queue is paused |
+| UI-UNIT-062 | `OperationsPanel` global limit in KB/s or MB/s | P1 | empty = off (0); a saved limit shows in the right unit |
+| UI-UNIT-063 | `OperationsPanel` Verify copies / Don't stop on errors defaults | P1 | |
+| UI-UNIT-064 | `OperationsPanel` "Done with N errors": list, copy, save, retry | P1 | clipboard text is `path: reason` lines |
+| UI-UNIT-065 | `OperationsPanel` "Waiting for <server>" uses the server's name | P1 | |
+| UI-UNIT-066 | `OperationsPanel` per-operation Limit… and limit/check details | P1 | |
+| UI-UNIT-067 | `transfers.ts` `failureText`, `formatRate` | P1 | |
 | UI-CMP-001 | `Dialog` focus trap, Esc cancels, Enter confirms | P0 | |
 | UI-CMP-002 | `ContextMenu` keyboard navigation, closes on outside click | P1 | |
 | UI-CMP-003 | `CommandPalette` fuzzy filter, arrow keys, Enter runs, lists servers/favorites/syncs | P0 | |
@@ -826,6 +860,9 @@ Setup: `playwright.config.ts` at repo root; `webServer: { command: "npx vite bui
 | UI-E2E-029 | Windows path scenario: `C:\Users\…` breadcrumbs and parent navigation | P1 | scenario "windows-paths" |
 | UI-E2E-030 | 5 000 entries render and scroll; cursor End reaches last | P1 | |
 | UI-E2E-031 | unsaved state survives nothing unexpected: reload restores favorites/servers from backend, not localStorage | P2 | |
+| UI-E2E-080 | panel defaults (Verify, Don't stop on errors) saved and sent with F5's `enqueue_operation` options | P1 | |
+| UI-E2E-081 | bandwidth limit → `set_bandwidth_limit`; Pause all → `set_queue_paused` | P1 | |
+| UI-E2E-082 | a restored copy offers Resume (`resume_operation`) and Discard (`cancel_operation`) | P1 | |
 
 ### 8.15 Full-stack desktop E2E — `DESK` (L7)
 
@@ -1144,6 +1181,7 @@ cargo insta review
 | FTP/FTPS, WebDAV, S3 | VFS-CON-* ×backend, CON-017…024, UI-E2E-011/012, DESK-008 |
 | Secrets in keychain only | CON-001/003/008, CMD-014, SEC-002, DESK-016 |
 | Temp names, parallel, resume | OPS-COPY-014…017/020, DESK-017, REL-002 |
+| Pause/resume, restart, bandwidth limit, verify, don't stop on errors | QUEUE-001…017, CMD-080…083, UI-UNIT-060…067, UI-E2E-080…082 |
 | Remote edit | EDIT-*, CMD-021/022, UI-E2E-014, DESK-012/020 |
 | Compare & Sync | CMP-*, SYNC-*, CMD-025…029, UI-CMP-007, UI-E2E-015…017, DESK-009 |
 | Auto-sync | LIVE-*, CMD-033, UI-E2E-018/019, UI-KEY-030, DESK-010/011 |

@@ -19,7 +19,7 @@ pub use ftp::{FtpFs, FtpParams, FtpSecurity};
 pub use local::LocalFs;
 pub use s3::{S3Fs, S3Params, WebDavParams};
 pub use sftp::{parse_ssh_config, ssh_config_hosts, SftpFs, SftpParams, SshConfigHost};
-pub use text::{read_text, write_text, TextFile};
+pub use text::{create_text, read_text, write_text, TextFile};
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -179,6 +179,11 @@ pub trait FileSystem: Send + Sync {
     fn parallel_transfers(&self) -> usize {
         1
     }
+    /// True if reading a file back is cheap enough to check a copy by its
+    /// checksum. Object stores answer false: a copy there is checked by size.
+    fn checksum_reads(&self) -> bool {
+        true
+    }
     /// Move an item to the system Trash / Recycle Bin.
     async fn trash(&self, path: &str) -> Result<()> {
         Err(Error::Unsupported(format!(
@@ -198,9 +203,20 @@ pub trait FileSystem: Send + Sync {
 }
 
 /// All file systems the app currently knows about, keyed by id.
-#[derive(Default)]
 pub struct Registry {
     map: RwLock<HashMap<String, Arc<dyn FileSystem>>>,
+    /// Bumped on every register and unregister, so that waiting operations
+    /// see a server connect.
+    changes: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            map: RwLock::default(),
+            changes: tokio::sync::watch::channel(0).0,
+        }
+    }
 }
 
 impl Registry {
@@ -217,10 +233,22 @@ impl Registry {
 
     pub fn register(&self, fs: Arc<dyn FileSystem>) {
         self.map.write().unwrap().insert(fs.id().to_string(), fs);
+        self.changes.send_modify(|n| *n += 1);
     }
 
     pub fn unregister(&self, id: &str) -> Option<Arc<dyn FileSystem>> {
-        self.map.write().unwrap().remove(id)
+        let fs = self.map.write().unwrap().remove(id);
+        self.changes.send_modify(|n| *n += 1);
+        fs
+    }
+
+    /// Changes each time a file system is registered or unregistered.
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    pub fn contains(&self, id: &str) -> bool {
+        self.map.read().unwrap().contains_key(id)
     }
 
     pub fn get(&self, id: &str) -> Result<Arc<dyn FileSystem>> {

@@ -534,6 +534,15 @@ export function installBrowserMock(scenario: BrowserScenario) {
       return id;
     },
     cancel_operation: () => false,
+    pause_operation: () => true,
+    resume_operation: () => true,
+    set_queue_paused: () => null,
+    queue_paused: () => false,
+    set_bandwidth_limit: () => null,
+    set_operation_limit: () => true,
+    failed_items: () => [],
+    retry_failed: () => `op-${++opCounter}`,
+    save_failure_report: () => null,
     clear_activity: () => {
       activity = [];
       return null;

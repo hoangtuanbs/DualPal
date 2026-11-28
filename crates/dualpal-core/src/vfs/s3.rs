@@ -397,6 +397,11 @@ impl FileSystem for S3Fs {
         4
     }
 
+    fn checksum_reads(&self) -> bool {
+        // Reading a copy back means downloading it again: check sizes instead.
+        false
+    }
+
     async fn rename(&self, from: &str, to: &str) -> Result<()> {
         // Like a local rename, replace an existing file but never a folder.
         let entry = self.stat(from).await?;

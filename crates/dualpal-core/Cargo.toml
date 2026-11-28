@@ -39,6 +39,7 @@ getrandom.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 opendal.workspace = true
 tokio-util.workspace = true
 tempfile.workspace = true

@@ -21,7 +21,11 @@ pub struct TestApp {
 /// Build a real [`dualpal_app::AppState`] on temp folders and register the
 /// exact command list the shipped app uses.
 pub fn app() -> TestApp {
-    let tmp = tempfile::tempdir().unwrap();
+    app_in(tempfile::tempdir().unwrap())
+}
+
+/// [`app`] on a temp folder the test prepared (e.g. with a saved queue).
+pub fn app_in(tmp: tempfile::TempDir) -> TestApp {
     let state = dualpal_app::build_state(
         dualpal_app::AppDirs {
             data: tmp.path().join("data"),

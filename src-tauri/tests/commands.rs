@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{app, call, call_ok, local, TestApp};
+use common::{app, app_in, call, call_ok, local, TestApp};
 use serde_json::{json, Value};
 
 /// The set of commands exercised by the `CMD-*` tests below. CMD-000 fails when
@@ -28,6 +28,15 @@ fn tested_commands() -> HashSet<&'static str> {
         "cancel_operation",
         "operations",
         "clear_finished_operations",
+        "pause_operation",
+        "resume_operation",
+        "set_queue_paused",
+        "queue_paused",
+        "set_bandwidth_limit",
+        "set_operation_limit",
+        "failed_items",
+        "retry_failed",
+        "save_failure_report",
         "activity",
         "clear_activity",
         "volumes",
@@ -1277,4 +1286,190 @@ fn find_files_matches_names_and_cancel() {
     assert!(blank["hits"].as_array().unwrap().is_empty());
 
     call_ok(&app, "cancel_find_files", json!({ "request": 99 }));
+}
+
+/// Poll `operations` until the one with `id` satisfies `done`.
+fn wait_op(app: &common::App, id: &str, done: impl Fn(&Value) -> bool) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let ops: Vec<Value> = call(app, "operations", json!({})).unwrap();
+        if let Some(op) = ops.into_iter().find(|o| o["id"] == id) {
+            if done(&op) {
+                return op;
+            }
+        }
+        assert!(Instant::now() < deadline, "operation {id} never got there");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn finished(op: &Value) -> bool {
+    matches!(
+        op["status"].as_str(),
+        Some("completed" | "failed" | "cancelled")
+    )
+}
+
+/// CMD-080 — pause, resume and the whole-queue pause; per-operation limit.
+#[test]
+fn pause_resume_and_queue_pause() {
+    let TestApp { app, tmp } = app();
+    let big = tmp.path().join("big.bin");
+    std::fs::write(&big, vec![3u8; 2 * 1024 * 1024]).unwrap();
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    let id: String = call(
+        &app,
+        "enqueue_operation",
+        json!({
+            "operation": { "type": "copy", "sources": [local(&big.to_string_lossy())], "destination": local(&dst.to_string_lossy()) },
+            "options": { "limit": 512 * 1024 },
+        }),
+    )
+    .unwrap();
+    let paused: bool = call(&app, "pause_operation", json!({ "id": id })).unwrap();
+    assert!(paused);
+    let op = wait_op(&app, &id, |o| o["status"] == "paused");
+    assert_eq!(op["options"]["limit"], 512 * 1024);
+    let limited: bool = call(
+        &app,
+        "set_operation_limit",
+        json!({ "id": id, "bytesPerSec": null }),
+    )
+    .unwrap();
+    assert!(limited);
+
+    call_ok(&app, "set_queue_paused", json!({ "paused": true }));
+    assert!(call::<bool>(&app, "queue_paused", json!({})).unwrap());
+    let resumed: bool = call(&app, "resume_operation", json!({ "id": id })).unwrap();
+    assert!(resumed);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !finished(&wait_op(&app, &id, |_| true)),
+        "the queue is still paused"
+    );
+    call_ok(&app, "set_queue_paused", json!({ "paused": false }));
+    let op = wait_op(&app, &id, finished);
+    assert_eq!(op["status"], "completed", "{op}");
+    assert_eq!(
+        std::fs::read(dst.join("big.bin")).unwrap().len(),
+        2 * 1024 * 1024
+    );
+    let paused: bool = call(&app, "pause_operation", json!({ "id": id })).unwrap();
+    assert!(!paused, "finished operations can't be paused");
+}
+
+/// CMD-081 — the global bandwidth limit is kept in the settings.
+#[test]
+fn bandwidth_limit_is_saved_in_settings() {
+    let TestApp { app, tmp: _tmp } = app();
+    call_ok(
+        &app,
+        "set_bandwidth_limit",
+        json!({ "bytesPerSec": 1_048_576 }),
+    );
+    let s: Value = call(&app, "settings", json!({})).unwrap();
+    assert_eq!(s["bandwidthLimit"], 1_048_576);
+    call_ok(&app, "set_bandwidth_limit", json!({ "bytesPerSec": 0 }));
+    let s: Value = call(&app, "settings", json!({})).unwrap();
+    assert_eq!(s["bandwidthLimit"], Value::Null);
+}
+
+/// CMD-082 — copies saved by the last run come back paused and restored,
+/// and run only when resumed.
+#[test]
+fn saved_copies_come_back_paused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("a.txt");
+    std::fs::write(&src, "saved").unwrap();
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let id = "5f0c6a52-6a43-4a8e-9a57-5a0e7bd0c001";
+    let saved = json!({ "operations": [{
+        "id": id,
+        "operation": { "type": "copy", "sources": [local(&src.to_string_lossy())], "destination": local(&dst.to_string_lossy()) },
+        "options": { "verify": true },
+        "queuedMs": 1,
+    }]});
+    std::fs::write(data.join("queue.json"), saved.to_string()).unwrap();
+    let TestApp { app, tmp } = app_in(tmp);
+    let op = wait_op(&app, id, |_| true);
+    assert_eq!(op["status"], "paused");
+    assert_eq!(op["restored"], true);
+    assert_eq!(op["options"]["verify"], true);
+    assert!(!dst.join("a.txt").exists());
+    let resumed: bool = call(&app, "resume_operation", json!({ "id": id })).unwrap();
+    assert!(resumed);
+    let op = wait_op(&app, id, finished);
+    assert_eq!(op["status"], "completed", "{op}");
+    assert_eq!(std::fs::read_to_string(dst.join("a.txt")).unwrap(), "saved");
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(tmp.path().join("data/queue.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["operations"], json!([]));
+}
+
+/// CMD-083 — an unattended copy lists its failures, saves them as a text
+/// file and retries them as a new operation.
+#[test]
+fn failed_items_report_and_retry() {
+    let TestApp { app, tmp } = app();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.txt"), "new a").unwrap();
+    std::fs::write(src.join("b.txt"), "new b").unwrap();
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    std::fs::write(dst.join("a.txt"), "old a").unwrap();
+    let id: String = call(
+        &app,
+        "enqueue_operation",
+        json!({
+            "operation": { "type": "copy", "sources": [local(&src.join("a.txt").to_string_lossy()), local(&src.join("b.txt").to_string_lossy())], "destination": local(&dst.to_string_lossy()) },
+            "options": { "keepGoing": true },
+        }),
+    )
+    .unwrap();
+    let op = wait_op(&app, &id, finished);
+    assert_eq!(
+        (op["status"].as_str(), op["failed"].as_u64()),
+        (Some("completed"), Some(1)),
+        "{op}"
+    );
+    let items: Vec<Value> = call(&app, "failed_items", json!({ "id": id })).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["error"]["kind"], "alreadyExists");
+
+    let report = tmp.path().join("errors.txt");
+    call_ok(
+        &app,
+        "save_failure_report",
+        json!({ "id": id, "location": local(&report.to_string_lossy()) }),
+    );
+    let text = std::fs::read_to_string(&report).unwrap();
+    assert!(text.contains("a.txt: already exists"), "{text}");
+    let again = call::<Value>(
+        &app,
+        "save_failure_report",
+        json!({ "id": id, "location": local(&report.to_string_lossy()) }),
+    )
+    .unwrap_err();
+    assert_eq!(
+        again["kind"], "alreadyExists",
+        "an existing file is not replaced"
+    );
+
+    let retry: String = call(
+        &app,
+        "retry_failed",
+        json!({ "id": id, "conflict": "overwrite" }),
+    )
+    .unwrap();
+    let op = wait_op(&app, &retry, finished);
+    assert_eq!(op["status"], "completed", "{op}");
+    assert_eq!(std::fs::read_to_string(dst.join("a.txt")).unwrap(), "new a");
+    let none = call::<Value>(&app, "retry_failed", json!({ "id": retry })).unwrap_err();
+    assert_eq!(none["kind"], "invalid");
 }

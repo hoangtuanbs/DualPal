@@ -61,6 +61,10 @@ struct State {
     rename_replaces: AtomicBool,
     /// How long every new writer waits before taking its first byte.
     write_delay: Mutex<Option<Duration>>,
+    /// Every writer flips the bits of the first byte it is given.
+    corrupt: AtomicBool,
+    /// 0 = use the wrapped backend, 1 = force true, 2 = force false.
+    checksum_reads: AtomicU64,
 }
 
 impl<F: FileSystem> FaultyFs<F> {
@@ -82,6 +86,8 @@ impl<F: FileSystem> FaultyFs<F> {
                 parallel: AtomicUsize::new(0),
                 rename_replaces: AtomicBool::new(true),
                 write_delay: Mutex::new(None),
+                corrupt: AtomicBool::new(false),
+                checksum_reads: AtomicU64::new(0),
             }),
         }
     }
@@ -165,6 +171,19 @@ impl<F: FileSystem> FaultyFs<F> {
             .store(if yes { 1 } else { 2 }, Ordering::SeqCst);
     }
 
+    /// Every writer from now on spoils the first byte it writes, as a bad
+    /// disk or link would, so that a checked copy finds a mismatch.
+    pub fn corrupt_writes(&self, yes: bool) {
+        self.state.corrupt.store(yes, Ordering::SeqCst);
+    }
+
+    /// Whether copies here are checked by checksum (true) or by size.
+    pub fn set_checksum_reads(&self, yes: bool) {
+        self.state
+            .checksum_reads
+            .store(if yes { 1 } else { 2 }, Ordering::SeqCst);
+    }
+
     pub fn set_parallel_transfers(&self, n: usize) {
         self.state.parallel.store(n.max(1), Ordering::SeqCst);
     }
@@ -204,6 +223,7 @@ impl<F: FileSystem> FaultyFs<F> {
         let delay = *self.state.write_delay.lock().unwrap();
         Box::new(CountingWriter {
             inner,
+            corrupt: self.state.corrupt.load(Ordering::SeqCst),
             delay: delay.map(|d| Box::pin(tokio::time::sleep(d))),
             budget,
             state: self.state.clone(),
@@ -221,6 +241,8 @@ impl<F: FileSystem> FaultyFs<F> {
 
 struct CountingWriter {
     inner: Writer,
+    /// Spoil the next byte written (then clear).
+    corrupt: bool,
     /// Waited out before the first byte is written.
     delay: Option<Pin<Box<tokio::time::Sleep>>>,
     budget: u64,
@@ -243,6 +265,16 @@ impl AsyncWrite for CountingWriter {
         if let Some(d) = self.delay.as_mut() {
             std::task::ready!(d.as_mut().poll(cx));
             self.delay = None;
+        }
+        if self.corrupt && !buf.is_empty() {
+            let spoiled = [!buf[0]];
+            let r = Pin::new(&mut self.inner).poll_write(cx, &spoiled);
+            if let Poll::Ready(Ok(n)) = r {
+                if n == 1 {
+                    self.corrupt = false;
+                }
+            }
+            return r;
         }
         if self.budget != NEVER {
             if self.budget == 0 {
@@ -393,6 +425,14 @@ impl<F: FileSystem> FileSystem for FaultyFs<F> {
             1 => true,
             2 => false,
             _ => self.inner.atomic_writes(),
+        }
+    }
+
+    fn checksum_reads(&self) -> bool {
+        match self.state.checksum_reads.load(Ordering::SeqCst) {
+            1 => true,
+            2 => false,
+            _ => self.inner.checksum_reads(),
         }
     }
 

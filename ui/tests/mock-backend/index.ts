@@ -335,6 +335,18 @@ const handlers: Record<string, Handler> = {
     return id;
   },
   cancel_operation: () => false,
+  pause_operation: () => true,
+  resume_operation: () => true,
+  set_queue_paused: () => null,
+  queue_paused: () => false,
+  set_bandwidth_limit: (a, s) => {
+    s.scenario.settings = { ...s.scenario.settings, bandwidthLimit: a.bytesPerSec || null };
+    return null;
+  },
+  set_operation_limit: () => true,
+  failed_items: () => [],
+  retry_failed: () => crypto.randomUUID(),
+  save_failure_report: () => null,
   clear_finished_operations: () => null,
   clear_activity: () => null,
   open_url: () => null,

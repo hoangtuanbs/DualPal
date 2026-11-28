@@ -211,6 +211,8 @@ pub async fn connect(
         }
     }
     state.registry.register(c.fs.clone());
+    // Restored operations waiting for this server can now be resumed.
+    state.queue.refresh_waiting();
     state
         .start_paths
         .lock()
@@ -226,6 +228,7 @@ async fn disconnect_fs(state: &AppState, fs_id: &str) {
     state.editor.stop_all_on(fs_id);
     // The session closes once running operations drop their handle to it.
     state.registry.unregister(fs_id);
+    state.queue.refresh_waiting();
     state.start_paths.lock().unwrap().remove(fs_id);
 }
 

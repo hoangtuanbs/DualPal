@@ -95,7 +95,15 @@ pub fn build_state(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> std::io::Res
             ActivityLog::in_memory(ACTIVITY_CAPACITY)
         }
     };
-    let queue = OperationQueue::new(registry.clone(), Arc::new(activity), MAX_CONCURRENT_OPS);
+    // Unfinished copies and moves from the last run come back paused.
+    let queue = OperationQueue::with_store(
+        registry.clone(),
+        Arc::new(activity),
+        MAX_CONCURRENT_OPS,
+        data_dir.join("queue.json"),
+    );
+    queue.restore();
+    queue.set_bandwidth_limit(settings.get().bandwidth_limit.unwrap_or(0));
     let sync = SyncEngine::new(queue.clone(), Some(data_dir.join("sync-state")));
     let live = LiveSync::new(sync.clone(), queue.clone());
     let sync_favorites = SyncFavorites::open(data_dir.join("syncs.json"));
@@ -183,6 +191,15 @@ pub const COMMANDS: &[&str] = &[
     "cancel_operation",
     "operations",
     "clear_finished_operations",
+    "pause_operation",
+    "resume_operation",
+    "set_queue_paused",
+    "queue_paused",
+    "set_bandwidth_limit",
+    "set_operation_limit",
+    "failed_items",
+    "retry_failed",
+    "save_failure_report",
     "activity",
     "clear_activity",
     "volumes",
@@ -261,6 +278,15 @@ macro_rules! all_commands {
             commands::cancel_operation,
             commands::operations,
             commands::clear_finished_operations,
+            commands::pause_operation,
+            commands::resume_operation,
+            commands::set_queue_paused,
+            commands::queue_paused,
+            commands::set_bandwidth_limit,
+            commands::set_operation_limit,
+            commands::failed_items,
+            commands::retry_failed,
+            commands::save_failure_report,
             commands::activity,
             commands::clear_activity,
             commands::volumes,
