@@ -389,3 +389,71 @@ describe("UI-UNIT-018 PaneState quick filter", () => {
     expect(p.selected.size).toBe(1);
   });
 });
+
+describe("UI-UNIT-052 PaneState search results", () => {
+  const found = (path: string, kind: "file" | "dir" = "file"): Entry => ({
+    ...file(path.slice(path.lastIndexOf("/") + 1)),
+    path,
+    kind,
+  });
+
+  it("shows matches with their path below the folder searched and leaves with Backspace", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/a.txt": "", "/dir/sub/": "", "/dir/sub/b.txt": "x" }));
+    const p = await pane([file("a.txt"), dir("sub")]);
+    p.showResults(LOC, "b", [found("/dir/sub/b.txt"), found("/dir/a.txt")], 7);
+    expect(p.results).toEqual({ base: LOC, label: "b", search: 7 });
+    expect(p.title).toBe("Search: b");
+    expect(p.visible.map((e) => p.displayName(e))).toEqual(["a.txt", "sub/b.txt"]);
+    // Operations use each entry's real location.
+    p.cursor = 1;
+    expect(p.targets.map((e) => ({ fs: p.location!.fs, path: e.path }))).toEqual([{ fs: "local", path: "/dir/sub/b.txt" }]);
+
+    // Later matches of the same search join in; others are ignored.
+    p.addResults(7, [found("/dir/sub/c.txt"), found("/dir/a.txt")]);
+    p.addResults(8, [found("/dir/zzz.txt")]);
+    expect(p.entries.map((e) => e.path)).toEqual(["/dir/sub/b.txt", "/dir/a.txt", "/dir/sub/c.txt"]);
+
+    await p.up();
+    expect(p.results).toBeNull();
+    expect(p.location).toEqual(LOC);
+    expect(p.visible.map((e) => e.name)).toEqual(["sub", "a.txt"]);
+  });
+
+  it("Back returns to where the pane was; opening a folder leaves the results", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/sub/": "", "/elsewhere/": "" }));
+    const p = await pane([file("a.txt")], { fs: "local", path: "/elsewhere" });
+    p.showResults(LOC, "x", [found("/dir/sub", "dir")], 1);
+    expect(p.canBack).toBe(true);
+    await p.activate(p.visible[0]);
+    expect(p.results).toBeNull();
+    expect(p.location).toEqual({ fs: "local", path: "/dir/sub" });
+  });
+
+  it("refresh drops matches that are gone and shows hidden matches", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/.keep": "x", "/dir/b.txt": "new content" }));
+    const p = await pane([]);
+    expect(p.showHidden).toBe(false);
+    p.showResults(LOC, "x", [found("/dir/.keep"), found("/dir/b.txt"), found("/dir/gone.txt")], 2);
+    p.selected.add("/dir/gone.txt");
+    expect(p.visible).toHaveLength(3);
+    await p.refresh();
+    expect(p.entries.map((e) => e.path)).toEqual(["/dir/.keep", "/dir/b.txt"]);
+    expect(p.entries[1].size).toBe("new content".length);
+    expect(p.selected.size).toBe(0);
+    expect(p.results).not.toBeNull();
+  });
+
+  it("Show in Folder opens the folder holding a match with it under the cursor", async () => {
+    const mock = installMockBackend();
+    mock.setTree("local", tree({ "/dir/": "", "/dir/sub/": "", "/dir/sub/a.txt": "", "/dir/sub/b.txt": "" }));
+    const p = await pane([]);
+    p.showResults(LOC, "b", [found("/dir/sub/b.txt")], 3);
+    await p.showInFolder(p.visible[0]);
+    expect(p.results).toBeNull();
+    expect(p.location).toEqual({ fs: "local", path: "/dir/sub" });
+    expect(p.current?.name).toBe("b.txt");
+  });
+});
