@@ -31,7 +31,7 @@ ui/                   Svelte 5 + TypeScript front end (built with Vite)
 ### Core concepts
 
 - **`FileSystem`** — every browsable place (local disk, SFTP, FTP and WebDAV servers, S3 buckets) implements this async trait. A **`Location`** is `{ fs, path }`, so the UI, the operation queue and the compare/sync engine work the same across local and remote storage. Copies between different file systems stream through the core.
-- **`OperationQueue`** — operations run in the background (two at a time by default), report progress (items, bytes, current file) as events, can be cancelled, and clean up partial files. Conflicts are handled per operation: `fail` (default), `skip` or `overwrite`.
+- **`OperationQueue`** — operations run in the background (two at a time by default), report progress (items, bytes, current file) as events, can be paused, resumed or cancelled, and clean up partial files. Conflicts are handled per operation: `fail` (default), `skip` or `overwrite`. Unfinished copies and moves are kept in `queue.json` in the app data folder (see [Operations](#operations)).
 - **`ActivityLog`** — every finished operation is recorded and kept across restarts (`activity.jsonl` in the app data folder).
 
 ## Development
@@ -107,6 +107,18 @@ npm run test:unit                    # L5 UI unit/component tests
 | Ctrl/⌘ Shift Y | Compare & Sync the folders of both panes |
 | Ctrl/⌘ Shift D | Compare two files in your compare app |
 | Ctrl/⌘ Shift L | Synchronized browsing on / off |
+
+## Operations
+
+The *Operations* panel at the bottom shows every copy, move, delete and other operation with its progress.
+
+- **Pause / Resume** a copy or move: it finishes the piece it is writing, then waits, and lets the next operation in the queue run meanwhile. *Pause all* holds every operation; *Resume all* lets them go on. Resuming carries on in the same file.
+- **Kept across restarts**: copies and moves that had not finished when Dual Pal closed come back paused, marked *Not finished when Dual Pal closed*, with *Resume* and *Discard*. They never start by themselves. One that needs a server that is not connected shows *Waiting for* that server and starts once you connect it. Partly copied files stay under their hidden temporary name and are picked up where they stopped on disks and SFTP/FTP servers (WebDAV and S3 start that file again); *Discard* removes them.
+- **Limit** caps the bandwidth of all copies together, in KB/s or MB/s (empty for no limit; remembered). *Limit…* on a running copy gives it its own limit, or 0 for none.
+- **Verify copies** checks each copied file against the original after writing it, by SHA-256 checksum, or by size on S3 and WebDAV where reading it back means downloading it again. A file that does not match fails; the old file at the target is left alone (on S3, where an upload replaces it at once, the bad copy is removed).
+- **Don't stop on errors**: items that fail are skipped and the rest is copied. The operation then shows *Done with N errors*; *Show errors* lists each path and reason, which you can copy, save as a text file in the current folder, or *Retry failed* as a new operation.
+- *Verify copies* and *Don't stop on errors* are remembered and apply to copies and moves started after you set them. Without them, an operation stops at the first error, as before.
+- Every copy writes to a hidden temporary name and renames it when complete, and gives the copy the original's modified time.
 
 ## Servers (SFTP, FTP, WebDAV and S3)
 
