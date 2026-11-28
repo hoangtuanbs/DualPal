@@ -89,6 +89,10 @@ fn tested_commands() -> HashSet<&'static str> {
         "diff_tools",
         "compare_files",
         "activity_insights",
+        "checksum_calculate",
+        "checksum_verify",
+        "cancel_checksum",
+        "checksum_save",
     ]
     .into_iter()
     .collect()
@@ -1277,4 +1281,68 @@ fn find_files_matches_names_and_cancel() {
     assert!(blank["hits"].as_array().unwrap().is_empty());
 
     call_ok(&app, "cancel_find_files", json!({ "request": 99 }));
+}
+
+/// CMD-041 — checksum_calculate hashes files and folders, checksum_save writes
+/// a checksum file that checksum_verify accepts, and cancelling is a no-op.
+#[test]
+fn checksum_calculate_save_and_verify() {
+    let TestApp { app, tmp } = app();
+    let dir = tmp.path().join("c");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("a.txt"), "abc").unwrap();
+    std::fs::write(dir.join("sub/b.txt"), "").unwrap();
+    let folder = local(&dir.to_string_lossy());
+
+    let entries: Vec<Value> = call(
+        &app,
+        "checksum_calculate",
+        json!({ "folder": folder, "names": ["a.txt", "sub"], "algorithm": "md5", "request": 1 }),
+    )
+    .unwrap();
+    assert_eq!(entries[0]["path"], "a.txt");
+    assert_eq!(entries[0]["hash"], "900150983cd24fb0d6963f7d28e17f72");
+    assert_eq!(entries[1]["path"], "sub/b.txt");
+    assert_eq!(entries[1]["hash"], "d41d8cd98f00b204e9800998ecf8427e");
+
+    let saved: Value = call(
+        &app,
+        "checksum_save",
+        json!({ "folder": folder, "fileName": "sums", "algorithm": "md5", "entries": entries, "overwrite": false }),
+    )
+    .unwrap();
+    assert_eq!(
+        saved["path"],
+        dir.join("sums.md5").to_string_lossy().as_ref()
+    );
+    let text = std::fs::read_to_string(dir.join("sums.md5")).unwrap();
+    assert!(
+        text.starts_with("900150983cd24fb0d6963f7d28e17f72  a.txt\n"),
+        "{text}"
+    );
+
+    let report: Value = call(
+        &app,
+        "checksum_verify",
+        json!({ "file": saved, "algorithm": "md5", "request": 2 }),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            report["ok"].as_u64(),
+            report["failed"].as_u64(),
+            report["missing"].as_u64()
+        ),
+        (Some(2), Some(0), Some(0))
+    );
+
+    let again = call::<Value>(
+        &app,
+        "checksum_save",
+        json!({ "folder": folder, "fileName": "sums.md5", "algorithm": "md5", "entries": [], "overwrite": false }),
+    )
+    .unwrap_err();
+    assert_eq!(again["kind"], "alreadyExists");
+
+    call_ok(&app, "cancel_checksum", json!({ "request": 99 }));
 }

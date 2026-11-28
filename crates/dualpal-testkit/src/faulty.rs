@@ -369,6 +369,16 @@ impl<F: FileSystem> FileSystem for FaultyFs<F> {
         Ok(self.wrap_writer(writer, budget, path))
     }
 
+    async fn open_write_new(&self, path: &str) -> Result<Writer> {
+        self.before(FaultOp::OpenWrite).await?;
+        if self.state.broken.load(Ordering::SeqCst) {
+            return Err(Self::broken_error(path));
+        }
+        let budget = self.budget();
+        let writer = self.inner.open_write_new(path).await?;
+        Ok(self.wrap_writer(writer, budget, path))
+    }
+
     async fn open_write_at(&self, path: &str, offset: u64) -> Result<Writer> {
         self.before(FaultOp::OpenWriteAt).await?;
         self.state.resumed.lock().unwrap().push(offset);

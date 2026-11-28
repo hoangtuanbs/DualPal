@@ -40,6 +40,9 @@
   import MultiRename from "./lib/MultiRename.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import FindDialog from "./lib/FindDialog.svelte";
+  import ChecksumDialog from "./lib/ChecksumDialog.svelte";
+  import VerifyDialog from "./lib/VerifyDialog.svelte";
+  import { checksumAlgorithmOf } from "./lib/checksum";
   import Insights from "./lib/Insights.svelte";
   import Icon from "./lib/Icon.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
@@ -152,6 +155,8 @@
   let renaming = $state<{ items: Entry[]; folder: Location; others: string[] } | null>(null);
   let showPalette = $state(false);
   let showFind = $state(false);
+  /** The Checksums dialog: hash the items of a folder, or verify a checksum file. */
+  let checksumJob = $state<{ kind: "calculate"; folder: Location; names: string[] } | { kind: "verify"; file: Location } | null>(null);
   let showInsights = $state(false);
   let aboutPage = $state<"about" | "donate" | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
@@ -820,6 +825,8 @@
       { id: "terminal", group: "File", title: "Open Terminal Here", shortcut: `${MOD}Shift+T`, run: openTerminal },
       { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
       { id: "find", group: "File", title: "Find files by name…", shortcut: `${MOD}Shift+F`, run: () => (showFind = true) },
+      { id: "checksums", group: "File", title: "Calculate Checksums…", run: calculateChecksums },
+      { id: "verifyChecksums", group: "File", title: "Verify Checksums", run: () => active.current && verifyChecksums(active.current) },
       { id: "trash", group: "File", title: "Move to Trash", shortcut: "F8", run: trash },
       { id: "delete", group: "File", title: "Delete Permanently", shortcut: "Shift+Delete", run: remove },
       { id: "compareFolders", group: "Compare", title: "Compare & Sync Folders…", shortcut: `${MOD}Shift+Y`, run: compareFolders },
@@ -987,6 +994,25 @@
     else enqueue({ type: "trash", targets });
   }
 
+  /** Hash the marked items, or the one under the cursor, folders recursively. */
+  function calculateChecksums() {
+    const loc = active.location;
+    const names = active.targets.map((e) => e.name);
+    if (!loc || !names.length) return;
+    checksumJob = { kind: "calculate", folder: loc, names };
+  }
+
+  /** Check the files a checksum file lists. */
+  function verifyChecksums(entry: Entry) {
+    const loc = active.location;
+    if (!loc) return;
+    if (entry.kind !== "file" || !checksumAlgorithmOf(entry.name)) {
+      notice = "Pick a .md5, .sha1, .sha256 or .xxh128 file to verify.";
+      return;
+    }
+    checksumJob = { kind: "verify", file: { fs: loc.fs, path: entry.path } };
+  }
+
   /** Zip the targets into a new archive next to them. */
   function compress() {
     const loc = active.location;
@@ -1131,6 +1157,10 @@
         ? { label: "Rename…", icon: "rename", shortcut: "F2", run: rename }
         : { label: `Rename${what}…`, icon: "multi-rename", shortcut: "Shift+F2", run: multiRename },
       { label: "Compress into ZIP", icon: "archive", run: compress },
+      { label: "Calculate Checksums…", run: calculateChecksums },
+      ...(single && checksumAlgorithmOf(single.name) && single.kind === "file"
+        ? [{ label: "Verify Checksums", run: () => verifyChecksums(single) }]
+        : []),
       {
         label: n === 1 ? "Copy Path" : `Copy ${n} Paths`,
         icon: "clipboard",
@@ -1264,7 +1294,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage) return;
+    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || checksumJob || showInsights || aboutPage) return;
     const cmd = e.metaKey || e.ctrlKey;
     if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
       showPalette = true;
@@ -1718,6 +1748,17 @@
       if (parent) await active.open(parent, { record: true, focusName: hit.name });
     }}
   />
+{/if}
+
+{#if checksumJob && checksumJob.kind === "calculate"}
+  <ChecksumDialog
+    folder={checksumJob.folder}
+    names={checksumJob.names}
+    onclose={() => (checksumJob = null)}
+    onsaved={() => allPanes().forEach((p) => p.refresh())}
+  />
+{:else if checksumJob && checksumJob.kind === "verify"}
+  <VerifyDialog file={checksumJob.file} onclose={() => (checksumJob = null)} />
 {/if}
 
 {#if aboutPage}

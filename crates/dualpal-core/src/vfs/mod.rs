@@ -145,6 +145,16 @@ pub trait FileSystem: Send + Sync {
     async fn open_read(&self, path: &str) -> Result<Reader>;
     /// Create or truncate a file for writing.
     async fn open_write(&self, path: &str) -> Result<Writer>;
+    /// Create a new file for writing; [`Error::AlreadyExists`] if one is
+    /// there. Local disks and SFTP check and create in one step, so a file
+    /// made meanwhile by someone else is never written over. Elsewhere it
+    /// checks first, which leaves a short window.
+    async fn open_write_new(&self, path: &str) -> Result<Writer> {
+        if self.exists(path).await? {
+            return Err(Error::AlreadyExists(path.to_string()));
+        }
+        self.open_write(path).await
+    }
     /// Open a file for reading, starting `offset` bytes in.
     async fn open_read_at(&self, path: &str, offset: u64) -> Result<Reader> {
         use tokio::io::AsyncReadExt;

@@ -21,6 +21,7 @@ crates/dualpal-core   Platform-independent Rust core (no Tauri dependency)
   src/ops/            Operation queue: copy, move, delete, rename, create folder
   src/activity.rs     Persistent activity log (JSON lines) and insights
   src/compare.rs      Folder comparison on any two file systems
+  src/checksum.rs     MD5, SHA-1, SHA-256 and XXH128 checksums; checksum files and verification
   src/sync.rs         One-way and two-way sync with per-pair history
   src/rename.rs       Multi Rename rules and presets
   src/difftools.rs    External file compare apps
@@ -67,7 +68,7 @@ npm run test:unit                    # L5 UI unit/component tests
 ## Mouse
 
 - **Click** an item to put the cursor on it; **Ctrl/⌘-click** marks several, **Shift-click** marks a range. Operations act on all marked items, or on the item under the cursor when none are marked.
-- **Right-click** an item for its menu: open, edit, copy or move to the other pane, rename, compress, copy path, compare, trash or delete. With several items marked, the menu acts on all of them. Right-click empty space for new folder, refresh, select and more.
+- **Right-click** an item for its menu: open, edit, copy or move to the other pane, rename, compress, copy path, compare, checksums, trash or delete. With several items marked, the menu acts on all of them. Right-click empty space for new folder, refresh, select and more.
 - **Drag** items to the other pane, or onto a folder in either pane, to copy them there. Hold **Shift** when you let go to move instead; **Esc** cancels. Files dragged in from Explorer or Finder are copied to the folder they are dropped on.
 - **Drag the divider** between the panes to make one wider. Double-click it to make them equal again; the width is remembered. With the divider focused, the arrow keys move it (Shift for bigger steps).
 
@@ -147,6 +148,7 @@ Folders on this computer are watched, so a change is synced within a couple of s
 - **Linked** (synchronized browsing): going into a folder, or up, in one pane does the same in the other.
 - **Compare Files** opens two files in your compare app (FileMerge, Beyond Compare, Kaleidoscope, VS Code, BBEdit, WinMerge, Meld, P4Merge…, found automatically; choose with *Choose Compare App…* in the command palette). Server files are downloaded first. In Compare & Sync, double-click a changed file.
 - **Multi Rename** renames the marked items with rules (replace text or a regular expression, change case, insert text with `{name}` `{ext}` `{parent}` `{date}` `{n}` tokens, numbering, remove characters, change extension) and shows every new name before it renames. Rule sets can be saved as presets; a few come built in. Swapping names between items works.
+- **Checksums** hash the marked items, or the one under the cursor, folders included, with MD5, SHA-1, SHA-256 or XXH128 (*Calculate Checksums…* in the menu or the command palette). Copy the list, or save it as a checksum file next to the files (`.md5`, `.sha1`, `.sha256` or `.xxh128`) in the standard `md5sum` layout. *Verify Checksums* on such a file lists each file it names as OK, FAILED (different) or MISSING, failures first. Files are read in pieces, so this works on servers and buckets too.
 - **Activity insights** (from the Activity tab or the palette) shows what was done per day, by kind and by place, transfer speed, the largest transfers and recent failures.
 
 ## Roadmap
