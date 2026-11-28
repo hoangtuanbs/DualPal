@@ -223,6 +223,7 @@ pub const COMMANDS: &[&str] = &[
     "preview_path",
     "settings",
     "save_settings",
+    "update_settings",
     "secrets_status",
     "protect_secrets",
     "unlock_secrets",
@@ -301,6 +302,7 @@ macro_rules! all_commands {
             remote::preview_path,
             remote::settings,
             remote::save_settings,
+            remote::update_settings,
             remote::secrets_status,
             remote::protect_secrets,
             remote::unlock_secrets,
@@ -406,6 +408,33 @@ fn linux_webview_workarounds() {
     }
 }
 
+/// Menu id of the app menu's Settings… item; choosing it sends
+/// [`OPEN_SETTINGS_EVENT`] to the window.
+const SETTINGS_MENU_ID: &str = "settings";
+/// Event that opens the Settings screen in the UI.
+pub const OPEN_SETTINGS_EVENT: &str = "open-settings";
+
+/// The standard macOS menu with Settings… (⌘,) after About in the app menu.
+/// Other systems have no app menu; the Settings screen opens from the
+/// keyboard and the command palette there.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
+    let menu = Menu::default(app)?;
+    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
+        let settings = MenuItem::with_id(
+            app,
+            SETTINGS_MENU_ID,
+            "Settings…",
+            true,
+            Some("CmdOrCtrl+,"),
+        )?;
+        let separator = PredefinedMenuItem::separator(app)?;
+        app_menu.insert_items(&[&settings, &separator], 2)?;
+    }
+    Ok(menu)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
@@ -413,6 +442,12 @@ pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = desktop_plugins(builder);
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu).on_menu_event(|app, event| {
+        if event.id().0 == SETTINGS_MENU_ID {
+            let _ = app.emit(OPEN_SETTINGS_EVENT, ());
+        }
+    });
     builder
         .setup(|app| {
             let state = build_state(app_dirs(app)?, secrets_from_env())?;

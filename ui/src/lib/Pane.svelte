@@ -5,6 +5,7 @@
   import type { PaneGroup, SortKey } from "./pane-state.svelte";
   import { fsNames } from "./fs-names.svelte";
   import { drag, dragging, fromKeyboard, type DropTarget } from "./drag.svelte";
+  import { prefs } from "./prefs.svelte";
 
   let {
     group,
@@ -26,6 +27,9 @@
   } = $props();
   const pane = $derived(group.current);
   const side = $derived(index === 0 ? "left" : "right");
+  /** List view columns turned off in Settings. */
+  const hideSize = $derived(prefs.settings.hiddenColumns?.includes("size") ?? false);
+  const hideDate = $derived(prefs.settings.hiddenColumns?.includes("modified") ?? false);
 
   /** Icon grid cell width incl. gap, in px. */
   const CELL = 112;
@@ -260,6 +264,8 @@
 <section
   class="pane"
   class:active
+  class:hide-size={hideSize}
+  class:hide-date={hideDate}
   class:drop-target={drag.target?.pane === index && !drag.target.row}
   data-pane={index}
   data-testid={`pane-${side}`}
@@ -302,8 +308,8 @@
   {#if pane.view === "list"}
     <div class="columns">
       <button class="name" onclick={() => pane.setSort("name")}>Name {sortMark("name")}</button>
-      <button class="size" onclick={() => pane.setSort("size")}>Size {sortMark("size")}</button>
-      <button class="date" onclick={() => pane.setSort("modified")}>Date Modified {sortMark("modified")}</button>
+      {#if !hideSize}<button class="size" onclick={() => pane.setSort("size")}>Size {sortMark("size")}</button>{/if}
+      {#if !hideDate}<button class="date" onclick={() => pane.setSort("modified")}>Date Modified {sortMark("modified")}</button>{/if}
     </div>
   {/if}
 
@@ -370,8 +376,8 @@
             <span class="label">{entry.name}</span>
             {#if entry.symlink}<span class="badge" title="Symbolic link">↪</span>{/if}
           </span>
-          <span class="size">{sizeText(entry)}</span>
-          <span class="date">{formatShortDate(entry.modifiedMs)}</span>
+          {#if !hideSize}<span class="size">{sizeText(entry)}</span>{/if}
+          {#if !hideDate}<span class="date">{formatShortDate(entry.modifiedMs)}</span>{/if}
         </div>
       {:else}
         {@const thumb = thumbnailUrl(pane.location, entry)}
@@ -493,6 +499,18 @@
     color: var(--muted);
     font-weight: 600;
   }
+  .hide-size .columns,
+  .hide-size .row {
+    grid-template-columns: minmax(0, 1fr) 170px;
+  }
+  .hide-date .columns,
+  .hide-date .row {
+    grid-template-columns: minmax(0, 1fr) 90px;
+  }
+  .hide-size.hide-date .columns,
+  .hide-size.hide-date .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .columns .size,
   .row .size {
     text-align: right;
@@ -503,11 +521,23 @@
     .row {
       grid-template-columns: minmax(0, 1fr) 72px 120px;
     }
+    .hide-size .columns,
+    .hide-size .row {
+      grid-template-columns: minmax(0, 1fr) 120px;
+    }
+    .hide-date .columns,
+    .hide-date .row {
+      grid-template-columns: minmax(0, 1fr) 72px;
+    }
   }
   @container (max-width: 430px) {
     .columns,
     .row {
       grid-template-columns: minmax(0, 1fr) 72px;
+    }
+    .hide-size .columns,
+    .hide-size .row {
+      grid-template-columns: minmax(0, 1fr);
     }
     .columns .date,
     .row .date {
@@ -521,7 +551,7 @@
     outline: none;
   }
   .row {
-    height: 26px;
+    height: var(--row-height);
     align-items: center;
     cursor: default;
     user-select: none;

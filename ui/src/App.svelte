@@ -48,6 +48,9 @@
   import { updates } from "./lib/updates.svelte";
   import { UPDATE_CHECK_DELAY_MS, UPDATE_RECHECK_POLL_MS, activeOperationCount } from "./lib/updates";
   import { SPLIT_DEFAULT, clampSplit, loadSplit, saveSplit, splitAt, splitForKey } from "./lib/split";
+  import SettingsDialog, { type KeyCommand, type SettingsSection } from "./lib/SettingsDialog.svelte";
+  import { prefs } from "./lib/prefs.svelte";
+  import { FIELD_COMMANDS, formatKeys, lookup, worksInFields } from "./lib/keymap";
 
   const groups = [new PaneGroup(new PaneState()), new PaneGroup(new PaneState())];
   let activeIndex = $state(0);
@@ -154,6 +157,8 @@
   let showFind = $state(false);
   let showInsights = $state(false);
   let aboutPage = $state<"about" | "donate" | null>(null);
+  /** The Settings screen, open at this section. */
+  let settingsPage = $state<SettingsSection | null>(null);
   /** Synchronized browsing: entering or leaving a folder in one pane does the same in the other. */
   let linked = $state(false);
   let diffTools = $state<DiffTool[]>([]);
@@ -168,6 +173,7 @@
     let unlisten: (() => void) | undefined;
     let unlistenEdits: (() => void) | undefined;
     let unlistenLive: (() => void) | undefined;
+    let unlistenSettings: (() => void) | undefined;
     // PREP-06: a deterministic "app ready" signal for E2E tests, after both
     // panes finish their first listing.
     let resolveReady: (() => void) | undefined;
@@ -178,13 +184,17 @@
       unlisten = await api.onOperationUpdated(onOperationUpdated);
       unlistenLive = await api.onLiveSyncUpdated(onLiveSyncUpdated);
       unlistenEdits = await api.onEditSessionUpdated(onEditSessionUpdated);
+      unlistenSettings = await api.onOpenSettings(() => openSettings());
+      await prefs.load().catch((e) => console.warn("Could not read the settings:", errorMessage(e)));
+      shownHidden = prefs.settings.showHidden ?? false;
+      for (const g of groups) g.current.showHidden = shownHidden;
       await loadConnections();
       editSessions = await api.editSessions();
       const home = await api.homeLocation();
       // Auto-sync left running when the window reloaded: show its folders,
       // the source on the left, before the panes are locked.
       const running = await api.liveSyncStatus();
-      const start = running ? [running.from, running.to] : [home, home];
+      const start = running ? [running.from, running.to] : [startFolder(0, home), startFolder(1, home)];
       await Promise.all(
         groups.map(async (g, i) => {
           await g.current.open(start[i]);
@@ -198,6 +208,7 @@
       syncs = await api.syncFavorites();
       diffTools = await api.diffTools();
       if (running) onLiveSyncUpdated(await api.liveSyncStatus());
+      started = true;
     })().catch((e) => (notice = errorMessage(e))).finally(() => resolveReady?.());
     PaneState.navigated = followNavigation;
     // Pick up mounted/unmounted drives and changing free space.
@@ -212,11 +223,64 @@
       unlisten?.();
       unlistenEdits?.();
       unlistenLive?.();
+      unlistenSettings?.();
       clearInterval(timer);
       clearTimeout(updateTimer);
       clearInterval(updatePoll);
       PaneState.navigated = null;
     };
+  });
+
+  // ---- settings -------------------------------------------------------------
+
+  /** The panes have opened their first folders. */
+  let started = false;
+  /** The "show hidden files" setting the panes were last given. */
+  let shownHidden = false;
+
+  /** Open the Settings screen (also from the macOS app menu), unless another
+   *  window is in the way. */
+  function openSettings(section: SettingsSection = "appearance") {
+    if (frozen || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming) return;
+    menu = null;
+    showPalette = false;
+    showFind = false;
+    showInsights = false;
+    aboutPage = null;
+    settingsPage = section;
+  }
+
+  /** What pane `i` opens at start, from Settings: its last local folder, a
+   *  chosen folder, or home. A missing folder falls back to home later. */
+  function startFolder(i: number, home: Location): Location {
+    const s = prefs.settings;
+    const choice = s.paneStart?.[i];
+    if (choice?.mode === "last" && s.lastFolders?.[i]) return { fs: "local", path: s.lastFolders[i]! };
+    if (choice?.mode === "folder" && choice.folder) return { fs: "local", path: choice.folder };
+    return home;
+  }
+
+  // Remember each pane's local folder while a pane is set to open its last one.
+  let lastSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const here = groups.map((g) => g.current.location);
+    // A save still waiting is for a folder the pane may have left already.
+    clearTimeout(lastSaveTimer);
+    if (!prefs.settings.paneStart?.some((p) => p?.mode === "last")) return;
+    const saved = prefs.settings.lastFolders ?? [];
+    const next = here.map((l, i) => (l?.fs === "local" ? l.path : (saved[i] ?? null)));
+    if (next.every((p, i) => p === (saved[i] ?? null))) return;
+    lastSaveTimer = setTimeout(() => {
+      if (started) prefs.update({ lastFolders: next }).catch((e) => console.warn("Could not save the last folders:", errorMessage(e)));
+    }, 800);
+  });
+
+  // "Show hidden files" changed in Settings: every pane follows at once.
+  $effect(() => {
+    const hidden = prefs.settings.showHidden ?? false;
+    if (!started || hidden === shownHidden) return;
+    shownHidden = hidden;
+    for (const p of allPanes()) p.showHidden = hidden;
   });
 
   function onOperationUpdated(info: OperationInfo) {
@@ -729,13 +793,12 @@
       input: s.diffTool ?? diffTools[0]?.command ?? "",
       allowEmpty: true,
       confirmLabel: "Save",
-      onconfirm: (cmd) => api.saveSettings({ ...s, diffTool: cmd || null }).catch((e) => (notice = errorMessage(e))),
+      onconfirm: (cmd) => prefs.update({ diffTool: cmd || null }).catch((e) => (notice = errorMessage(e))),
     };
   }
 
   async function useDiffTool(t: DiffTool) {
-    const s = await api.settings();
-    await api.saveSettings({ ...s, diffTool: t.command }).catch((e) => (notice = errorMessage(e)));
+    await prefs.update({ diffTool: t.command }).catch((e) => (notice = errorMessage(e)));
   }
 
   /** Path segments, for comparing folder paths on any system. */
@@ -811,20 +874,22 @@
 
   const commands = $derived.by((): Command[] => {
     const c: Command[] = [
-      { id: "copy", group: "File", title: "Copy to Other Pane", shortcut: "F5", run: () => transfer("copy") },
-      { id: "move", group: "File", title: "Move to Other Pane", shortcut: "F6", run: () => transfer("move") },
-      { id: "newFolder", group: "File", title: "New Folder", shortcut: "F7", run: newFolder },
-      { id: "rename", group: "File", title: "Rename", shortcut: "F2", run: rename },
-      { id: "multiRename", group: "File", title: "Multi Rename…", shortcut: "Shift+F2", run: multiRename },
-      { id: "edit", group: "File", title: "Edit in Editor", shortcut: "F4", run: editInEditor },
-      { id: "terminal", group: "File", title: "Open Terminal Here", shortcut: `${MOD}Shift+T`, run: openTerminal },
+      { id: "copy", group: "File", title: "Copy to Other Pane", run: () => transfer("copy") },
+      { id: "move", group: "File", title: "Move to Other Pane", run: () => transfer("move") },
+      { id: "newFolder", group: "File", title: "New Folder", run: newFolder },
+      { id: "rename", group: "File", title: "Rename", run: rename },
+      { id: "multiRename", group: "File", title: "Multi Rename…", run: multiRename },
+      { id: "edit", group: "File", title: "Edit in Editor", run: editInEditor },
+      { id: "terminal", group: "File", title: "Open Terminal Here", run: openTerminal },
       { id: "compress", group: "File", title: "Compress into ZIP", run: compress },
-      { id: "find", group: "File", title: "Find files by name…", shortcut: `${MOD}Shift+F`, run: () => (showFind = true) },
-      { id: "trash", group: "File", title: "Move to Trash", shortcut: "F8", run: trash },
-      { id: "delete", group: "File", title: "Delete Permanently", shortcut: "Shift+Delete", run: remove },
-      { id: "compareFolders", group: "Compare", title: "Compare & Sync Folders…", shortcut: `${MOD}Shift+Y`, run: compareFolders },
-      { id: "compareFiles", group: "Compare", title: "Compare Files", shortcut: `${MOD}Shift+D`, run: compareFiles },
-      { id: "linked", group: "Compare", title: linked ? "Stop Synchronized Browsing" : "Synchronized Browsing", shortcut: `${MOD}Shift+L`, run: toggleLinked },
+      { id: "find", group: "File", title: "Find files by name…", run: () => active.location && (showFind = true) },
+      { id: "trash", group: "File", title: "Move to Trash", run: trash },
+      { id: "delete", group: "File", title: "Delete Permanently", run: remove },
+      { id: "compareFolders", group: "Compare", title: "Compare & Sync Folders…", run: compareFolders },
+      { id: "compareFiles", group: "Compare", title: "Compare Files", run: compareFiles },
+      { id: "linked", group: "Compare", title: linked ? "Stop Synchronized Browsing" : "Synchronized Browsing", run: toggleLinked },
+      { id: "settings", group: "Settings", title: "Settings…", run: () => openSettings() },
+      { id: "keyboardSettings", group: "Settings", title: "Keyboard Shortcuts…", run: () => openSettings("keyboard") },
       { id: "chooseDiff", group: "Settings", title: "Choose Compare App…", run: chooseDiffTool },
       { id: "chooseEditor", group: "Settings", title: "Choose Editor…", run: chooseEditor },
       ...(vault.protected
@@ -837,20 +902,22 @@
             { id: "resetSecrets", group: "Settings", title: "Reset Forgotten Master Password…", run: resetSecrets },
           ]
         : [{ id: "protectSecrets", group: "Settings", title: "Protect Saved Passwords with a Master Password…", run: protectSecrets }]),
-      { id: "selectAll", group: "Select", title: "Select All", shortcut: `${MOD}A`, run: () => active.visible.forEach((it) => active.selected.add(it.path)) },
-      { id: "selectPattern", group: "Select", title: "Select by Name…", shortcut: "+", run: () => selectByPattern(true) },
-      { id: "deselectPattern", group: "Select", title: "Deselect by Name…", shortcut: "−", run: () => selectByPattern(false) },
+      { id: "selectAll", group: "Select", title: "Select All", run: () => active.visible.forEach((it) => active.selected.add(it.path)) },
+      { id: "selectPattern", group: "Select", title: "Select by Name…", run: () => selectByPattern(true) },
+      { id: "deselectPattern", group: "Select", title: "Deselect by Name…", run: () => selectByPattern(false) },
       { id: "deselect", group: "Select", title: "Deselect All", run: () => active.selected.clear() },
-      { id: "list", group: "View", title: "List View", shortcut: `${MOD}1`, run: () => (active.view = "list") },
-      { id: "icons", group: "View", title: "Icon View", shortcut: `${MOD}2`, run: () => (active.view = "icons") },
-      { id: "hidden", group: "View", title: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files", shortcut: `${MOD}Shift+.`, run: () => (active.showHidden = !active.showHidden) },
-      { id: "info", group: "View", title: showInspector ? "Hide Info Panel" : "Show Info Panel", shortcut: `${MOD}I`, run: () => (showInspector = !showInspector) },
-      { id: "filter", group: "View", title: "Filter Items by Name", shortcut: `${MOD}F`, run: () => active.openFilter() },
-      { id: "refresh", group: "View", title: "Refresh", shortcut: `${MOD}R`, run: () => active.refresh() },
-      { id: "folderSizes", group: "View", title: "Calculate Folder Sizes", shortcut: "Alt+Shift+Enter", run: () => active.calculateSizes() },
-      { id: "newTab", group: "View", title: "New Tab", shortcut: `${MOD}T`, run: () => groups[activeIndex].newTab() },
-      { id: "closeTab", group: "View", title: "Close Tab", shortcut: `${MOD}W`, run: () => groups[activeIndex].closeTab() },
-      { id: "switch", group: "View", title: "Switch to Other Pane", shortcut: "Tab", run: () => (activeIndex = 1 - activeIndex) },
+      { id: "list", group: "View", title: "List View", run: () => (active.view = "list") },
+      { id: "icons", group: "View", title: "Icon View", run: () => (active.view = "icons") },
+      { id: "hidden", group: "View", title: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files", run: () => (active.showHidden = !active.showHidden) },
+      { id: "info", group: "View", title: showInspector ? "Hide Info Panel" : "Show Info Panel", run: () => (showInspector = !showInspector) },
+      { id: "filter", group: "View", title: "Filter Items by Name", run: () => active.openFilter() },
+      { id: "refresh", group: "View", title: "Refresh", run: () => active.refresh() },
+      { id: "folderSizes", group: "View", title: "Calculate Folder Sizes", run: () => active.calculateSizes() },
+      { id: "newTab", group: "View", title: "New Tab", run: () => groups[activeIndex].newTab() },
+      { id: "closeTab", group: "View", title: "Close Tab", run: () => groups[activeIndex].closeTab() },
+      { id: "nextTab", group: "View", title: "Next Tab", run: () => groups[activeIndex].cycle(1) },
+      { id: "prevTab", group: "View", title: "Previous Tab", run: () => groups[activeIndex].cycle(-1) },
+      { id: "switch", group: "View", title: "Switch to Other Pane", run: () => (activeIndex = 1 - activeIndex) },
       { id: "swap", group: "View", title: "Swap Panes", run: swapPanes },
       { id: "resizePanes", group: "View", title: "Resize Panes (← → to move, Tab when done)", run: () => splitterEl?.focus() },
       { id: "evenPanes", group: "View", title: "Make Panes Equal Width", run: splitReset },
@@ -858,7 +925,7 @@
       { id: "favorite", group: "Go", title: isFavorite ? "Remove Folder from Favorites" : "Add Folder to Favorites", run: toggleFavorite },
       { id: "back", group: "Go", title: "Back", run: () => active.back() },
       { id: "forward", group: "Go", title: "Forward", run: () => active.forward() },
-      { id: "up", group: "Go", title: "Enclosing Folder", shortcut: `${MOD}↑`, run: () => active.up() },
+      { id: "up", group: "Go", title: "Enclosing Folder", run: () => active.up() },
       { id: "insights", group: "Activity", title: "Activity Insights…", run: () => (showInsights = true) },
       { id: "about", group: "Help", title: "About Dual Pal", run: () => (aboutPage = "about") },
       { id: "donate", group: "Help", title: "Donate…", run: () => (aboutPage = "donate") },
@@ -883,8 +950,16 @@
       if (s.connected) c.push({ id: `disc:${s.id}`, group: "Servers", title: `Disconnect ${s.name}`, run: () => disconnect(s) });
     }
     for (const f of syncs) c.push({ id: `sync:${f.id}`, group: "Sync", title: `Sync ${f.name}`, run: () => openSync(f) });
+    // The person's keys, or the defaults.
+    for (const cmd of c) cmd.shortcut = formatKeys(prefs.bindings[cmd.id], isMac);
     return c;
   });
+
+  /** Commands that can have a shortcut: the palette's own ones (not the
+   *  servers, places and syncs it lists), and the palette itself. */
+  const paletteCommand: Command = { id: "palette", group: "View", title: "Command Palette", run: () => (showPalette = true) };
+  const keyCommands = $derived([...commands.filter((c) => !c.id.includes(":")), paletteCommand]);
+  const keyCommandList = $derived<KeyCommand[]>(keyCommands.map(({ id, title, group }) => ({ id, title, group })));
 
   // ---- editing --------------------------------------------------------------
 
@@ -949,7 +1024,7 @@
       input: s.editor ?? "",
       allowEmpty: true,
       confirmLabel: "Save",
-      onconfirm: (editor) => api.saveSettings({ ...s, editor: editor || null }).catch((e) => (notice = errorMessage(e))),
+      onconfirm: (editor) => prefs.update({ editor: editor || null }).catch((e) => (notice = errorMessage(e))),
     };
   }
 
@@ -1097,6 +1172,9 @@
   }
 
   /** The menu for the marked items, or the one right-clicked. */
+  /** The first key of a command, as menus show it. */
+  const keyOf = (id: string) => formatKeys(prefs.bindings[id]?.slice(0, 1), isMac);
+
   function entryMenu(entry: Entry): MenuItem[] {
     const t = active.targets;
     const n = t.length;
@@ -1119,17 +1197,17 @@
       {
         label: files.length > 1 ? `Edit ${files.length} Files` : "Edit in Editor",
         icon: "edit",
-        shortcut: "F4",
+        shortcut: keyOf("edit"),
         disabled: !files.length,
         run: editInEditor,
       },
       "separator",
-      { label: `Copy${what} to ${dest}`, icon: "copy", shortcut: "F5", disabled: !other.location, run: () => transfer("copy") },
-      { label: `Move${what} to ${dest}`, icon: "move", shortcut: "F6", disabled: !other.location, run: () => transfer("move") },
+      { label: `Copy${what} to ${dest}`, icon: "copy", shortcut: keyOf("copy"), disabled: !other.location, run: () => transfer("copy") },
+      { label: `Move${what} to ${dest}`, icon: "move", shortcut: keyOf("move"), disabled: !other.location, run: () => transfer("move") },
       "separator",
       single
-        ? { label: "Rename…", icon: "rename", shortcut: "F2", run: rename }
-        : { label: `Rename${what}…`, icon: "multi-rename", shortcut: "Shift+F2", run: multiRename },
+        ? { label: "Rename…", icon: "rename", shortcut: keyOf("rename"), run: rename }
+        : { label: `Rename${what}…`, icon: "multi-rename", shortcut: keyOf("multiRename"), run: multiRename },
       { label: "Compress into ZIP", icon: "archive", run: compress },
       {
         label: n === 1 ? "Copy Path" : `Copy ${n} Paths`,
@@ -1139,31 +1217,31 @@
         },
       },
       ...(n === 2 && files.length === 2
-        ? [{ label: "Compare Files", icon: "compare-files", shortcut: `${MOD}Shift+D`, run: compareFiles }]
+        ? [{ label: "Compare Files", icon: "compare-files", shortcut: keyOf("compareFiles"), run: compareFiles }]
         : []),
-      ...(single ? [{ label: "Show Info", icon: "info", shortcut: `${MOD}I`, run: () => (showInspector = true) }] : []),
+      ...(single ? [{ label: "Show Info", icon: "info", shortcut: keyOf("info"), run: () => (showInspector = true) }] : []),
       "separator",
-      { label: `Move${what} to Trash`, icon: "trash", shortcut: "F8", run: trash },
-      { label: `Delete${what} Permanently…`, shortcut: "Shift+Del", danger: true, run: () => remove() },
+      { label: `Move${what} to Trash`, icon: "trash", shortcut: keyOf("trash"), run: trash },
+      { label: `Delete${what} Permanently…`, shortcut: keyOf("delete"), danger: true, run: () => remove() },
     ];
   }
 
   /** The menu for empty space in a pane. */
   function folderMenu(): MenuItem[] {
     return [
-      { label: "New Folder…", icon: "folder-plus", shortcut: "F7", run: newFolder },
-      { label: "Refresh", icon: "refresh", shortcut: `${MOD}R`, run: () => active.refresh() },
+      { label: "New Folder…", icon: "folder-plus", shortcut: keyOf("newFolder"), run: newFolder },
+      { label: "Refresh", icon: "refresh", shortcut: keyOf("refresh"), run: () => active.refresh() },
       "separator",
-      { label: "Select All", icon: "select", shortcut: `${MOD}A`, run: () => active.visible.forEach((it) => active.selected.add(it.path)) },
-      { label: "Select by Name…", shortcut: "+", run: () => selectByPattern(true) },
+      { label: "Select All", icon: "select", shortcut: keyOf("selectAll"), run: () => active.visible.forEach((it) => active.selected.add(it.path)) },
+      { label: "Select by Name…", shortcut: keyOf("selectPattern"), run: () => selectByPattern(true) },
       {
         label: active.showHidden ? "Hide Hidden Files" : "Show Hidden Files",
         icon: "eye",
-        shortcut: `${MOD}Shift+.`,
+        shortcut: keyOf("hidden"),
         run: () => (active.showHidden = !active.showHidden),
       },
       "separator",
-      { label: "Compare & Sync Folders…", icon: "sync", shortcut: `${MOD}Shift+Y`, run: compareFolders },
+      { label: "Compare & Sync Folders…", icon: "sync", shortcut: keyOf("compareFolders"), run: compareFolders },
       { label: isFavorite ? "Remove from Favorites" : "Add to Favorites", icon: "star", run: toggleFavorite },
     ];
   }
@@ -1262,69 +1340,48 @@
     if (active.current) active.selected.add(active.current.path);
   }
 
+  /** Run a command by its id, as a shortcut does. */
+  function runCommand(id: string) {
+    keyCommands.find((c) => c.id === id)?.run();
+  }
+
   function onkeydown(e: KeyboardEvent) {
     // A dialog, window or the server form is open: its keys are its own.
-    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage) return;
-    const cmd = e.metaKey || e.ctrlKey;
-    if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
-      showPalette = true;
-      return e.preventDefault();
-    }
-    // Find files by name below the active folder.
-    if (cmd && e.shiftKey && e.key.toLowerCase() === "f") {
-      if (active.location) showFind = true;
-      return e.preventDefault();
-    }
-    // Not from the quick editor, where the key belongs to the text being edited.
-    if (cmd && !e.shiftKey && e.key.toLowerCase() === "f" && (e.target as HTMLElement | null)?.tagName !== "TEXTAREA") {
-      active.openFilter();
-      return e.preventDefault();
+    if (frozen || menu || dialog || passwordPrompt || editing !== undefined || importing || comparing || renaming || showPalette || showFind || showInsights || aboutPage || settingsPage) return;
+    // Shortcuts from Settings (or the defaults) for the palette's commands.
+    const hit = lookup(prefs.bindings, e, isMac);
+    const t = e.target as HTMLElement | null;
+    const inField = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    if (hit && inField) {
+      // A few work while typing in a field (not in the quick editor for the
+      // filter, where the key belongs to the text being edited).
+      const where = FIELD_COMMANDS[hit.id];
+      if (where && worksInFields(hit.combo) && !(where === "noTextarea" && t?.tagName === "TEXTAREA")) {
+        runCommand(hit.id);
+        return e.preventDefault();
+      }
     }
     // Typing in the quick editor or another field: leave keys alone.
-    const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-    const mod = e.metaKey || e.ctrlKey;
+    if (inField) return;
     const handled = () => e.preventDefault();
-    const group = groups[activeIndex];
     const icons = active.view === "icons";
     if (e.key === "Escape" && active.filterOpen) {
       active.closeFilter();
       return handled();
     }
-    if (e.ctrlKey && e.key === "Tab") {
-      group.cycle(e.shiftKey ? -1 : 1);
+    if (hit) {
+      runCommand(hit.id);
       return handled();
     }
-    if (mod && !e.shiftKey && e.key.toLowerCase() === "t") {
-      group.newTab();
-      return handled();
-    }
-    if (mod && !e.shiftKey && e.key.toLowerCase() === "w") {
-      group.closeTab();
-      return handled();
-    }
-    if (mod && !e.shiftKey && e.key.toLowerCase() === "i") {
-      showInspector = !showInspector;
-      return handled();
-    }
-    if (mod && (e.key === "1" || e.key === "2")) {
-      active.view = e.key === "1" ? "list" : "icons";
-      return handled();
-    }
-    if (e.altKey && e.shiftKey && e.key === "Enter") {
-      active.calculateSizes();
-      return handled();
-    }
+    // Moving the cursor and marking items: fixed keys.
     switch (e.key) {
-      case "Tab":
-        activeIndex = 1 - activeIndex;
-        return handled();
       case "ArrowDown":
         if (e.shiftKey) extendSelection(icons ? active.columns : 1);
         else active.moveCursor(icons ? active.columns : 1);
         return handled();
       case "ArrowUp":
-        if (mod) active.up();
+        // Ctrl/⌘ ↑ with Shift still opens the enclosing folder, as before.
+        if (e.metaKey || e.ctrlKey) active.up();
         else if (e.shiftKey) extendSelection(icons ? -active.columns : -1);
         else active.moveCursor(icons ? -active.columns : -1);
         return handled();
@@ -1338,12 +1395,6 @@
       case "ArrowRight":
         if (!icons) return;
         active.moveCursor(1);
-        return handled();
-      case "+":
-        selectByPattern(true);
-        return handled();
-      case "-":
-        selectByPattern(false);
         return handled();
       case "PageDown":
         active.moveCursor(20);
@@ -1360,10 +1411,6 @@
       case "Enter":
         if (active.current) active.activate(active.current);
         return handled();
-      case "Backspace":
-        if (mod) (e.altKey ? remove() : trash());
-        else active.up();
-        return handled();
       case " ":
       case "Insert":
         if (active.current) {
@@ -1373,59 +1420,10 @@
         }
         active.moveCursor(1);
         return handled();
-      case "F2":
-        if (e.shiftKey) multiRename();
-        else rename();
-        return handled();
       case "F10":
         if (!e.shiftKey) return;
         menuFromKeyboard();
         return handled();
-      case "F4":
-        editInEditor();
-        return handled();
-      case "F5":
-        transfer("copy");
-        return handled();
-      case "F6":
-        transfer("move");
-        return handled();
-      case "F7":
-        newFolder();
-        return handled();
-      case "F8":
-      case "Delete":
-        if (e.shiftKey) remove();
-        else trash();
-        return handled();
-    }
-    if (mod && e.key.toLowerCase() === "r") {
-      active.refresh();
-      return handled();
-    }
-    if (mod && e.key.toLowerCase() === "a") {
-      active.visible.forEach((it) => active.selected.add(it.path));
-      return handled();
-    }
-    if (mod && e.shiftKey && e.key.toLowerCase() === "y") {
-      compareFolders();
-      return handled();
-    }
-    if (mod && e.shiftKey && e.key.toLowerCase() === "t") {
-      openTerminal();
-      return handled();
-    }
-    if (mod && e.shiftKey && e.key.toLowerCase() === "d") {
-      compareFiles();
-      return handled();
-    }
-    if (mod && e.shiftKey && e.key.toLowerCase() === "l") {
-      toggleLinked();
-      return handled();
-    }
-    if (mod && e.shiftKey && e.key === ".") {
-      active.showHidden = !active.showHidden;
-      return handled();
     }
   }
 </script>
@@ -1531,6 +1529,7 @@
       <button class="heart" onclick={() => (aboutPage = "donate")} aria-label="Donate" title="Support Dual Pal with a donation"
         ><Icon name="heart" /></button
       >
+      <button onclick={() => openSettings()} aria-label="Settings" title="Settings: theme, panes, apps and shortcuts (Ctrl/⌘ ,)"><Icon name="settings" /></button>
       <button onclick={() => (aboutPage = "about")} aria-label="About" title="About Dual Pal, help and support"><Icon name="help" /></button>
     </div>
   </div>
@@ -1718,6 +1717,10 @@
       if (parent) await active.open(parent, { record: true, focusName: hit.name });
     }}
   />
+{/if}
+
+{#if settingsPage}
+  <SettingsDialog start={settingsPage} commands={keyCommandList} {diffTools} mac={isMac} onclose={() => (settingsPage = null)} />
 {/if}
 
 {#if aboutPage}

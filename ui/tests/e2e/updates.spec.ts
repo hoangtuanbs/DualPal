@@ -25,8 +25,8 @@ test.describe("UI-E2E release notice", () => {
 
     await bar.getByRole("button", { name: "Skip this version" }).click();
     await expect(bar).toBeHidden();
-    const saved = await calls(page, "save_settings");
-    expect(saved.at(-1).settings.skippedVersion).toBe("0.3.0");
+    const saved = await calls(page, "update_settings");
+    expect(saved.at(-1).patch).toEqual({ skippedVersion: "0.3.0" });
   });
 
   test("UI-E2E-UPD-002 the About window turns the automatic check off", async ({ page }) => {
@@ -36,8 +36,8 @@ test.describe("UI-E2E release notice", () => {
     await expect(box).toBeChecked();
     await box.uncheck();
     await expect(box).not.toBeChecked();
-    const saved = await calls(page, "save_settings");
-    expect(saved.at(-1).settings.updateChecks).toBe(false);
+    const saved = await calls(page, "update_settings");
+    expect(saved.at(-1).patch).toEqual({ updateChecks: false });
   });
 });
 

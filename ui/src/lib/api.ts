@@ -227,6 +227,30 @@ export interface Settings {
   updateChecks?: boolean | null;
   /** A release the person chose to skip; the automatic check stays quiet about it. */
   skippedVersion?: string | null;
+  // The Settings screen. All optional: an older backend or file leaves them out.
+  theme?: Theme;
+  fontSize?: FontSize;
+  density?: Density;
+  /** New panes and tabs show hidden files. */
+  showHidden?: boolean;
+  /** List view columns turned off, e.g. "size" or "modified". */
+  hiddenColumns?: string[];
+  /** What the left and right panes open at start. */
+  paneStart?: PaneStart[];
+  /** The local folder each pane last showed. */
+  lastFolders?: (string | null)[];
+  /** Shortcuts changed from the defaults: command id → key combinations. */
+  keyBindings?: Record<string, string[]>;
+}
+
+export type Theme = "system" | "light" | "dark";
+export type FontSize = "small" | "normal" | "large";
+export type Density = "normal" | "compact";
+export type StartMode = "home" | "last" | "folder";
+
+export interface PaneStart {
+  mode: StartMode;
+  folder?: string | null;
 }
 
 /** The newest published release on GitHub. */
@@ -535,6 +559,10 @@ export const api = {
   resetSecrets: () => invoke<VaultStatus>("reset_secrets"),
   settings: () => invoke<Settings>("settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
+  /** Change only the given settings; returns them all. */
+  updateSettings: (patch: Partial<Settings>) => invoke<Settings>("update_settings", { patch }),
+  /** Settings… chosen in the macOS app menu. */
+  onOpenSettings: (cb: () => void): Promise<UnlistenFn> => listen("open-settings", () => cb()),
   syncPlan: (left: Location, right: Location, mode: SyncMode, options: CompareOptions) =>
     invoke<SyncPreview>("sync_plan", { left, right, mode, options }),
   cancelCompare: () => invoke<void>("cancel_compare"),

@@ -381,6 +381,16 @@ pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CmdResul
     state.settings.set(settings)
 }
 
+/// Change some settings (a camelCase object of the fields to change) and
+/// return them all. Other fields keep what is saved.
+#[tauri::command]
+pub fn update_settings(
+    state: State<'_, AppState>,
+    patch: serde_json::Value,
+) -> CmdResult<Settings> {
+    state.settings.update(patch)
+}
+
 // ---- master password ----------------------------------------------------------
 
 #[tauri::command]

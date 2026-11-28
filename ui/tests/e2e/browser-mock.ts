@@ -33,6 +33,8 @@ export interface BrowserScenario {
   servers?: Record<string, ServerScenario>;
   /** Saved passwords are protected by this master password, locked at start. */
   masterPassword?: string;
+  /** Saved settings at start (settings.json). */
+  settings?: Record<string, unknown>;
 }
 
 /** A backend call the app made, as recorded by the mock. */
@@ -165,6 +167,7 @@ export function installBrowserMock(scenario: BrowserScenario) {
   let activity: any[] = [];
   let presets: any[] = [];
   let favorites: any[] = [];
+  let settings: any = { editor: null, diffTool: null, ...(scenario.settings ?? {}) };
   let syncFavorites: any[] = [];
   let editSessions: any[] = [];
   /** Operations by id, so a held one can be finished later. */
@@ -372,8 +375,12 @@ export function installBrowserMock(scenario: BrowserScenario) {
     remove_favorite: (a) =>
       (favorites = favorites.filter((f) => !(f.location.fs === a.location.fs && f.location.path === a.location.path))),
     reorder_favorites: () => favorites,
-    settings: () => ({ editor: null, diffTool: null }),
-    save_settings: () => null,
+    settings: () => settings,
+    save_settings: (a) => {
+      settings = a.settings;
+      return null;
+    },
+    update_settings: (a) => (settings = { ...settings, ...a.patch }),
 
     // Servers.
     connections: () => [...servers.values()].map(view),

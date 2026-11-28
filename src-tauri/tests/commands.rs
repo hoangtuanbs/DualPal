@@ -68,6 +68,7 @@ fn tested_commands() -> HashSet<&'static str> {
         "preview_path",
         "settings",
         "save_settings",
+        "update_settings",
         "secrets_status",
         "protect_secrets",
         "unlock_secrets",
@@ -880,6 +881,35 @@ fn settings_round_trip() {
     let settings: Value = call(&app, "settings", json!({})).unwrap();
     assert_eq!(settings["editor"], "/usr/bin/emacs");
     assert_eq!(settings["diffTool"], "meld {left} {right}");
+}
+
+/// CMD-043 — `update_settings` changes only the fields given and returns all.
+#[test]
+fn update_settings_merges() {
+    let TestApp { app, tmp: _tmp } = app();
+    call_ok(
+        &app,
+        "save_settings",
+        json!({ "settings": { "editor": "/usr/bin/emacs", "diffTool": null } }),
+    );
+    let next: Value = call(
+        &app,
+        "update_settings",
+        json!({ "patch": { "theme": "dark", "keyBindings": { "copy": ["Mod+Shift+C"] } } }),
+    )
+    .unwrap();
+    assert_eq!(next["theme"], "dark");
+    assert_eq!(next["editor"], "/usr/bin/emacs");
+    let settings: Value = call(&app, "settings", json!({})).unwrap();
+    assert_eq!(settings["keyBindings"]["copy"][0], "Mod+Shift+C");
+    assert_eq!(settings["fontSize"], "normal");
+    let err = call::<Value>(
+        &app,
+        "update_settings",
+        json!({ "patch": { "showHidden": 3 } }),
+    )
+    .unwrap_err();
+    assert_eq!(err["kind"], "invalid");
 }
 
 /// CMD-025 — `sync_plan` returns a SyncPreview.
