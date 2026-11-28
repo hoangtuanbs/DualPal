@@ -1,6 +1,6 @@
 use dualpal_core::folder_size::FolderSize;
 use dualpal_core::places::Favorite;
-use dualpal_core::search::{SearchOptions, SearchResult};
+use dualpal_core::search::{SearchCriteria, SearchHit, SearchOptions, SearchResult};
 use dualpal_core::{
     ActivityRecord, CancellationToken, Entry, Error, Location, Operation, OperationInfo,
 };
@@ -233,20 +233,31 @@ pub fn cancel_folder_size(state: State<'_, AppState>, request: u64) {
 #[serde(rename_all = "camelCase")]
 struct FindProgress {
     request: u64,
-    hits: Vec<Entry>,
+    hits: Vec<SearchHit>,
     folders: u64,
+    files: u64,
 }
 
-/// Find files and folders named like `query` below `location`. `request`
-/// names this search so that [`cancel_find_files`] can stop it. Matches are
-/// also sent as `find-files-progress` events while the search runs, so the
-/// first ones show before a large tree has been read.
+/// How long a search from the Find dialog may run. It runs in the
+/// background and can be stopped, so the limit only ends a forgotten one.
+const FIND_MAX_MILLIS: u64 = 30 * 60 * 1000;
+
+/// Most matches a search from the Find dialog collects.
+const FIND_MAX_RESULTS: usize = 10_000;
+
+/// Find files and folders below `location` whose names match `query`, and
+/// that meet `criteria` when given (text inside, size, date, kind, hidden;
+/// its own `name` is replaced by `query`). `request` names this search so
+/// that [`cancel_find_files`] can stop it. Matches are also sent as
+/// `find-files-progress` events while the search runs, so the first ones
+/// show before a large tree has been read.
 #[tauri::command]
 pub async fn find_files<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
     location: Location,
     query: String,
+    criteria: Option<SearchCriteria>,
     request: u64,
 ) -> CmdResult<SearchResult> {
     use tauri::Emitter;
@@ -256,13 +267,22 @@ pub async fn find_files<R: tauri::Runtime>(
         .lock()
         .unwrap()
         .insert(request, cancel.clone());
-    // New matches go out at once; folder counts at most every 150 ms.
+    let criteria = SearchCriteria {
+        name: query,
+        ..criteria.unwrap_or_default()
+    };
+    let options = SearchOptions {
+        max_millis: FIND_MAX_MILLIS,
+        max_results: FIND_MAX_RESULTS,
+        ..SearchOptions::default()
+    };
+    // New matches go out at once; counts at most every 150 ms.
     let mut last = std::time::Instant::now();
-    let result = dualpal_core::search::find_by_name_with(
+    let result = dualpal_core::search::find(
         &state.registry,
         &location,
-        &query,
-        SearchOptions::default(),
+        &criteria,
+        options,
         &cancel,
         |p| {
             if p.hits.is_empty() && last.elapsed().as_millis() < 150 {
@@ -275,6 +295,7 @@ pub async fn find_files<R: tauri::Runtime>(
                     request,
                     hits: p.hits,
                     folders: p.folders,
+                    files: p.files,
                 },
             );
         },
@@ -284,7 +305,7 @@ pub async fn find_files<R: tauri::Runtime>(
     result
 }
 
-/// Stop the name search `request`. Does nothing if it has finished.
+/// Stop the search `request`. Does nothing if it has finished.
 #[tauri::command]
 pub fn cancel_find_files(state: State<'_, AppState>, request: u64) {
     if let Some(c) = state.find_cancel.lock().unwrap().remove(&request) {
