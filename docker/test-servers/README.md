@@ -60,3 +60,21 @@ DUALPAL_TEST_WEBDAV=tester:dualpal@http://127.0.0.1:8088/dav \
 ```
 
 Linux CI does the same on every pull request.
+
+## Without Docker
+
+Where Docker or its image registries are not available (for example a cloud
+sandbox), `scripts/test-servers/native.sh` runs the same servers as local
+processes, on the same 127.0.0.1 ports with the same users and keys:
+
+```sh
+scripts/test-servers/native.sh up       # installs moto, WsgiDAV, pyftpdlib and Toxiproxy on first run
+eval "$(scripts/test-servers/native.sh env)"
+cargo nextest run -p dualpal-core -E 'binary(remote) | binary(contract_remote) | binary(remote_extra)'
+scripts/test-servers/native.sh down
+```
+
+It needs python3 and go. SFTP uses OpenSSH's `sshd`, which must run as root
+because it creates and signs in as the users `tester` and `keyonly`; without
+root or `sshd`, SFTP is skipped. `native.sh drop` cuts open SFTP sessions, and
+`env` points `DUALPAL_TEST_SFTP_DROP` at it.
