@@ -130,7 +130,7 @@ jobs:
           set -u
           root=target/${{ matrix.args == '--target universal-apple-darwin' && 'universal-apple-darwin/' || '' }}release
           echo "== generated file"; head -3 THIRD_PARTY_NOTICES.txt; grep -c "^  " THIRD_PARTY_NOTICES.txt; grep -n "UnRAR, compiled" THIRD_PARTY_NOTICES.txt || echo "no UnRAR section"
-          bin=$(ls $root/dualpal $root/dualpal.exe 2>/dev/null | head -1)
+          bin=$(ls $root/dualpal $root/dualpal.exe 2>/dev/null | head -1 || true)
           echo "== embedded in $bin: $(grep -a -c 'Dual Pal third-party notices' "$bin")"
           case "$RUNNER_OS" in
             macOS)
